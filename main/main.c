@@ -19,6 +19,7 @@
 #include "geoip.h"
 #include "wifi_monitor.h"
 #include "alarm.h"
+#include "buzzer.h"
 #include "ui.h"
 #include "config.h"
 #include <stdlib.h>
@@ -109,6 +110,14 @@ static const char *TAG = "MAIN";
              (unsigned long)esp_get_free_heap_size());                  \
 } while(0)
 
+// Boot sound: plays once, then the task deletes itself, so app_main never waits.
+static void startup_melody_task(void *arg)
+{
+    (void)arg;
+    buzzer_play_melody(MELODY_STARTUP, MELODY_STARTUP_LEN);
+    vTaskDelete(NULL);
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 void app_main(void)
@@ -147,6 +156,9 @@ void app_main(void)
 
     // ── Incident alarm + front panel (before Wi-Fi, so the panel shows it) ────
     alarm_init();
+    if (xTaskCreate(startup_melody_task, "melody", 2560, NULL, 1, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "No heap for the startup melody task, skipping it");
+    }
     ui_start();
 
     // ── WiFi ─────────────────────────────────────────────────────────────────

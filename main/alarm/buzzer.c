@@ -59,3 +59,21 @@ void buzzer_remind(void)
     if (!s_ok) return;
     tone(200, 0);
 }
+
+void buzzer_play_melody(const melody_note_t *notes, size_t n)
+{
+    if (!s_ok || !notes) return;
+    for (size_t i = 0; i < n; i++) {
+        int gap = (i + 1 < n) ? MELODY_GAP_MS : 0;
+        if (notes[i].hz == 0) {
+            vTaskDelay(pdMS_TO_TICKS(notes[i].ms + gap));
+            continue;
+        }
+        if (ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, notes[i].hz) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(notes[i].ms + gap));   // keep the rhythm, skip the note
+            continue;
+        }
+        tone(notes[i].ms, gap);
+    }
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+}
