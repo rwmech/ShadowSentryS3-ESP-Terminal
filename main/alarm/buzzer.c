@@ -39,6 +39,10 @@ void buzzer_init(void)
         return;
     }
     s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) {
+        ESP_LOGE(TAG, "No heap for the buzzer mutex, buzzer disabled");
+        return;
+    }
     s_ok = true;
 }
 
