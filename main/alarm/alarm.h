@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 /*
- * Incident alarm — Core 1
+ * Incident alarm, Core 1
  *
  * Every event appended to the log store is an attack on the internal network
  * (nothing legitimate touches a honeypot), so any event can open an incident.
@@ -56,5 +56,5 @@ void alarm_ack(void);
 void alarm_get(alarm_info_t *out);
 
 // Called from the alarm task on every state or count change. Must be
-// non-blocking (copy and queue). Up to 3 listeners, registered at boot.
+// non-blocking (copy and queue). Up to 4 listeners, registered at boot.
 void alarm_add_listener(void (*cb)(const alarm_info_t *info));

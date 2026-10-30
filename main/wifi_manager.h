@@ -53,6 +53,9 @@ void wifi_manager_init(void);
 // Returns immediately if already connected.
 void wifi_manager_wait_for_ip(void);
 
+// As above, but gives up after timeout_ms. Returns true once an IP is held.
+bool wifi_manager_wait_for_ip_ms(uint32_t timeout_ms);
+
 // Return true if the station currently has an IP address.
 // Thread-safe (reads a volatile flag set by the event handler).
 bool wifi_manager_is_connected(void);

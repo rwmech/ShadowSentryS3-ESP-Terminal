@@ -1,5 +1,8 @@
 #include "admin_panel.h"
 #include "alarm.h"
+#include "settings.h"
+#include "api_ext.h"
+#include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
 #include "wifi_manager.h"
@@ -80,10 +83,15 @@ static bool check_auth(const char *req)
     // Build expected "admin:<password>" and compare.
     // ADMIN_PASSWORD is never written to the log anywhere in this file.
     char expected[128];
-    int elen = snprintf(expected, sizeof(expected), "admin:%s", ADMIN_PASSWORD);
-    if (elen <= 0 || (size_t)elen >= sizeof(expected)) return false;
-
-    return ((int)olen == elen && memcmp(decoded, expected, (size_t)olen) == 0);
+    settings_t st;
+    settings_copy(&st);
+    int elen = snprintf(expected, sizeof(expected), "admin:%s", st.admin_password);
+    memset(&st, 0, sizeof(st));
+    bool ok = elen > 0 && (size_t)elen < sizeof(expected) &&
+              (int)olen == elen && memcmp(decoded, expected, (size_t)olen) == 0;
+    memset(expected, 0, sizeof(expected));
+    memset(decoded, 0, sizeof(decoded));
+    return ok;
 }
 
 // ── HTTP response helpers ─────────────────────────────────────────────────────
@@ -150,10 +158,12 @@ static void serve_status_json(int sock)
 static void serve_dashboard(int sock)
 {
     size_t html_len = (size_t)(index_html_end - index_html_start);
-    char hdr[160];
+    char hdr[256];
     int hdr_len = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
+        "X-Frame-Options: DENY\r\n"                             // no clickjacking
+        "Content-Security-Policy: frame-ancestors 'none'\r\n"
         "Content-Length: %zu\r\n"
         "Connection: close\r\n\r\n",
         html_len);
@@ -340,27 +350,55 @@ static void handle_ota(int sock, const char *req, int req_len)
     }
     ESP_LOGW(TAG, "OTA: %ld bytes written to %s, restarting", total, slot->label);
     send_text(sock, "200 OK", "ok, restarting\n");
+    sd_log_flush();                     // save the summary metrics first
     shutdown(sock, SHUT_RDWR);
     close(sock);
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
 }
 
+static void handle_request(int sock, char *buf, int len);
+
+// The request headers can exceed one TCP segment (a browser POST with all its
+// headers runs to ~1 KB), so read until the blank line or the buffer is full.
+#define ADMIN_REQ_MAX 2048
+
 static void handle_client(int sock)
 {
-    char buf[1024];
+    static char *buf;   // PSRAM, allocated once; single-threaded accept loop
+    if (!buf) buf = heap_caps_malloc(ADMIN_REQ_MAX, MALLOC_CAP_SPIRAM);
+    if (!buf) return;
     struct timeval tv = {.tv_sec = ADMIN_RECV_TIMEOUT_S, .tv_usec = 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    int len = recv(sock, buf, sizeof(buf) - 1, 0);
+    int len = 0;
+    int64_t deadline = esp_timer_get_time() + ADMIN_RECV_TIMEOUT_S * 1000000LL;
+    while (len < ADMIN_REQ_MAX - 1 && esp_timer_get_time() < deadline) {
+        int n = recv(sock, buf + len, ADMIN_REQ_MAX - 1 - len, 0);
+        if (n <= 0) break;
+        len += n;
+        buf[len] = '\0';
+        if (strstr(buf, "\r\n\r\n")) break;
+    }
     if (len <= 0) return;
     buf[len] = '\0';
 
+    handle_request(sock, buf, len);
+    memset(buf, 0, (size_t)len);   // it held the Authorization header, maybe passwords
+}
+
+static void handle_request(int sock, char *buf, int len)
+{
     if (!check_auth(buf)) {
         ESP_LOGD(TAG, "Auth failed");
         send_401(sock);
         return;
     }
+    if (strncmp(buf, "POST", 4) == 0 && !api_ext_csrf_ok(buf)) {
+        send_text(sock, "403 Forbidden", "POST needs an X-ShadowSentry header\n");
+        return;
+    }
+    if (api_ext_handle(sock, buf, len)) return;   // fork routes (settings, logs, ...)
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);

@@ -14,3 +14,4 @@ managed_components/
 .pio/
 sdkconfig.crowpanel35
 sdkconfig.crowpanel35_ota
+tools/ota_password

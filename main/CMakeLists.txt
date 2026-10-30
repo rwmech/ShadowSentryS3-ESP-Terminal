@@ -33,9 +33,12 @@ idf_component_register(
         "honeypot/ssh_trap.c"
         "honeypot/ftp_trap.c"
         "admin/admin_panel.c"
+        "admin/api_ext.c"
         "admin/ws_server.c"
         "admin/telegram.c"
         "storage/log_store.c"
+        "storage/sd_log.c"
+        "settings.c"
         "alarm/alarm.c"
         "alarm/buzzer.c"
         "ui/display.cpp"
@@ -46,7 +49,7 @@ idf_component_register(
         "honeypot"     # rtsp_trap.h, http_trap.h, telnet_trap.h
         "admin"        # admin_panel.h, telegram.h
         "storage"      # log_store.h
-        "board"        # board.h — CrowPanel 3.5" pin map
+        "board"        # board.h, CrowPanel 3.5" pin map
         "alarm"        # alarm.h, buzzer.h
         "ui"           # display.h, ui.h
 
@@ -90,6 +93,11 @@ idf_component_register(
 
         # OTA
         app_update          # esp_ota_* — POST /api/ota, rollback confirmation
+
+        # microSD log + settings API
+        fatfs               # esp_vfs_fat_sdspi_mount, FAT on the card
+        sdmmc               # sdmmc_card_t, SD protocol
+        json                # cJSON: /api/settings body
 )
 
 # wolfSSL ships include/config.h, and PlatformIO's include order lets it shadow

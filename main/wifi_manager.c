@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "config.h"
+#include "settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -95,12 +96,12 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
 
     switch (id) {
         case WIFI_EVENT_STA_START:
-            ESP_LOGI(TAG, "STA started — connecting to \"%s\"", WIFI_SSID);
+            ESP_LOGI(TAG, "STA started — connecting to \"%s\"", settings_get()->wifi_ssid);
             esp_wifi_connect();
             break;
 
         case WIFI_EVENT_STA_CONNECTED:
-            ESP_LOGI(TAG, "Associated with AP \"%s\"", WIFI_SSID);
+            ESP_LOGI(TAG, "Associated with AP \"%s\"", settings_get()->wifi_ssid);
             s_retry_count = 0;
             break;
 
@@ -211,8 +212,9 @@ void wifi_manager_init(void)
         IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip_event, NULL));
 
     wifi_config_t wifi_cfg = {0};
-    strlcpy((char *)wifi_cfg.sta.ssid,     WIFI_SSID,     sizeof(wifi_cfg.sta.ssid));
-    strlcpy((char *)wifi_cfg.sta.password, WIFI_PASSWORD, sizeof(wifi_cfg.sta.password));
+    const settings_t *st = settings_get();   // read before any web save can run
+    strlcpy((char *)wifi_cfg.sta.ssid,     st->wifi_ssid,     sizeof(wifi_cfg.sta.ssid));
+    strlcpy((char *)wifi_cfg.sta.password, st->wifi_password, sizeof(wifi_cfg.sta.password));
 
     // Accept WPA2 or WPA3-SAE — the AP selects the highest common mode.
     // Set to WIFI_AUTH_WPA2_PSK if your AP does not support WPA3.
@@ -234,6 +236,13 @@ void wifi_manager_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     // esp_wifi_connect() is called from on_wifi_event on WIFI_EVENT_STA_START
+}
+
+bool wifi_manager_wait_for_ip_ms(uint32_t timeout_ms)
+{
+    EventBits_t b = xEventGroupWaitBits(s_wifi_eg, WIFI_GOT_IP_BIT, pdFALSE, pdTRUE,
+                                        pdMS_TO_TICKS(timeout_ms));
+    return (b & WIFI_GOT_IP_BIT) != 0;
 }
 
 void wifi_manager_wait_for_ip(void)

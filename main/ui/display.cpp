@@ -4,8 +4,12 @@
 #include "display.h"
 #include "board.h"
 #include "lvgl.h"
+#include "buzzer.h"
+#include "settings.h"
+#include "sd_log.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "driver/ledc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
@@ -89,7 +93,7 @@ static void touch_init(void)
     bc.flags.enable_internal_pullup = true;  // board also has 4.7k pull-ups
     i2c_master_bus_handle_t bus;
     if (i2c_new_master_bus(&bc, &bus) != ESP_OK) {
-        ESP_LOGE(TAG, "I2C init failed — touch disabled");
+        ESP_LOGE(TAG, "I2C init failed, touch disabled");
         return;
     }
     i2c_device_config_t dc = {};
@@ -97,12 +101,12 @@ static void touch_init(void)
     dc.device_address  = BOARD_TOUCH_ADDR;
     dc.scl_speed_hz    = 400000;
     if (i2c_master_bus_add_device(bus, &dc, &s_touch_dev) != ESP_OK) {
-        ESP_LOGE(TAG, "I2C device add failed — touch disabled");
+        ESP_LOGE(TAG, "I2C device add failed, touch disabled");
         return;
     }
     uint8_t id = 0;
     if (touch_read(0xA8, &id, 1, 50) != ESP_OK) {          // FOCALTECH_ID
-        ESP_LOGE(TAG, "FT6236 not answering at 0x%02x — touch disabled",
+        ESP_LOGE(TAG, "FT6236 not answering at 0x%02x, touch disabled",
                  BOARD_TOUCH_ADDR);
         return;
     }
@@ -143,6 +147,48 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 
 #define DRAW_BUF_LINES  20      // 19 KB of internal DMA RAM
 
+// Click on every new press anywhere on the glass (UI task; ~10 ms).
+static void touch_feedback_cb(lv_indev_drv_t *drv, uint8_t event)
+{
+    (void)drv;
+    if (event == LV_EVENT_PRESSED) buzzer_click();
+}
+
+// ── Backlight: LEDC timer/channel 0 PWM on BOARD_LCD_BL ───────────────────────
+
+#define BL_TIMER    LEDC_TIMER_0
+#define BL_CHANNEL  LEDC_CHANNEL_0
+
+static void backlight_apply(void)
+{
+    uint32_t duty = (uint32_t)settings_get()->brightness * 1023 / 100;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
+}
+
+static void backlight_init(void)
+{
+    ledc_timer_config_t t = {};
+    t.speed_mode      = LEDC_LOW_SPEED_MODE;
+    t.duty_resolution = LEDC_TIMER_10_BIT;
+    t.timer_num       = BL_TIMER;
+    t.freq_hz         = 5000;
+    t.clk_cfg         = LEDC_AUTO_CLK;
+    ledc_channel_config_t c = {};
+    c.gpio_num   = BOARD_LCD_BL;
+    c.speed_mode = LEDC_LOW_SPEED_MODE;
+    c.channel    = BL_CHANNEL;
+    c.timer_sel  = BL_TIMER;
+    c.duty       = 0;
+    if (ledc_timer_config(&t) != ESP_OK || ledc_channel_config(&c) != ESP_OK) {
+        ESP_LOGE(TAG, "backlight PWM failed, falling back to full on");
+        gpio_set_direction((gpio_num_t)BOARD_LCD_BL, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)BOARD_LCD_BL, 1);
+        return;
+    }
+    backlight_apply();
+}
+
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px)
 {
     uint32_t w = (uint32_t)(area->x2 - area->x1 + 1);
@@ -167,23 +213,11 @@ extern "C" bool display_init(void)
         return false;
     }
     s_tft.setRotation(3);                    // landscape, as Elecrow's example
-
-    // Panel self-check over MISO: ILI9488 answers 0xD3 with 0x009488. A wrong
-    // ID or a pixel that doesn't read back means the panel isn't listening.
-    s_tft.startWrite();
-    uint32_t id = s_tft.getPanel()->readCommand(0xD3, 0, 4);
-    s_tft.endWrite();
-    s_tft.fillScreen(TFT_RED);
-    uint16_t rb = s_tft.readPixel(10, 10);
-    ESP_LOGI(TAG, "ILI9488 ID 0x%06lx, pixel after red fill 0x%04x (want ~0xf800)",
-             (unsigned long)(id & 0xFFFFFF), rb);
     s_tft.fillScreen(TFT_BLACK);
+    sd_log_bus_ready();                      // SPI3 is up; the microSD may mount
 
-    gpio_reset_pin((gpio_num_t)BOARD_LCD_BL);
-    gpio_set_direction((gpio_num_t)BOARD_LCD_BL, GPIO_MODE_INPUT_OUTPUT);
-    gpio_set_level((gpio_num_t)BOARD_LCD_BL, 1);
-    ESP_LOGI(TAG, "Backlight GPIO%d driven high, reads %d",
-             BOARD_LCD_BL, gpio_get_level((gpio_num_t)BOARD_LCD_BL));
+    backlight_init();
+    settings_on_change(backlight_apply);
 
     touch_init();
 
@@ -212,6 +246,7 @@ extern "C" bool display_init(void)
     lv_indev_drv_init(&indev_drv);
     indev_drv.type    = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = touch_read_cb;
+    indev_drv.feedback_cb = touch_feedback_cb;
     lv_indev_drv_register(&indev_drv);
 
     ESP_LOGI(TAG, "Panel %dx%d up", BOARD_LCD_HRES, BOARD_LCD_VRES);

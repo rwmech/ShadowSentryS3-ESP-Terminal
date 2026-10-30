@@ -31,6 +31,9 @@ CONFIG_ESP_TASK_WDT_EN=n
 CONFIG_ESP_ENABLE_WOLFSSH=y
 # esp_http_server: WebSocket support for the live dashboard push server
 CONFIG_HTTPD_WS_SUPPORT=y
+# microSD log: long file names (YYYY-MM-DD.jsonl), LFN buffer on the heap
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
 # LVGL 8 front panel (480x320 landscape, RGB565 rendered, LovyanGFX converts to RGB666)
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_COLOR_16_SWAP=n

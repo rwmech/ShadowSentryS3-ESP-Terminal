@@ -35,7 +35,7 @@ void log_store_append(const attack_log_t *entry);
 // context, which can be a 3 KB honeypot stack, so each MUST be non-blocking and
 // stack-light: copy what it needs into a queue and return. Up to
 // LOG_STORE_MAX_LISTENERS; register at boot, before the traps start.
-#define LOG_STORE_MAX_LISTENERS 4
+#define LOG_STORE_MAX_LISTENERS 6
 void log_store_add_listener(void (*cb)(const attack_log_t *entry));
 
 // Copy up to max_count most-recent entries into out[], newest first.

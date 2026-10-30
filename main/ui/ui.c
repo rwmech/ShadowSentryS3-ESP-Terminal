@@ -381,7 +381,7 @@ static void ui_task(void *arg)
 {
     (void)arg;
     if (!display_init()) {
-        ESP_LOGE(TAG, "No display — UI task exiting, honeypot keeps running");
+        ESP_LOGE(TAG, "No display: UI task exiting, honeypot keeps running");
         vTaskDelete(NULL);
         return;
     }

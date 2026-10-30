@@ -1,4 +1,4 @@
-#include "config.h"     // ALARM_REMIND_S / ALARM_QUIET_S overrides
+#include "settings.h"   // alarm_remind_s / alarm_quiet_s, read live
 #include "alarm.h"
 #include "buzzer.h"
 #include "log_store.h"
@@ -16,7 +16,7 @@ static const char *TAG = "ALARM";
 #define ALARM_QUEUE_DEPTH    32
 #define ALARM_TASK_STACK     4096
 #define ALARM_TASK_PRIO      4
-#define ALARM_MAX_LISTENERS  3
+#define ALARM_MAX_LISTENERS  4
 #define NVS_NS               "alarm"
 #define NVS_KEY              "incident"
 
@@ -157,7 +157,7 @@ static void alarm_task(void *arg)
             }
         } else if (got) {
             bool same_src = (m.ip == s_info.src_ip);
-            bool quiet    = (now - s_last_event_s) >= ALARM_QUIET_S;
+            bool quiet    = (now - s_last_event_s) >= (int64_t)settings_get()->alarm_quiet_s;
 
             if (s_info.state == ALARM_IDLE ||
                 (s_info.state == ALARM_ACKED && (!same_src || quiet))) {
@@ -182,19 +182,19 @@ static void alarm_task(void *arg)
             last_notify = now;
         }
 
-        if (s_info.state == ALARM_ACTIVE && now - s_last_remind_s >= ALARM_REMIND_S) {
+        if (s_info.state == ALARM_ACTIVE && now - s_last_remind_s >= (int64_t)settings_get()->alarm_remind_s) {
             s_last_remind_s = now;
             ESP_LOGW(TAG, "Incident #%lu still unacknowledged", (unsigned long)s_info.id);
             buzzer_remind();
         }
 
-        if (s_info.state == ALARM_ACKED && now - s_last_event_s >= ALARM_QUIET_S) {
+        if (s_info.state == ALARM_ACKED && now - s_last_event_s >= (int64_t)settings_get()->alarm_quiet_s) {
             xSemaphoreTake(s_mutex, portMAX_DELAY);
             s_info.state = ALARM_IDLE;
             xSemaphoreGive(s_mutex);
             persist();
-            ESP_LOGI(TAG, "Incident #%lu closed after %d s quiet",
-                     (unsigned long)s_info.id, ALARM_QUIET_S);
+            ESP_LOGI(TAG, "Incident #%lu closed after %lu s quiet",
+                     (unsigned long)s_info.id, (unsigned long)settings_get()->alarm_quiet_s);
             notify();
         }
     }

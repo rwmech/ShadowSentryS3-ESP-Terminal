@@ -253,6 +253,44 @@ footer{
 }
 .uptime{color:rgba(0,210,160,.6)}
 #sys-info{color:rgba(0,210,160,.5);font-family:monospace;font-size:.65rem}
+
+/* ── Fork: tabs, Logs and Settings pages ── */
+[hidden]{display:none!important}
+.tabs{display:flex;gap:4px;margin-left:18px}
+.tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:6px 14px;border-radius:8px;cursor:pointer;font:600 .78rem var(--font)}
+.tab:hover{color:var(--text)}
+.tab.on{color:var(--g);border-color:var(--border-hi);background:var(--g-dim)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.bars{display:flex;align-items:flex-end;gap:3px;height:120px;border-bottom:1px solid rgba(255,255,255,.08)}
+.bars .b{flex:1;background:var(--g);opacity:.75;border-radius:2px 2px 0 0;min-height:1px}
+.bars .b:hover{opacity:1}
+.bar-lbl{display:flex;justify-content:space-between;font-size:.62rem;color:var(--muted)}
+.hbar{display:flex;align-items:center;gap:8px;font-size:.75rem;margin-bottom:6px}
+.hbar .n{width:100px;color:var(--text)}
+.hbar .t{flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+.hbar .f{height:100%;background:var(--blue)}
+.hbar .v{min-width:48px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ctl select,.ctl input:not([type=checkbox]),.form input:not([type=checkbox]):not([type=range]),.form select{
+  background:rgba(0,0,0,.35);border:1px solid var(--border-hi);color:var(--text);border-radius:6px;padding:6px 10px;font:.78rem var(--font)}
+.btn{display:inline-block;padding:7px 16px;border-radius:7px;cursor:pointer;font:600 .74rem var(--font);text-decoration:none;
+  background:rgba(0,210,160,.08);border:1px solid rgba(0,210,160,.25);color:var(--g)}
+.btn:hover{background:rgba(0,210,160,.16)}
+.btn-red{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.3);color:var(--red)}
+.form{display:grid;grid-template-columns:210px minmax(0,360px);gap:10px 16px;align-items:center}
+.form label{color:var(--muted);font-size:.75rem}
+.form input[type=checkbox]{justify-self:start;width:16px;height:16px}
+.form .hint{grid-column:2;font-size:.68rem;color:var(--muted);margin-top:-4px}
+.form h4{grid-column:1/-1;font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;color:var(--g);margin-top:12px}
+.msg{font-size:.8rem;padding:10px 14px;border-radius:8px;display:none}
+.msg.ok{display:block;background:rgba(0,210,160,.1);border:1px solid var(--border-hi);color:var(--g)}
+.msg.err{display:block;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.4);color:var(--red)}
+.kv{font-family:monospace;font-size:.78rem;line-height:1.8}
+.note{padding:8px 20px;font-size:.7rem;color:var(--muted)}
+.muted{color:var(--muted)}
+.td-ip.link{cursor:pointer;text-decoration:underline dotted}
 </style>
 </head>
 <body>
@@ -264,6 +302,11 @@ footer{
     <h1>ShadowSentry S3</h1>
     <p>Edge Deception Honeypot &nbsp;·&nbsp; ESP32-S3</p>
   </div>
+  <nav class="tabs">
+    <button class="tab" id="tab-dash" onclick="showPage('dash')">Dashboard</button>
+    <button class="tab" id="tab-logs" onclick="showPage('logs')">Logs</button>
+    <button class="tab" id="tab-settings" onclick="showPage('settings')">Settings</button>
+  </nav>
   <div class="spacer"></div>
   <span class="pill pill-device">&#9881; Core&nbsp;0/1 &nbsp;240&nbsp;MHz</span>
   &nbsp;
@@ -280,7 +323,7 @@ footer{
   <button onclick="ackAlarm()">Acknowledge</button>
 </div>
 
-<main>
+<main id="page-dash">
 
   <div class="stats-row">
     <div class="stat-card c-total" onclick="setFilter(null)" title="Show all">
@@ -436,6 +479,82 @@ footer{
 
 </main>
 
+<main id="page-logs" hidden>
+  <div class="stats-row" id="sum-cards"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-title">Last 24 hours</div><div class="bars" id="ch-hourly"></div><div class="bar-lbl" id="ch-hourly-lbl"></div></div>
+    <div class="card"><div class="card-title">Daily, last 30 days</div><div class="bars" id="ch-daily"></div><div class="bar-lbl" id="ch-daily-lbl"></div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><div class="card-title">By type, all time</div><div id="ch-type"></div></div>
+    <div class="card"><div class="card-title">microSD card</div><div class="kv" id="sd-info"></div></div>
+  </div>
+  <div class="grid2">
+    <div class="table-card"><div class="table-hdr"><div class="card-title">Top sources</div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Source IP</th><th>MAC / Vendor</th><th>Events</th><th>Last seen</th><th>Last type</th></tr></thead><tbody id="top-src"></tbody></table></div></div>
+    <div class="table-card"><div class="table-hdr"><div class="card-title">Top credentials</div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Username</th><th>Password</th><th>Tries</th></tr></thead><tbody id="top-cred"></tbody></table></div></div>
+  </div>
+  <div class="table-card">
+    <div class="table-hdr" style="flex-wrap:wrap;gap:10px">
+      <div class="card-title">Log file</div>
+      <div class="ctl">
+        <select id="lg-day" onchange="updDl()"></select>
+        <label class="muted" style="font-size:.72rem"><input type="checkbox" id="lg-full"> whole file</label>
+        <button class="btn" onclick="loadDay()">Load</button>
+        <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option></select>
+        <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
+        <a class="btn" id="lg-dl" href="#" download>Download</a>
+      </div>
+    </div>
+    <div class="note" id="lg-note"></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Source IP</th><th>MAC / Vendor</th><th>Username</th><th>Password</th><th>Details</th></tr></thead>
+      <tbody id="lg-body"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<main id="page-settings" hidden>
+  <div class="card">
+    <div class="card-title">Settings</div>
+    <div class="msg" id="st-msg"></div>
+    <form class="form" id="st-form" onsubmit="saveSettings(event)" autocomplete="off">
+      <h4>Admin</h4>
+      <label for="st-pw">New admin password</label><input type="password" id="st-pw" maxlength="63" autocomplete="new-password" placeholder="blank = unchanged">
+      <label for="st-pw2">Confirm password</label><input type="password" id="st-pw2" maxlength="63" autocomplete="new-password">
+      <h4>Wi-Fi (applies after a reboot)</h4>
+      <label for="st-ssid">SSID</label><input id="st-ssid" maxlength="32">
+      <label for="st-wpw">Password</label><input type="password" id="st-wpw" maxlength="63" autocomplete="new-password">
+      <label for="st-open">Open network (no password)</label><input type="checkbox" id="st-open" onchange="$('st-wpw').disabled=this.checked">
+      <div class="hint" id="st-wifi-hint"></div>
+      <h4>Telegram (applies after a reboot)</h4>
+      <label for="st-tok">Bot token</label><input type="password" id="st-tok" maxlength="63" autocomplete="new-password">
+      <label for="st-chat">Chat id</label><input id="st-chat" maxlength="23">
+      <div class="hint" id="st-tg-hint"></div>
+      <h4>Time</h4>
+      <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
+      <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
+      <h4>Alarm</h4>
+      <label for="st-rem">Reminder interval (s)</label><input type="number" id="st-rem" min="60" max="3600" step="1">
+      <label for="st-quiet">Quiet time (s)</label><input type="number" id="st-quiet" min="60" max="86400" step="1">
+      <div class="hint">Silence that closes an acknowledged incident.</div>
+      <h4>Panel and sounds</h4>
+      <label for="st-br">Brightness</label><div class="ctl"><input type="range" id="st-br" min="5" max="100" oninput="$('st-brv').textContent=this.value+' %'"><span id="st-brv" class="muted"></span></div>
+      <label for="st-snd">Alarm sound</label><input type="checkbox" id="st-snd">
+      <label for="st-chirp">Boot chirp</label><input type="checkbox" id="st-chirp">
+      <label for="st-click">Touch click</label><input type="checkbox" id="st-click">
+      <div></div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="btn" type="submit">Save</button>
+        <button class="btn" type="button" onclick="testBuzzer()">Test buzzer</button>
+        <button class="btn btn-red" type="button" onclick="rebootDev()">Reboot</button>
+      </div>
+    </form>
+  </div>
+</main>
+
 <footer>
   <span>ShadowSentry S3 &nbsp;·&nbsp; ESP32-S3 &nbsp;·&nbsp; MIT License</span>
   <span class="uptime" id="uptime"></span>
@@ -459,6 +578,8 @@ footer{
 </div>
 
 <script>
+// Every POST carries this header; the device refuses POSTs without it (CSRF guard).
+const POSTH={method:'POST',headers:{'X-ShadowSentry':'1'}};
 function ip4(n){return[(n>>>0)&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255].join('.')}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function macCell(e){
@@ -658,7 +779,7 @@ async function load(){
 }
 async function clearLogs(){
   if(!confirm('Wipe all attack logs from flash memory?'))return;
-  try{await fetch('/api/clear',{method:'POST'});_seen.clear();document.getElementById('feed').innerHTML='<div class="feed-empty">Waiting for attackers…</div>';load();}
+  try{await fetch('/api/clear',POSTH);_seen.clear();document.getElementById('feed').innerHTML='<div class="feed-empty">Waiting for attackers…</div>';load();}
   catch{alert('Clear failed');}
 }
 async function loadStatus(){
@@ -683,7 +804,7 @@ function renderAlarm(a){
   b.classList.add('on');
 }
 async function ackAlarm(){
-  try{await fetch('/api/ack',{method:'POST'});document.getElementById('alarm-banner').classList.remove('on');}
+  try{await fetch('/api/ack',POSTH);document.getElementById('alarm-banner').classList.remove('on');}
   catch{alert('Acknowledge failed');}
 }
 load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
@@ -712,6 +833,214 @@ function connectWS(){
   ws.onerror=()=>{try{ws.close();}catch{}};
 }
 connectWS();
+</script>
+<script>
+// ── Fork: page tabs, Logs page, Settings page ──
+// Log lines and metrics hold attacker-controlled strings: they only ever reach
+// the DOM through textContent (el/td below), never innerHTML.
+const $=id=>document.getElementById(id);
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined&&text!==null)e.textContent=String(text);return e;}
+function td(text,cls){return el('td',cls,text);}
+function emptyRow(tb,cols,text){const tr=el('tr','empty-row'),c=td(text);c.colSpan=cols;tr.append(c);tb.replaceChildren(tr);}
+const kb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.ceil(n/1024)+' KB';
+const dur=s=>{s=s|0;const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+'d ':'')+h+'h '+m+'m';};
+const RESET=['unknown','power-on','external','software','panic','interrupt WDT','task WDT','other WDT','deep sleep','brownout','SDIO','USB','JTAG','eFuse','power glitch','CPU lockup'];
+const ASTATE=['idle','active, not acknowledged','acknowledged'];
+
+const PAGES=['dash','logs','settings'];
+function showPage(p){
+  if(!PAGES.includes(p))p='dash';
+  PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
+  if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
+  if(p==='logs'){loadSummary();loadDays();}
+  if(p==='settings')loadSettings();
+}
+window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
+setInterval(()=>{if(!$('page-logs').hidden)loadSummary();},30000);
+
+// ── Summary metrics ──
+function bars(id,vals,labels){
+  const max=Math.max(1,...vals);
+  $(id).replaceChildren(...vals.map((v,i)=>{const b=el('div','b');b.style.height=(v/max*100)+'%';b.title=labels[i]+': '+v;return b;}));
+  $(id+'-lbl').replaceChildren(el('span','',labels[0]||''),el('span','',labels[Math.floor(labels.length/2)]||''),el('span','',labels[labels.length-1]||''));
+}
+const dkey=d=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+async function loadSummary(){
+  try{const r=await fetch('/api/summary');if(!r.ok)throw 0;renderSummary(await r.json());}
+  catch{$('sum-cards').replaceChildren(el('div','muted','Summary unavailable'));}
+}
+function renderSummary(d){
+  const a=d.alarm||{};
+  const cards=[
+    ['Events on record',d.total,d.first_ts?'since '+fmt(d.first_ts):'none yet'],
+    ['Today',d.today,'device local date'],
+    ['Last 24 h',d.last_24h,'rolling'],
+    ['Incidents',d.incidents,'now '+(ASTATE[a.state]||'?')],
+    ['Flash counter',d.flash_total,'all-time, upstream'],
+    ['Uptime',dur(d.uptime_s),d.clock_ok?'clock synced':'clock not synced'],
+  ];
+  $('sum-cards').replaceChildren(...cards.map(([l,v,s])=>{const c=el('div','stat-card');c.append(el('div','val',v),el('div','label',l),el('div','sub',s));return c;}));
+
+  // Hours relative to now and days keyed by the device's own local date, so a
+  // browser in another timezone draws the same buckets.
+  const hv=(d.hourly||[]).map(Number);
+  bars('ch-hourly',hv,hv.map((_,i)=>{const k=hv.length-1-i;return k?k+' h ago':'this hour';}));
+
+  const dm=new Map((d.daily||[]).map(x=>[+x[0],+x[1]]));
+  const tk=+d.today_key||Math.max(0,...dm.keys());
+  const dv=[],dl=[];
+  if(tk){
+    const base=new Date(Math.floor(tk/10000),Math.floor(tk/100)%100-1,tk%100);
+    for(let i=29;i>=0;i--){const x=new Date(base.getFullYear(),base.getMonth(),base.getDate()-i);dv.push(dm.get(dkey(x))||0);dl.push(String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'));}
+  }
+  bars('ch-daily',dv,dl);
+
+  const bt=(d.by_type||[]).map(Number),bmax=Math.max(1,...bt);
+  $('ch-type').replaceChildren(...TNAME.map((n,i)=>{const r=el('div','hbar'),t=el('div','t'),f=el('div','f');f.style.width=((bt[i]||0)/bmax*100)+'%';t.append(f);r.append(el('span','n',n),t,el('span','v',bt[i]||0));return r;}));
+
+  const sd=d.sd||{};
+  $('sd-info').replaceChildren(...(sd.mounted?[
+    'Card "'+sd.card+'" mounted',
+    sd.total_mb+' MB, '+sd.free_mb+' MB free',
+    'Lines written since boot: '+sd.lines,
+    'Write errors since boot: '+sd.errors,
+    'Dropped (queue full): '+sd.dropped,
+  ]:['No microSD card mounted. Metrics are kept in RAM only.']).map(t=>el('div','',t)));
+
+  const ts=$('top-src');
+  if(!(d.top_sources||[]).length)emptyRow(ts,5,'No sources yet');
+  else ts.replaceChildren(...d.top_sources.map(s=>{
+    const tr=el('tr'),ip=td(s.ip,'td-ip link'),mac=td(s.mac&&s.mac!=='unknown'?s.mac:'','td-mac');
+    ip.title='Filter the log by this IP';ip.onclick=()=>{$('lg-q').value=String(s.ip);renderDay();$('lg-q').scrollIntoView({block:'center'});};
+    if(s.vendor)mac.append(el('span','vendor-chip',s.vendor));
+    tr.append(ip,mac,td(s.count),td(fmt(s.last_ts),'td-ts'),td(TNAME[s.last_type]||'?'));return tr;}));
+  const tc=$('top-cred');
+  if(!(d.top_creds||[]).length)emptyRow(tc,3,'No credentials yet');
+  else tc.replaceChildren(...d.top_creds.map(c=>{const tr=el('tr');tr.append(td(c.user===''?'(empty)':c.user,'td-cred'),td(c.pass===''?'(empty)':c.pass,'td-cred'),td(c.count));return tr;}));
+}
+
+// ── Log files ──
+let _days=[],_lines=[],_tail=262144,_loaded=null;
+TNAME.forEach((n,i)=>{const o=el('option','',n);o.value=String(i);$('lg-type').append(o);});
+function note(t){$('lg-note').textContent=t;}
+function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
+async function loadDays(){
+  const sel=$('lg-day'),cur=sel.value;
+  try{
+    const r=await fetch('/api/logs');if(!r.ok)throw 0;const d=await r.json();
+    _days=d.files||[];_tail=+d.tail_bytes||_tail;
+    sel.replaceChildren(..._days.map(f=>{const o=el('option','',String(f.name).replace('.jsonl','')+'  ('+kb(+f.size||0)+')');o.value=String(f.name);return o;}));
+    if(cur&&_days.some(f=>f.name===cur))sel.value=cur;
+    updDl();
+    if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),8,'No lines');}
+    else if(!_loaded)loadDay();
+  }catch{note('Could not list the log files.');}
+}
+async function loadDay(){
+  const name=$('lg-day').value;if(!name)return;
+  const full=$('lg-full').checked,f=_days.find(x=>x.name===name)||{};
+  note('Loading '+name+'...');
+  try{
+    const r=await fetch('/api/logs/file?f='+encodeURIComponent(name)+(full?'':'&tail=1'));
+    if(!r.ok)throw 0;
+    const txt=await r.text(),out=[];let bad=0;
+    for(const ln of txt.split('\n')){
+      if(!ln.trim())continue;
+      try{const o=JSON.parse(ln);if(o&&typeof o==='object'&&!Array.isArray(o)){o._raw=ln.toLowerCase();out.push(o);}else bad++;}catch{bad++;}
+    }
+    _lines=out.reverse();
+    _loaded={name,cut:!full&&(+f.size||0)>_tail,bad};
+    renderDay();
+  }catch{note('Could not load '+name+'.');}
+}
+const MAXROWS=1000;
+function renderDay(){
+  if(!_loaded)return;
+  const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value;
+  const rows=_lines.filter(o=>(!k||o.kind===k)&&(t===''||o.type===+t)&&(!q||o._raw.includes(q)));
+  const tb=$('lg-body');
+  if(!rows.length)emptyRow(tb,8,_lines.length?'No matching lines':'No lines');
+  else{const fr=document.createDocumentFragment();rows.slice(0,MAXROWS).forEach(o=>fr.append(logRow(o)));tb.replaceChildren(fr);}
+  note(_loaded.name+': '+_lines.length+' lines'+(_loaded.cut?' (last '+kb(_tail)+' only; tick "whole file" for all)':'')+
+    (_loaded.bad?', '+_loaded.bad+' unreadable':'')+'. Showing '+Math.min(rows.length,MAXROWS)+' of '+rows.length+' matching, newest first.');
+}
+function logRow(o){
+  const kind=String(o.kind||'?');
+  let type='',ip='',mac='',user='',pass='',det='';
+  if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=o.payload;}
+  else if(kind==='alarm'){type=TNAME[o.type]||'';ip=o.ip;det='incident #'+o.id+' '+o.event+', '+o.count+' event(s)';}
+  else if(kind==='boot'){det='firmware '+o.fw+', reset: '+(RESET[o.reset]||o.reset);}
+  const tr=el('tr'),mc=td(mac&&mac!=='unknown'?mac:'','td-mac'),dc=td(det==null?'':det,'td-payload');
+  if(kind==='attack'&&o.vendor)mc.append(el('span','vendor-chip',o.vendor));
+  dc.title=String(det==null?'':det);
+  tr.append(td(fmt(+o.ts),'td-ts'),td(kind),td(type),td(ip==null?'':ip,'td-ip'),mc,td(user==null?'':user,'td-cred'),td(pass==null?'':pass,'td-cred'),dc);
+  return tr;
+}
+
+// ── Settings ──
+const TZP=[['UTC','UTC0'],['US Eastern','EST5EDT,M3.2.0,M11.1.0'],['US Central','CST6CDT,M3.2.0,M11.1.0'],
+  ['US Mountain','MST7MDT,M3.2.0,M11.1.0'],['US Arizona','MST7'],['US Pacific','PST8PDT,M3.2.0,M11.1.0'],
+  ['UK','GMT0BST,M3.5.0/1,M10.5.0'],['Central Europe','CET-1CEST,M3.5.0,M10.5.0/3']];
+{const s=$('st-tzp'),o=el('option','','Custom');o.value='';s.append(o);TZP.forEach(([n,v])=>{const x=el('option','',n+'  ('+v+')');x.value=v;s.append(x);});}
+function syncTz(){const v=$('st-tz').value.trim();$('st-tzp').value=TZP.some(p=>p[1]===v)?v:'';}
+function showMsg(kind,text){const m=$('st-msg');m.className='msg '+kind;m.textContent=text;}
+async function loadSettings(){
+  try{
+    const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();
+    $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();
+    $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
+    $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
+    $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
+    ['st-pw','st-pw2','st-wpw','st-tok'].forEach(i=>$(i).value='');
+    $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
+    $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
+    $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
+    $('st-wifi-hint').textContent='Running on "'+s.running_wifi_ssid+'" from '+(s.wifi_overridden?'these settings':'config.h')+
+      '. A saved network that gets no IP within 90 s at boot is dropped and the board goes back to the config.h network.';
+    $('st-tg-hint').textContent='Alerts are '+(s.telegram_enabled?'on':'off')+'. Clear the chat id to turn them off.';
+    if(s.reboot_pending)showMsg('ok','Saved Wi-Fi or Telegram changes are waiting for a reboot.');
+  }catch{showMsg('err','Could not load the settings.');}
+}
+async function saveSettings(ev){
+  ev.preventDefault();
+  const pw=$('st-pw').value,pw2=$('st-pw2').value;
+  if(pw||pw2){
+    if(pw!==pw2)return showMsg('err','The admin passwords do not match.');
+    if(pw.length<8)return showMsg('err','The admin password must be at least 8 characters.');
+  }
+  const body={wifi_ssid:$('st-ssid').value,tg_chat_id:$('st-chat').value.trim(),tz:$('st-tz').value.trim(),
+    alarm_remind_s:Number($('st-rem').value),alarm_quiet_s:Number($('st-quiet').value),brightness:Number($('st-br').value),
+    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked};
+  if(pw)body.admin_password=pw;
+  if($('st-open').checked)body.wifi_open=true;
+  else if($('st-wpw').value)body.wifi_password=$('st-wpw').value;
+  else if($('st-wpw').placeholder==='')return showMsg('err','Enter the Wi-Fi password, or tick "Open network".');
+  if($('st-tok').value.trim())body.tg_token=$('st-tok').value.trim();
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
+    let d={};try{d=await r.json();}catch{}
+    if(!r.ok)return showMsg('err',String(d.error||('Save failed ('+r.status+').')));
+    let m='Saved.';
+    if(d.reboot)m+=' Reboot to apply the Wi-Fi and Telegram changes.';
+    if(d.password_changed){m+=' The admin password has changed: reload the page and log in with the new password.';['st-pw','st-pw2'].forEach(i=>$(i).value='');}
+    else loadSettings();
+    showMsg('ok',m);
+  }catch{showMsg('err','Save failed: device unreachable.');}
+}
+async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
+async function rebootDev(){
+  if(!confirm('Reboot the device now?'))return;
+  try{await fetch('/api/reboot',POSTH);}catch{}
+  showMsg('ok','Rebooting. Waiting for the device...');
+  const t0=Date.now();
+  const poll=async()=>{
+    try{const r=await fetch('/api/status',{cache:'no-store'});if(r.ok)return showMsg('ok','The device is back.');}catch{}
+    if(Date.now()-t0<120000)setTimeout(poll,3000);else showMsg('err','No answer after 2 minutes.');
+  };
+  setTimeout(poll,8000);
+}
+
+showPage(location.hash.slice(1)||'dash');
 </script>
 </body>
 </html>

@@ -1,8 +1,11 @@
 """Upload firmware to ShadowSentry over the admin panel's POST /api/ota.
 
 Usage: python ota_upload.py <firmware.bin> <host>
-Reads ADMIN_PORT and ADMIN_PASSWORD from main/config.h (git-ignored), so the
-password is never on a command line, in an environment variable or committed.
+Reads ADMIN_PORT from main/config.h. The password comes from tools/ota_password
+(one line, git-ignored) when that file exists, otherwise ADMIN_PASSWORD in
+main/config.h (git-ignored). Use tools/ota_password once the password has been
+changed on the dashboard's Settings page, since config.h only holds the default.
+The password is never on a command line, in an environment variable or committed.
 Called by `pio run -e crowpanel35_ota -t upload` (see platformio.ini).
 """
 import base64
@@ -28,12 +31,16 @@ def main():
     image = pathlib.Path(sys.argv[1]).read_bytes()
     host = sys.argv[2]
     port = config_value("ADMIN_PORT")
-    auth = base64.b64encode(f"admin:{config_value('ADMIN_PASSWORD')}".encode()).decode()
+    override = ROOT / "tools" / "ota_password"
+    password = ((override.read_text(encoding="utf-8-sig").splitlines() or [""])[0] if override.exists()
+                else config_value("ADMIN_PASSWORD"))
+    auth = base64.b64encode(f"admin:{password}".encode()).decode()
 
     url = f"http://{host}:{port}/api/ota"
     req = urllib.request.Request(url, data=image, method="POST", headers={
         "Authorization": f"Basic {auth}",
         "Content-Type": "application/octet-stream",
+        "X-ShadowSentry": "1",      # firmware from this change on refuses POSTs without it
     })
     print(f"ota_upload: sending {len(image)} bytes to {url}")
     try:

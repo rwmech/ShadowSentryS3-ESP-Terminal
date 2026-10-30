@@ -20,6 +20,9 @@
 #include "wifi_monitor.h"
 #include "alarm.h"
 #include "ui.h"
+#include "buzzer.h"
+#include "settings.h"
+#include "sd_log.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -141,21 +144,33 @@ void app_main(void)
     ESP_LOGI(TAG, "All-time attack count from flash: %lu",
              (unsigned long)log_store_total_count());
 
-    // ── Local time for the front panel clock and event timestamps ─────────────
-    setenv("TZ", DISPLAY_TZ, 1);
-    tzset();
+    // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
+    settings_init();
 
-    // ── Incident alarm + front panel (before Wi-Fi, so the panel shows it) ────
-    alarm_init();
+    // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
+    alarm_init();                   // also brings up the buzzer
+    buzzer_boot();
+    sd_log_init();
     ui_start();
 
     // ── WiFi ─────────────────────────────────────────────────────────────────
-    ESP_LOGI(TAG, "Connecting to \"%s\"...", WIFI_SSID);
-    char net[48];
-    snprintf(net, sizeof(net), "Connecting to %s...", WIFI_SSID);
+    const char *ssid = settings_get()->wifi_ssid;
+    ESP_LOGI(TAG, "Connecting to \"%s\"...", ssid);
+    char net[64];
+    snprintf(net, sizeof(net), "Connecting to %s...", ssid);
     ui_set_net(net);
     wifi_manager_init();
-    wifi_manager_wait_for_ip();     // blocks until DHCP assigns an address
+    if (settings_wifi_overridden()) {
+        // Wi-Fi saved from the web: if it can't get an IP, fall back to the
+        // config.h network rather than strand the board off the LAN.
+        if (!wifi_manager_wait_for_ip_ms(SETTINGS_WIFI_FALLBACK_S * 1000)) {
+            ESP_LOGE(TAG, "No IP on saved Wi-Fi \"%s\", reverting to config.h network", ssid);
+            settings_forget_wifi();
+            esp_restart();
+        }
+    } else {
+        wifi_manager_wait_for_ip(); // blocks until DHCP assigns an address
+    }
 
     // Reaching the network proves this image can take the next OTA: confirm it,
     // so the bootloader won't roll back. A no-op on a serial-flashed image.
@@ -182,7 +197,7 @@ void app_main(void)
              MDNS_HOSTNAME, ADMIN_PORT);
 #endif
     ESP_LOGI(TAG, "  │  Telegram alerts: %s",
-             (TELEGRAM_BOT_TOKEN[0] == 'Y') ? "NOT CONFIGURED" : "enabled");
+             settings_telegram_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");

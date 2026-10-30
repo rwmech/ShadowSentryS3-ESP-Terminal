@@ -2,6 +2,7 @@
 #include "wifi_manager.h"
 #include "geoip.h"
 #include "config.h"
+#include "settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -142,10 +143,12 @@ static esp_err_t tg_http_event(esp_http_client_event_t *evt)
 // (<b>, <code>, etc.) and actual Unicode — but NOT raw double-quotes or backslashes.
 static bool send_message(const char *html_text)
 {
+    settings_t st;
+    settings_copy(&st);
     char url[128];
     snprintf(url, sizeof(url),
              "https://api.telegram.org/bot%s/sendMessage",
-             TELEGRAM_BOT_TOKEN);
+             st.tg_token);
 
     // JSON-escape the HTML message before embedding it in the JSON body
     char json_text[1024];
@@ -154,7 +157,7 @@ static bool send_message(const char *html_text)
     char body[1280];
     int body_len = snprintf(body, sizeof(body),
         "{\"chat_id\":\"%s\",\"text\":\"%s\",\"parse_mode\":\"HTML\"}",
-        TELEGRAM_CHAT_ID, json_text);
+        st.tg_chat_id, json_text);
 
     esp_http_client_config_t cfg = {
         .url               = url,
@@ -226,7 +229,7 @@ void telegram_task(void *arg)
              TELEGRAM_QUEUE_DEPTH, TELEGRAM_HTTP_TIMEOUT_MS, TELEGRAM_RATE_LIMIT_MS);
 
     // Send boot-online notification if Telegram is configured and IP is known
-    if (TELEGRAM_BOT_TOKEN[0] != 'Y' && s_boot_ip[0] != '\0') {
+    if (settings_telegram_enabled() && s_boot_ip[0] != '\0') {
         char msg[256];
         snprintf(msg, sizeof(msg),
             "\xF0\x9F\x9F\xA2"  // 🟢

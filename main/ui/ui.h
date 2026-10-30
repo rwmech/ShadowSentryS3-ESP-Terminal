@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * Front panel UI — Core 1, low priority
+ * Front panel UI, Core 1, low priority
  *
  * Status bar (network, state pill), counters, a live attack feed (tap a row
  * for details) and a full-screen incident overlay with a hold-to-acknowledge

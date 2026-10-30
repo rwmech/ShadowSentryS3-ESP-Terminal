@@ -37,6 +37,9 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - an incident alarm on the buzzer, with acknowledgement from the panel or `POST /api/ack`
   - OTA: two 6 MB slots and `POST /api/ota`, with rollback if a new image never reaches Wi-Fi
   - PSRAM-first allocation
+  - a boot chirp and a touch click on the buzzer
+  - runtime settings in NVS, edited from the dashboard's Settings tab
+  - a microSD JSONL event log with summary metrics, shown on the dashboard's Logs tab
 - The README section "This fork" (`C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\README.md`) is the user-facing summary. Update it in the same change as the code.
 - Build with `pio run -e crowpanel35` from the fork root. `crowpanel35_ota` uploads with `C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\tools\ota_upload.py`.
 
@@ -97,14 +100,15 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
 - Rob's ordered work list, 2026-10-30:
   - 1. Boot chirp and a click on every screen press. Built, on the board, untested by Rob.
   - 2. microSD logging, admin password set to the value Rob gave (in the ignored `main\config.h`). On the board: card "ASTC" mounted, 7447 MB, 7446 MB free. Not yet confirmed: a line written to the card.
-  - 3. Configuration settings in the dashboard. Firmware side written (`main\settings.c`), web API and page not yet.
-  - 4. Log viewer and summary metrics in the dashboard. Metrics written in `main\storage\sd_log.c` (saved to `/sd/stats.bin`), API and page not yet.
-- Uncommitted on `main`, not yet reviewed:
-  - runtime settings in NVS (`main\settings.c`). The saved Wi-Fi falls back to the config.h network after 90 s without an IP.
-  - a microSD JSONL event log, one file per day under `/sd/log`, written by its own queue-drained task (`main\storage\sd_log.c`), plus summary metrics
-  - edits to the buzzer, alarm, display, Wi-Fi manager, Telegram and admin panel
-  - `CONFIG_FATFS_LFN_HEAP` (long file names); `tools\ota_upload.py` reads `tools\ota_password` first
+  - 3. Configuration settings in the dashboard. Built and reviewed, not on the board: Settings tab, `GET`/`POST /api/settings`, `POST /api/reboot`, `POST /api/buzzer/test`.
+  - 4. Log viewer and summary metrics in the dashboard. Built and reviewed, not on the board: Logs tab, `GET /api/summary`, `GET /api/logs`, `GET /api/logs/file`.
+- Uncommitted on `main`, built and code-reviewed, not yet on the board:
+  - runtime settings in NVS (`main\settings.c`): a live copy (running) and a saved copy (next boot), so a second save before the reboot keeps the first. The saved Wi-Fi falls back to the config.h network after 90 s without an IP.
+  - a microSD JSONL event log, one file per day under `/sd/log`, written by its own queue-drained task (`main\storage\sd_log.c`), plus summary metrics in `/sd/stats.bin`, flushed before a reboot or OTA
+  - the fork's web routes in `main\admin\api_ext.c`, hooked from `handle_client` in `main\admin\admin_panel.c`; Dashboard / Logs / Settings tabs in `main\index.html`
+  - CSRF guard: every POST, upstream's included, needs an `X-ShadowSentry` header. The dashboard and `tools\ota_upload.py` send it. An older `ota_upload.py` will get 403 from this firmware on.
+  - edits to the buzzer (`buzzer_test`), alarm, display, Wi-Fi manager, Telegram, main and admin panel
+  - `CONFIG_FATFS_LFN_HEAP` (long file names); `tools\ota_upload.py` reads `tools\ota_password` first. After changing the admin password on the Settings page, put it in `tools\ota_password`.
 - Open, batched:
-  - The README "This fork" section uses bold, and the fork's new code uses em dashes in comments and log strings. Both break the style rules above.
   - Commits 5a5f5b0, 631c4d3 and 12533fd are authored `rwmech@gmail.com`, not the address above. Fixing them needs a history rewrite and a force push: Rob's call.
-- Next: finish items 3 and 4, build, review, then ask Rob before the OTA upload.
+- Next: Rob's OK for the OTA upload, then on the board: a line on the card, the Settings save and reboot path, the Logs page, the Wi-Fi fallback.
