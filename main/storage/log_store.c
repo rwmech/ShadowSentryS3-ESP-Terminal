@@ -19,12 +19,18 @@ static uint32_t      s_total = 0;   // all-time counter (survives clear via SPIF
 static SemaphoreHandle_t s_mutex;
 static bool              s_spiffs_ok = false;
 
-// Optional real-time listener (WebSocket dashboard). Invoked on every append.
-static void (*s_listener)(const attack_log_t *entry) = NULL;
+// Real-time listeners (WebSocket push, alarm engine, front panel), invoked on
+// every append. Registered once at boot, so the table needs no lock on read.
+static void (*s_listeners[LOG_STORE_MAX_LISTENERS])(const attack_log_t *entry);
+static int s_listener_count = 0;
 
-void log_store_set_listener(void (*cb)(const attack_log_t *entry))
+void log_store_add_listener(void (*cb)(const attack_log_t *entry))
 {
-    s_listener = cb;
+    if (!cb || s_listener_count >= LOG_STORE_MAX_LISTENERS) {
+        ESP_LOGE(TAG, "listener table full — callback not registered");
+        return;
+    }
+    s_listeners[s_listener_count++] = cb;
 }
 
 // ── SPIFFS helpers ────────────────────────────────────────────────────────────
@@ -114,9 +120,9 @@ void log_store_append(const attack_log_t *entry)
 
     xSemaphoreGive(s_mutex);
 
-    // Notify the live listener (WebSocket dashboard) so it can push this event
-    // in real time. Must be non-blocking — it runs in the caller's task.
-    if (s_listener) s_listener(entry);
+    // Notify the live listeners (WebSocket, alarm, panel) so they act on this
+    // event in real time. Each is non-blocking — they run in the caller's task.
+    for (int i = 0; i < s_listener_count; i++) s_listeners[i](entry);
 
     // Kick off async threat-intel enrichment for this attacker IP (non-blocking;
     // result is cached by IP and read later by the dashboard / Telegram).

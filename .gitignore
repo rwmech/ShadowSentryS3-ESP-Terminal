@@ -11,3 +11,5 @@ managed_components/
 *.elf
 *.map
 *.log
+.pio/
+sdkconfig.crowpanel35

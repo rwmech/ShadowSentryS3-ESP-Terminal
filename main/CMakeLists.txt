@@ -36,12 +36,19 @@ idf_component_register(
         "admin/ws_server.c"
         "admin/telegram.c"
         "storage/log_store.c"
+        "alarm/alarm.c"
+        "alarm/buzzer.c"
+        "ui/display.cpp"
+        "ui/ui.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
         "honeypot"     # rtsp_trap.h, http_trap.h, telnet_trap.h
         "admin"        # admin_panel.h, telegram.h
         "storage"      # log_store.h
+        "board"        # board.h — CrowPanel 3.5" pin map
+        "alarm"        # alarm.h, buzzer.h
+        "ui"           # display.h, ui.h
 
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}
@@ -77,4 +84,15 @@ idf_component_register(
 
         # HTTP server (WebSocket)
         esp_http_server     # ws_server.c — live WebSocket push to the dashboard
+
+        # Front panel and buzzer (LVGL + LovyanGFX come from idf_component.yml)
+        driver              # LEDC (buzzer), I2C (touch), GPIO (backlight)
 )
+
+# wolfSSL ships include/config.h, and PlatformIO's include order lets it shadow
+# main/config.h. -iquote dirs are searched before every -I dir, so ours wins
+# (joined form: SCons would read a separate path token as a library).
+target_compile_options(${COMPONENT_LIB} PRIVATE "-iquote${CMAKE_CURRENT_SOURCE_DIR}")
+# GCC 13+ (IDF 5.4) flags fake_shell.c's bounded snprintf as possible truncation;
+# the truncation is intended, keep it a warning.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=format-truncation)

@@ -194,6 +194,19 @@
 #define WIFI_MON_DEAUTH_THRESHOLD      3     // broadcast deauth/disassoc within the span
 #define WIFI_MON_COOLDOWN_S            60    // min seconds between Wi-Fi alerts
 
+// ── Front panel and incident alarm (CrowPanel 3.5") ──────────────────────────
+//
+// DISPLAY_TZ is a POSIX TZ string for the panel clock and event times, e.g.
+// "EST5EDT,M3.2.0,M11.1.0", "CET-1CEST,M3.5.0,M10.5.0/3", "UTC0".
+//
+// Any event opens an incident: a short alarm on the buzzer, then a reminder
+// beep every ALARM_REMIND_S until it is acknowledged on the panel (hold the
+// button) or the dashboard. An acknowledged incident closes after
+// ALARM_QUIET_S without events; a new source re-alarms immediately.
+#define DISPLAY_TZ                  "UTC0"
+#define ALARM_REMIND_S              300
+#define ALARM_QUIET_S               600
+
 // ── Compile-time validation ───────────────────────────────────────────────────
 //
 // These assertions fire as build errors, not runtime panics, so

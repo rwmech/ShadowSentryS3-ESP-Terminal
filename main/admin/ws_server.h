@@ -28,6 +28,14 @@
 #define ADMIN_WS_MAX_CLIENTS  3
 #endif
 
-// Start the WebSocket push server and hook it into the log store. Call once
-// after the network is up (Core 1). esp_http_server manages its own task.
+// Start the WebSocket push server and hook it into the log store and the alarm.
+// Call once after the network is up (Core 1). esp_http_server manages its own
+// task. Alarm changes are pushed as {"alarm":{...}}, attacks as bare entries.
 void ws_server_start(void);
+
+// Incident JSON object, shared by the WebSocket push and GET /api/status:
+// {"state":0|1|2,"id":n,"ip":u32,"type":t,"count":n,"first":ts,"last":ts,
+//  "mac":"..","vendor":".."}   state: 0 idle, 1 active (unacked), 2 acked
+#include <stddef.h>
+#include "alarm.h"
+void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len);

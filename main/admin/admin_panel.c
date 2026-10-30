@@ -1,4 +1,6 @@
 #include "admin_panel.h"
+#include "alarm.h"
+#include "ws_server.h"
 #include "log_store.h"
 #include "wifi_manager.h"
 #include "geoip.h"
@@ -118,12 +120,17 @@ static void serve_status_json(int sock)
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
         rssi = ap.rssi;
 
-    char json[128];
+    alarm_info_t a;
+    alarm_get(&a);
+    char alarm_j[256];
+    ws_format_alarm_json(&a, alarm_j, sizeof(alarm_j));
+
+    char json[400];
     int len = snprintf(json, sizeof(json),
-        "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d}",
+        "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d,\"alarm\":%s}",
         (unsigned long long)(esp_timer_get_time() / 1000000ULL),
         (unsigned long)esp_get_free_heap_size(),
-        (int)rssi);
+        (int)rssi, alarm_j);
 
     char hdr[160];
     int hdr_len = snprintf(hdr, sizeof(hdr),
@@ -268,6 +275,10 @@ static void handle_client(int sock)
         serve_attacks_json(sock);
     } else if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/status")) {
         serve_status_json(sock);
+    } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
+        alarm_ack();
+        ESP_LOGI(TAG, "Incident acknowledged via admin panel");
+        send_204(sock);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/clear")) {
         log_store_clear();
         ESP_LOGI(TAG, "Logs cleared via admin panel");

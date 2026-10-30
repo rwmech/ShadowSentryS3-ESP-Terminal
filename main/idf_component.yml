@@ -11,5 +11,11 @@ dependencies:
   # user-auth callback) and lands in the fake shell. wolfSSH pulls wolfSSL (crypto).
   wolfssl/wolfssh: "^1.4.20"
   wolfssl/wolfssl: "^5.8.0"
+  # Front panel: LVGL 8 for the UI; LovyanGFX drives the ILI9488 over SPI exactly
+  # as Elecrow's own CrowPanel 3.5" example does (Panel_ILI9488 + Bus_SPI).
+  lvgl/lvgl: "~8.4.0"
+  lovyan03/LovyanGFX:
+    git: https://github.com/lovyan03/LovyanGFX.git
+    version: "1.2.36"
   idf:
     version: ">=5.0"

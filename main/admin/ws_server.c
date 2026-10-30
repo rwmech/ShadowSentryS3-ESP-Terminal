@@ -1,4 +1,5 @@
 #include "ws_server.h"
+#include "alarm.h"
 #include "log_store.h"
 #include "geoip.h"
 #include "wifi_manager.h"
@@ -87,13 +88,46 @@ static void add_client(int fd)
 // overflow if the formatting happened in their context.
 typedef struct { attack_log_t e; } ws_msg_t;
 
+static void broadcast_text(const char *json);
+
 static void broadcast_work(void *arg)
 {
     ws_msg_t *m = (ws_msg_t *)arg;
     char json[512];
     format_entry_json(&m->e, json, sizeof(json));      // heavy work on httpd stack
     free(m);
+    broadcast_text(json);
+}
 
+// log_store listener — runs in the appending (honeypot/monitor) task, so it must
+// stay tiny: just copy the raw entry and hand off to the httpd task. All string
+// formatting and socket I/O happen there, off the caller's (small) stack.
+static void on_attack(const attack_log_t *e)
+{
+    if (!s_server) return;
+    ws_msg_t *m = (ws_msg_t *)malloc(sizeof(*m));
+    if (!m) return;
+    m->e = *e;
+    if (httpd_queue_work(s_server, broadcast_work, m) != ESP_OK) free(m);
+}
+
+// ── Alarm push ──────────────────────────────────────────────────────────────────
+
+void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
+{
+    char mac[WIFI_MAC_STR_LEN];
+    wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
+    snprintf(buf, len,
+        "{\"state\":%d,\"id\":%lu,\"ip\":%lu,\"type\":%u,\"count\":%lu,"
+        "\"first\":%lu,\"last\":%lu,\"mac\":\"%s\",\"vendor\":\"%s\"}",
+        (int)a->state, (unsigned long)a->id, (unsigned long)a->src_ip,
+        (unsigned)a->type, (unsigned long)a->count,
+        (unsigned long)a->first_ts, (unsigned long)a->last_ts,
+        mac, wifi_manager_mac_vendor(a->src_mac));
+}
+
+static void broadcast_text(const char *json)
+{
     httpd_ws_frame_t f = {
         .final   = true,
         .type    = HTTPD_WS_TYPE_TEXT,
@@ -109,16 +143,24 @@ static void broadcast_work(void *arg)
     }
 }
 
-// log_store listener — runs in the appending (honeypot/monitor) task, so it must
-// stay tiny: just copy the raw entry and hand off to the httpd task. All string
-// formatting and socket I/O happen there, off the caller's (small) stack.
-static void on_attack(const attack_log_t *e)
+static void alarm_work(void *arg)
+{
+    alarm_info_t *a = (alarm_info_t *)arg;
+    char inner[256], json[272];
+    ws_format_alarm_json(a, inner, sizeof(inner));
+    free(a);
+    snprintf(json, sizeof(json), "{\"alarm\":%s}", inner);
+    broadcast_text(json);
+}
+
+// alarm listener — runs on the alarm task; copy and hand off to the httpd task.
+static void on_alarm(const alarm_info_t *info)
 {
     if (!s_server) return;
-    ws_msg_t *m = (ws_msg_t *)malloc(sizeof(*m));
-    if (!m) return;
-    m->e = *e;
-    if (httpd_queue_work(s_server, broadcast_work, m) != ESP_OK) free(m);
+    alarm_info_t *a = (alarm_info_t *)malloc(sizeof(*a));
+    if (!a) return;
+    *a = *info;
+    if (httpd_queue_work(s_server, alarm_work, a) != ESP_OK) free(a);
 }
 
 // ── WebSocket endpoint ──────────────────────────────────────────────────────────
@@ -168,6 +210,7 @@ void ws_server_start(void)
     };
     httpd_register_uri_handler(s_server, &ws_uri);
 
-    log_store_set_listener(on_attack);
+    log_store_add_listener(on_attack);
+    alarm_add_listener(on_alarm);
     ESP_LOGI(TAG, "WebSocket push server on ws://<device-ip>:%d/ws", ADMIN_WS_PORT);
 }

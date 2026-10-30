@@ -71,6 +71,12 @@ header{
 }
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,210,160,.6)}50%{box-shadow:0 0 0 5px rgba(0,210,160,0)}}
 .pill-device{color:var(--muted);border-color:rgba(100,116,139,.2);background:rgba(100,116,139,.06)}
+.alarm-banner{display:none;position:relative;z-index:2;margin:0 0 14px;padding:14px 18px;border-radius:10px;
+  background:rgba(127,29,29,.92);border:1px solid var(--red);color:#fff;align-items:center;gap:16px}
+.alarm-banner.on{display:flex}
+.alarm-banner .ab-title{font-weight:700;font-size:1.05rem}
+.alarm-banner .ab-sub{font-size:.8rem;color:#fecaca;margin-top:2px}
+.alarm-banner button{margin-left:auto;padding:10px 22px;border-radius:8px;border:0;background:#fff;color:#7f1d1d;font-weight:700;cursor:pointer}
 .clear-btn{
   background:transparent;border:1px solid rgba(248,113,113,.25);
   color:var(--red);padding:5px 14px;border-radius:6px;cursor:pointer;
@@ -265,6 +271,14 @@ footer{
   &nbsp;&nbsp;
   <button class="clear-btn" onclick="clearLogs()">&#128465; Clear Logs</button>
 </header>
+
+<div class="alarm-banner" id="alarm-banner">
+  <div>
+    <div class="ab-title" id="ab-title">&#9888; Attack in progress</div>
+    <div class="ab-sub" id="ab-sub"></div>
+  </div>
+  <button onclick="ackAlarm()">Acknowledge</button>
+</div>
 
 <main>
 
@@ -655,9 +669,24 @@ async function loadStatus(){
     const up=`${p(Math.floor(s/3600))}:${p(Math.floor(s%3600/60))}:${p(s%60)}`;
     document.getElementById('sys-info').textContent=
       `Device ${up} · Heap ${(d.free_heap/1024).toFixed(0)}KB · WiFi ${d.rssi}dBm`;
+    if(d.alarm)renderAlarm(d.alarm);
   }catch{}
 }
-load();loadStatus();setInterval(load,10000);setInterval(loadStatus,10000);
+// incident alarm: state 0 idle, 1 active (unacknowledged), 2 acknowledged
+function renderAlarm(a){
+  const b=document.getElementById('alarm-banner');
+  if(a.state!==1){b.classList.remove('on');return;}
+  const t=s=>s>1600000000?new Date(s*1000).toLocaleTimeString():'--';
+  document.getElementById('ab-title').innerHTML=`&#9888; Attack in progress &nbsp;#${a.id}`;
+  document.getElementById('ab-sub').textContent=
+    `${TNAME[a.type]||'?'} from ${ip4(a.ip)} ${a.mac} ${a.vendor} | ${a.count} event${a.count===1?'':'s'} | first ${t(a.first)} | last ${t(a.last)}`;
+  b.classList.add('on');
+}
+async function ackAlarm(){
+  try{await fetch('/api/ack',{method:'POST'});document.getElementById('alarm-banner').classList.remove('on');}
+  catch{alert('Acknowledge failed');}
+}
+load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
 
 // live push — WebSocket on the dedicated port; falls back silently to polling
 function applyEntry(e){
@@ -678,7 +707,7 @@ function connectWS(){
   let ws;
   try{ws=new WebSocket(`ws://${location.hostname}:9998/ws`);}
   catch{return void setTimeout(connectWS,5000);}
-  ws.onmessage=ev=>{try{applyEntry(JSON.parse(ev.data));}catch{}};
+  ws.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.alarm)renderAlarm(d.alarm);else applyEntry(d);}catch{}};
   ws.onclose=()=>setTimeout(connectWS,3000);       // auto-reconnect
   ws.onerror=()=>{try{ws.close();}catch{}};
 }

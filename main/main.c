@@ -17,7 +17,11 @@
 #include "arp_monitor.h"
 #include "geoip.h"
 #include "wifi_monitor.h"
+#include "alarm.h"
+#include "ui.h"
 #include "config.h"
+#include <stdlib.h>
+#include <time.h>
 
 static const char *TAG = "MAIN";
 
@@ -123,7 +127,7 @@ void app_main(void)
     ESP_LOGI(TAG, "  ╔══════════════════════════════════════╗");
     ESP_LOGI(TAG, "  ║    ShadowSentry S3  v1.0             ║");
     ESP_LOGI(TAG, "  ║    Edge Deception HoneyPot           ║");
-    ESP_LOGI(TAG, "  ║    ESP32-S3  |  ESP-IDF v5.x         ║");
+    ESP_LOGI(TAG, "  ║    CrowPanel 3.5  |  ESP-IDF v5.x    ║");
     ESP_LOGI(TAG, "  ╚══════════════════════════════════════╝");
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "Free heap at boot: %lu B  (internal: %lu B)",
@@ -136,13 +140,26 @@ void app_main(void)
     ESP_LOGI(TAG, "All-time attack count from flash: %lu",
              (unsigned long)log_store_total_count());
 
+    // ── Local time for the front panel clock and event timestamps ─────────────
+    setenv("TZ", DISPLAY_TZ, 1);
+    tzset();
+
+    // ── Incident alarm + front panel (before Wi-Fi, so the panel shows it) ────
+    alarm_init();
+    ui_start();
+
     // ── WiFi ─────────────────────────────────────────────────────────────────
     ESP_LOGI(TAG, "Connecting to \"%s\"...", WIFI_SSID);
+    char net[48];
+    snprintf(net, sizeof(net), "Connecting to %s...", WIFI_SSID);
+    ui_set_net(net);
     wifi_manager_init();
     wifi_manager_wait_for_ip();     // blocks until DHCP assigns an address
 
     char ip[WIFI_IP_STR_LEN];
     wifi_manager_get_ip_str(ip, sizeof(ip));
+    snprintf(net, sizeof(net), "%s : %d", ip, ADMIN_PORT);
+    ui_set_net(net);
 
     // ── Startup summary ──────────────────────────────────────────────────────
     ESP_LOGI(TAG, "");
