@@ -25,6 +25,63 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ---
 
+## This fork: Elecrow ESP Terminal 3.5" edition
+
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the **Elecrow ESP Terminal 3.5"** (sold as *CrowPanel ESP32 Terminal*, model **ER-DLC35020S**: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera") and adds a local front panel, an audible incident alarm and over-the-air updates. Every upstream trap and monitor is unchanged.
+
+**Hardware (board revision V1.0)**
+
+| | |
+|---|---|
+| Module | ESP32-S3-WROOM-1-N16R8: 16 MB quad flash, 8 MB octal PSRAM |
+| Display | 3.5" ILI9488, 480x320, SPI (SCLK 12, MOSI 13, MISO 14, CS 3, DC 42, backlight 46) |
+| Touch | FT6236 capacitive, I2C 0x38 (SDA 2, SCL 1) |
+| Buzzer | passive, GPIO 45 |
+| USB | CH340C serial bridge; V1.0 has no auto-reset wiring |
+
+Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera, I2S microphone and microSD slot are not used.
+
+**What this fork adds**
+
+- **Front panel** (LVGL 8 + LovyanGFX, using Elecrow's own panel config): status bar with IP, clock and an ARMED / ALARM / ACKED state, event counters, a live attack feed (tap a row for details), and a full-screen incident overlay.
+- **Incident alarm**: the first attack sounds a short alarm on the buzzer, then a reminder beep every 5 minutes until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the web dashboard. After acknowledgement the same source stays quiet; a new source, or the same one after 10 quiet minutes, alarms again. An unacknowledged incident survives a reboot.
+- **Dashboard**: incident banner with an Acknowledge button, `POST /api/ack`, alarm state in `GET /api/status` and over the WebSocket.
+- **OTA updates**: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
+- **Memory**: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
+
+**Build and flash (PlatformIO)**
+
+```bash
+cp main/config.h.example main/config.h   # Wi-Fi, admin password, DISPLAY_TZ, alarm timings
+pio run -e crowpanel35                   # build
+```
+
+First flash over USB: hold **BOOT**, tap **RESET**, then `pio run -e crowpanel35 -t upload`. The board restarts into the new firmware on its own.
+
+After that, update over Wi-Fi with no buttons. Set `upload_port` in the `crowpanel35_ota` env of [`platformio.ini`](platformio.ini) to the board's IP (shown in the panel's status bar), then:
+
+```bash
+pio run -e crowpanel35_ota -t upload
+```
+
+[`tools/ota_upload.py`](tools/ota_upload.py) reads the admin password from the git-ignored `main/config.h`, so it never appears on a command line or in a committed file.
+
+**Pulling upstream updates**
+
+`upstream` points at the original project. To bring in its changes:
+
+```bash
+git remote add upstream https://github.com/Rdx1S/ShadowSentryS3.git   # once, on a fresh clone
+git fetch upstream
+git checkout main
+git merge upstream/main
+git push origin main
+```
+
+The rest of this README is the upstream documentation. Where it says `idf.py`, this fork uses the PlatformIO commands above.
+
+---
+
 ## Features
 
 **Honeypot traps (Core 0)**
