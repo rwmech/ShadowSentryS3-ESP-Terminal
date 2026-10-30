@@ -77,12 +77,41 @@ void buzzer_remind(void)
     xSemaphoreGive(s_lock);
 }
 
+// Caller holds s_lock. A rest (hz 0), or a note LEDC refuses, waits out its
+// slot so the rhythm holds. The timer goes back to BOARD_BUZZER_HZ before the
+// lock is released.
+static void play_melody_locked(const melody_note_t *notes, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        int gap = (i + 1 < n) ? MELODY_GAP_MS : 0;
+        if (notes[i].hz == 0 ||
+            ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, notes[i].hz) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(notes[i].ms + gap));
+            continue;
+        }
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+        vTaskDelay(pdMS_TO_TICKS(notes[i].ms));
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+        if (gap) vTaskDelay(pdMS_TO_TICKS(gap));
+    }
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+}
+
+void buzzer_play_melody(const melody_note_t *notes, size_t n)
+{
+    if (!s_ok || !notes) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    play_melody_locked(notes, n);
+    xSemaphoreGive(s_lock);
+}
+
 void buzzer_boot(void)
 {
     if (!s_ok || !settings_get()->boot_chirp) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    tone(2000, 60, 30);
-    tone(BOARD_BUZZER_HZ, 80, 0);
+    play_melody_locked(MELODY_STARTUP, MELODY_STARTUP_LEN);
     xSemaphoreGive(s_lock);
 }
 

@@ -19,7 +19,7 @@
  *   ACKED  → IDLE    ALARM_QUIET_S without events
  *
  * An unacknowledged incident is persisted to NVS, so a reboot does not clear
- * it: the board chirps once at boot and the reminders carry on.
+ * it: the board gives one reminder beep at boot and the reminders carry on.
  */
 
 #ifndef ALARM_REMIND_S

@@ -37,7 +37,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - an incident alarm on the buzzer, with acknowledgement from the panel or `POST /api/ack`
   - OTA: two 6 MB slots and `POST /api/ota`, with rollback if a new image never reaches Wi-Fi
   - PSRAM-first allocation
-  - a boot chirp and a touch click on the buzzer
+  - a startup melody (the opening of Grieg's "In the Hall of the Mountain King", `main\alarm\melody.c`) and a touch click on the buzzer
   - runtime settings in NVS, edited from the dashboard's Settings tab
   - a microSD JSONL event log with summary metrics, shown on the dashboard's Logs tab
 - The README section "This fork" (`C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\README.md`) is the user-facing summary. Update it in the same change as the code.
@@ -97,18 +97,20 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
 ## Current state (2026-10-30)
 
 - Committed: the port, the front panel, the alarm, OTA, the README, and this file (`C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\CLAUDE.md`; `C:\Users\rwmec\Documents\Development\Honeypot\CLAUDE.md` imports it).
-- Rob's ordered work list, 2026-10-30:
-  - 1. Boot chirp and a click on every screen press. Built, on the board, untested by Rob.
-  - 2. microSD logging, admin password set to the value Rob gave (in the ignored `main\config.h`). On the board: card "ASTC" mounted, 7447 MB, 7446 MB free. Not yet confirmed: a line written to the card.
-  - 3. Configuration settings in the dashboard. Built and reviewed, not on the board: Settings tab, `GET`/`POST /api/settings`, `POST /api/reboot`, `POST /api/buzzer/test`.
-  - 4. Log viewer and summary metrics in the dashboard. Built and reviewed, not on the board: Logs tab, `GET /api/summary`, `GET /api/logs`, `GET /api/logs/file`.
-- Uncommitted on `main`, built and code-reviewed, not yet on the board:
+- Rob's ordered work list, 2026-10-30, all committed on `main` in f3d4f88:
+  - 1. Boot sound and a click on every screen press. Untested by Rob.
+  - 2. microSD logging, admin password set to the value Rob gave (in the ignored `main\config.h`).
+  - 3. Configuration settings in the dashboard: Settings tab, `GET`/`POST /api/settings`, `POST /api/reboot`, `POST /api/buzzer/test`.
+  - 4. Log viewer and summary metrics in the dashboard: Logs tab, `GET /api/summary`, `GET /api/logs`, `GET /api/logs/file`.
+- What f3d4f88 holds:
   - runtime settings in NVS (`main\settings.c`): a live copy (running) and a saved copy (next boot), so a second save before the reboot keeps the first. The saved Wi-Fi falls back to the config.h network after 90 s without an IP.
   - a microSD JSONL event log, one file per day under `/sd/log`, written by its own queue-drained task (`main\storage\sd_log.c`), plus summary metrics in `/sd/stats.bin`, flushed before a reboot or OTA
   - the fork's web routes in `main\admin\api_ext.c`, hooked from `handle_client` in `main\admin\admin_panel.c`; Dashboard / Logs / Settings tabs in `main\index.html`
   - CSRF guard: every POST, upstream's included, needs an `X-ShadowSentry` header. The dashboard and `tools\ota_upload.py` send it. An older `ota_upload.py` will get 403 from this firmware on.
   - edits to the buzzer (`buzzer_test`), alarm, display, Wi-Fi manager, Telegram, main and admin panel
   - `CONFIG_FATFS_LFN_HEAP` (long file names); `tools\ota_upload.py` reads `tools\ota_password` first. After changing the admin password on the Settings page, put it in `tools\ota_password`.
+- Lanes, 2026-10-30: the dev lane worked on `main` (items 1 to 4 and style fixes, f3d4f88). The startup-melody lane worked on `lane/startup-melody` (4749d3c, branched from 5b7c3b5, worktree `C:\Users\rwmec\Documents\Development\Honeypot\lanes\startup-melody`, now removed; the branch is kept).
+- Merged `lane/startup-melody` into `main` with `--no-ff`. The boot sound is now the 12-note opening of "In the Hall of the Mountain King" (`main\alarm\melody.c`, about 1.8 s) instead of the two-tone chirp. `buzzer_boot()` plays it under the buzzer mutex and still honours the boot sound setting (NVS key `boot_chirp`, kept so saved settings survive). `app_main` runs it from a short-lived task (`melody`, 3 KB stack, priority 1) right after `alarm_init()`, so boot does not wait. The dashboard label is now "Boot sound".
 - Open, batched:
   - Commits 5a5f5b0, 631c4d3 and 12533fd are authored `rwmech@gmail.com`, not the address above. Fixing them needs a history rewrite and a force push: Rob's call.
-- Next: Rob's OK for the OTA upload, then on the board: a line on the card, the Settings save and reboot path, the Logs page, the Wi-Fi fallback.
+- Next, on the board: the Settings save and reboot path, the Logs page in a browser, the Wi-Fi fallback, and Rob's ear on the boot sound and click.

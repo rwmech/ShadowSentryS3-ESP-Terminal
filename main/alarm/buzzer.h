@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stddef.h>
+#include "melody.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -7,10 +10,12 @@ extern "C" {
 /*
  * Passive buzzer on BOARD_BUZZER, driven with an LEDC tone.
  *
- * The alarm/remind/boot patterns block for their length (under a second), so
- * call them only from the alarm task, app_main or the admin task (the test
- * from the Settings page). buzzer_click() is a few
- * milliseconds and never waits: if a pattern is playing, the click is skipped.
+ * The alarm/remind patterns block for their length (under a second), so call
+ * them only from the alarm task or the admin task (the test from the Settings
+ * page). buzzer_boot() and buzzer_play_melody() block for the whole tune
+ * (about 1.8 s for the startup melody), so run them from a task of their own.
+ * buzzer_click() is a few milliseconds and never waits: if a pattern or tune
+ * is playing, the click is skipped.
  */
 
 void buzzer_init(void);
@@ -24,11 +29,15 @@ void buzzer_test(void);
 // Unacknowledged-incident reminder: one short beep.
 void buzzer_remind(void);
 
-// Boot: a short rising two-tone chirp.
+// Boot: the startup melody (MELODY_STARTUP), if the boot sound setting is on.
 void buzzer_boot(void);
 
 // Touch feedback: a ~10 ms click. Safe from the UI task.
 void buzzer_click(void);
+
+// Play a note table (see melody.h), then put the tone back to BOARD_BUZZER_HZ.
+// Blocks for the whole tune.
+void buzzer_play_melody(const melody_note_t *notes, size_t n);
 
 #ifdef __cplusplus
 }

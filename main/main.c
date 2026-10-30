@@ -112,6 +112,17 @@ static const char *TAG = "MAIN";
              (unsigned long)esp_get_free_heap_size());                  \
 } while(0)
 
+// Boot sound (about 1.8 s, skipped if the boot sound setting is off): plays
+// once, then the task deletes itself, so app_main never waits for it.
+static void startup_melody_task(void *arg)
+{
+    (void)arg;
+    buzzer_boot();
+    ESP_LOGI(TAG, "Startup melody done, stack high-water %u B",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    vTaskDelete(NULL);
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 void app_main(void)
@@ -149,7 +160,9 @@ void app_main(void)
 
     // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
     alarm_init();                   // also brings up the buzzer
-    buzzer_boot();
+    if (xTaskCreate(startup_melody_task, "melody", 3072, NULL, 1, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "No heap for the startup melody task, skipping it");
+    }
     sd_log_init();
     ui_start();
 
