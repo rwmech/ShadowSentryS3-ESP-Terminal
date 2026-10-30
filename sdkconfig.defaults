@@ -11,6 +11,14 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# Internal RAM is the scarce pool (Wi-Fi, wolfSSH, task stacks, panel DMA):
+# the big buffers are heap-allocated from PSRAM in code; push Wi-Fi/lwIP and
+# mbedTLS (Telegram/GeoIP HTTPS) allocations out to PSRAM.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# OTA via POST /api/ota: a new image must reach Wi-Fi and mark itself valid,
+# otherwise the bootloader rolls back to the previous slot on the next reset.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_MBEDTLS_SSL_PROTO_TLS1=n
 CONFIG_MBEDTLS_SSL_PROTO_TLS1_1=n

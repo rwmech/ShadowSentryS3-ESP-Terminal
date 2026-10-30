@@ -14,8 +14,12 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "mbedtls/base64.h"
+#include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 
 static const char *TAG = "ADMIN";
@@ -163,7 +167,12 @@ static void serve_attacks_json(int sock)
     // which alone overflows the admin task stack. Safe because the accept loop is
     // single-threaded — only one client is served at a time on Core 1 (same
     // reasoning as the static json[] buffer below).
-    static attack_log_t entries[ADMIN_MAX_LOG_ENTRIES];
+    // PSRAM, allocated once (PlatformIO can't link EXT_RAM_BSS_ATTR).
+    static attack_log_t *entries;
+    static char         *json;
+    if (!entries) entries = heap_caps_malloc(ADMIN_MAX_LOG_ENTRIES * sizeof(*entries), MALLOC_CAP_SPIRAM);
+    if (!json)    json    = heap_caps_malloc(ADMIN_JSON_BUF_SIZE, MALLOC_CAP_SPIRAM);
+    if (!entries || !json) { send_404(sock); return; }
     static uint32_t     seen_ips[ADMIN_MAX_LOG_ENTRIES];
     int      n      = log_store_get_recent(entries, ADMIN_MAX_LOG_ENTRIES);
     uint32_t total  = log_store_total_count();
@@ -186,9 +195,8 @@ static void serve_attacks_json(int sock)
 
     // Static buffer — safe because the accept loop is single-threaded
     // (only one client is processed at a time on Core 1).
-    static char json[ADMIN_JSON_BUF_SIZE];
     int pos = 0;
-    int remaining = (int)sizeof(json);
+    int remaining = ADMIN_JSON_BUF_SIZE;
 
 #define JPRINTF(...)  do { \
     int _n = snprintf(json + pos, (size_t)remaining, __VA_ARGS__); \
@@ -255,6 +263,89 @@ static void serve_attacks_json(int sock)
 
 // ── Request dispatch ──────────────────────────────────────────────────────────
 
+// ── OTA firmware update ───────────────────────────────────────────────────────
+//
+// POST /api/ota with the raw app image (.pio/build/<env>/firmware.bin) as the
+// body. Streams into the inactive OTA slot, validates the image, switches the
+// boot slot and restarts. The new image must mark itself valid once Wi-Fi is
+// up (main.c), or the bootloader rolls back on the next reset.
+
+#define OTA_CHUNK 4096
+
+static void send_text(int sock, const char *status, const char *msg)
+{
+    char hdr[160];
+    int n = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %s\r\nContent-Type: text/plain\r\n"
+        "Content-Length: %d\r\nConnection: close\r\n\r\n",
+        status, (int)strlen(msg));
+    send(sock, hdr, n, 0);
+    send(sock, msg, strlen(msg), 0);
+}
+
+static long header_content_length(const char *req)
+{
+    for (const char *p = req; (p = strchr(p, '\n')) != NULL; ) {
+        p++;
+        if (strncasecmp(p, "Content-Length:", 15) == 0) return strtol(p + 15, NULL, 10);
+        if (*p == '\r' || *p == '\n') break;            // end of headers
+    }
+    return -1;
+}
+
+static void handle_ota(int sock, const char *req, int req_len)
+{
+    long total = header_content_length(req);
+    const char *body = strstr(req, "\r\n\r\n");
+    const esp_partition_t *slot = esp_ota_get_next_update_partition(NULL);
+    if (total <= 0 || !body || !slot || total > (long)slot->size) {
+        send_text(sock, "400 Bad Request", "need Content-Length and an image that fits the OTA slot\n");
+        return;
+    }
+    body += 4;
+
+    esp_ota_handle_t ota;
+    if (esp_ota_begin(slot, (size_t)total, &ota) != ESP_OK) {
+        send_text(sock, "500 Internal Server Error", "esp_ota_begin failed\n");
+        return;
+    }
+    ESP_LOGW(TAG, "OTA: receiving %ld bytes into %s", total, slot->label);
+
+    // Bytes of the body that arrived with the headers.
+    long got = req_len - (long)(body - req);
+    esp_err_t err = got > 0 ? esp_ota_write(ota, body, (size_t)got) : ESP_OK;
+
+    struct timeval tv = {.tv_sec = 15, .tv_usec = 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    static char *chunk;   // PSRAM, allocated once; single-threaded accept loop
+    if (!chunk) chunk = heap_caps_malloc(OTA_CHUNK, MALLOC_CAP_SPIRAM);
+    if (!chunk) err = ESP_ERR_NO_MEM;
+    while (err == ESP_OK && got < total) {
+        int n = recv(sock, chunk, OTA_CHUNK, 0);
+        if (n <= 0) { err = ESP_FAIL; break; }
+        err = esp_ota_write(ota, chunk, (size_t)n);
+        got += n;
+    }
+
+    if (err != ESP_OK) {
+        esp_ota_abort(ota);
+        ESP_LOGE(TAG, "OTA: transfer failed after %ld/%ld bytes", got, total);
+        send_text(sock, "500 Internal Server Error", "transfer failed\n");
+        return;
+    }
+    if (esp_ota_end(ota) != ESP_OK || esp_ota_set_boot_partition(slot) != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: image rejected");
+        send_text(sock, "500 Internal Server Error", "image failed validation\n");
+        return;
+    }
+    ESP_LOGW(TAG, "OTA: %ld bytes written to %s, restarting", total, slot->label);
+    send_text(sock, "200 OK", "ok, restarting\n");
+    shutdown(sock, SHUT_RDWR);
+    close(sock);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
 static void handle_client(int sock)
 {
     char buf[1024];
@@ -275,6 +366,8 @@ static void handle_client(int sock)
         serve_attacks_json(sock);
     } else if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/status")) {
         serve_status_json(sock);
+    } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ota")) {
+        handle_ota(sock, buf, len);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
         alarm_ack();
         ESP_LOGI(TAG, "Incident acknowledged via admin panel");

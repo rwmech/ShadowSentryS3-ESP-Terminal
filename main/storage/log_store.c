@@ -3,6 +3,7 @@
 #include "config.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -11,7 +12,9 @@
 static const char *TAG = "LOGSTORE";
 
 // ── In-RAM ring buffer ────────────────────────────────────────────────────────
-static attack_log_t  s_ring[LOG_RING_SIZE];
+// Allocated from PSRAM in log_store_init(): ~48 KB that internal RAM (Wi-Fi,
+// task stacks, panel DMA) needs more. PlatformIO can't link EXT_RAM_BSS_ATTR.
+static attack_log_t *s_ring;
 static int           s_head  = 0;   // next write position
 static int           s_count = 0;   // entries currently in ring (≤ LOG_RING_SIZE)
 static uint32_t      s_total = 0;   // all-time counter (survives clear via SPIFFS)
@@ -61,6 +64,10 @@ static void rewrite_ring(void)
 
 void log_store_init(void)
 {
+    s_ring = heap_caps_calloc(LOG_RING_SIZE, sizeof(*s_ring), MALLOC_CAP_SPIRAM);
+    if (!s_ring) s_ring = calloc(LOG_RING_SIZE, sizeof(*s_ring));
+    configASSERT(s_ring);
+
     s_mutex = xSemaphoreCreateMutex();
 
     esp_vfs_spiffs_conf_t conf = {
@@ -173,7 +180,7 @@ uint32_t log_store_total_count(void)
 void log_store_clear(void)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    memset(s_ring, 0, sizeof(s_ring));
+    memset(s_ring, 0, LOG_RING_SIZE * sizeof(*s_ring));
     s_head  = 0;
     s_count = 0;
     // s_total is intentionally kept — it tracks history even after clear

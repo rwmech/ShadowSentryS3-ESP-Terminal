@@ -13,6 +13,7 @@
  *   GET  /api/status    → 200  application/json  device health (uptime_s/free_heap/rssi)
  *   POST /api/clear     → 204  wipe flash log
  *   POST /api/ack       → 204  acknowledge the open incident (silences the buzzer)
+ *   POST /api/ota       → 200  raw firmware.bin body; flash inactive slot, reboot
  *   GET  /api/status also carries "alarm": {...} (see ws_format_alarm_json)
  *   *                   → 401  if credentials missing or wrong
  *

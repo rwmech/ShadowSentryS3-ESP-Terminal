@@ -87,6 +87,9 @@ idf_component_register(
 
         # Front panel and buzzer (LVGL + LovyanGFX come from idf_component.yml)
         driver              # LEDC (buzzer), I2C (touch), GPIO (backlight)
+
+        # OTA
+        app_update          # esp_ota_* — POST /api/ota, rollback confirmation
 )
 
 # wolfSSL ships include/config.h, and PlatformIO's include order lets it shadow

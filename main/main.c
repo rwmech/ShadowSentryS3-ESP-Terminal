@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
 
 #include "wifi_manager.h"
 #include "log_store.h"
@@ -156,6 +157,10 @@ void app_main(void)
     wifi_manager_init();
     wifi_manager_wait_for_ip();     // blocks until DHCP assigns an address
 
+    // Reaching the network proves this image can take the next OTA: confirm it,
+    // so the bootloader won't roll back. A no-op on a serial-flashed image.
+    esp_ota_mark_app_valid_cancel_rollback();
+
     char ip[WIFI_IP_STR_LEN];
     wifi_manager_get_ip_str(ip, sizeof(ip));
     snprintf(net, sizeof(net), "%s : %d", ip, ADMIN_PORT);
@@ -205,8 +210,9 @@ void app_main(void)
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();
 
-    ESP_LOGI(TAG, "All tasks spawned — free heap: %lu B",
-             (unsigned long)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "All tasks spawned — free heap: %lu B  (internal: %lu B)",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     // app_main() may return — FreeRTOS scheduler keeps the tasks running.
 }

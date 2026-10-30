@@ -13,3 +13,4 @@ managed_components/
 *.log
 .pio/
 sdkconfig.crowpanel35
+sdkconfig.crowpanel35_ota

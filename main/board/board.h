@@ -21,7 +21,10 @@
 #define BOARD_LCD_BL        46      // S8050 low-side switch, active high
 #define BOARD_LCD_HRES      480     // landscape, rotation 3 (Elecrow default)
 #define BOARD_LCD_VRES      320
-#define BOARD_LCD_SPI_HZ    60000000  // Elecrow example freq_write
+// Elecrow example freq_write; confirmed on the bench (self-test red fill shows).
+// Reads do NOT work: MISO reaches the panel through a 1N4148 and the ID reads
+// 0x000000, so never gate anything on panel readback.
+#define BOARD_LCD_SPI_HZ    60000000
 
 // ── microSD (shares the LCD SPI bus) ──────────────────────────────────────────
 #define BOARD_SD_CS         10
