@@ -27,7 +27,7 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ## This fork: Elecrow ESP Terminal 3.5" edition
 
-This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, a microSD event log with summary metrics, runtime settings and over-the-air updates. Every upstream trap and monitor is unchanged.
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Every upstream trap and monitor is unchanged.
 
 ### Hardware (board revision V1.0)
 
@@ -46,19 +46,29 @@ Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S m
 
 - Front panel (LVGL 8 + LovyanGFX, using Elecrow's own panel config), laid out for status and control rather than a scrolling log, in a bright palette (white and light grey text, saturated accents, slate cards) because the ILI9488 has no gamma tuning:
   - status bar: name, IP : port, clock, and an ARMED / ALARM / ACKED pill
-  - incident card: when armed, "No active incident" and the last incident's summary; during an incident, the source IP in large type, attack type, event count, MAC vendor, MAC, first and last seen, how long it has been open, and one hold button: ACKNOWLEDGE while unacknowledged, RE-ARM (hold 1.5 s) once acknowledged
+  - incident card: when armed, "No active incident" and the last incident's summary; during an incident, the source IP in large type, attack type, event count, MAC vendor, MAC, first and last seen, how long it has been open, and one hold button: ACKNOWLEDGE while unacknowledged, RE-ARM (hold 1.5 s) once acknowledged. Beside it (and on the strobing overlay) IGNORE SOURCE opens an "are you sure" dialog with the IP, vendor and MAC; Ignore puts the source on the ignore list and, if the open incident is from it, acknowledges and re-arms it so the siren and strobe stop. The panel can only add to the list; removing is done on the dashboard
   - key figures: all-time events, distinct sources, microSD free space (or "no card"), Wi-Fi RSSI
   - the last 3 events, one line each (tap for details)
   - while an incident is unacknowledged, a full-screen overlay strobes red and black every 500 ms with the backlight forced to 100 %, the hold-to-acknowledge button staying white and readable; acknowledging it restores the brightness setting
   - backlight brightness is a setting
 - Sounds: at every boot, the opening of Grieg's "In the Hall of the Mountain King" (public domain, at march tempo: 260 ms per note, about 3.6 s, played from its own task so boot does not wait), and a click on every touch of the screen. The boot sound and the click can each be switched off in Settings.
 - Incident alarm: the first attack sounds a 3.2 s siren on the buzzer (a sweep from 2300 to 3100 Hz and back, across the piezo's 2.7 kHz resonance, four times), then the same siren every minute until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the web dashboard. Acknowledging cuts a siren short. After acknowledgement the same source stays quiet; a new source, or the same one after 10 quiet minutes, alarms again. Re-arm (hold RE-ARM on the panel, or Re-arm on the dashboard) ends an acknowledged incident at once, so the next event alarms again; it deletes nothing, the logs, metrics and the panel's last-incident summary all stay. An unacknowledged incident survives a reboot. The reminder interval (default 60 s), quiet time and alarm sound are settings.
+- Recon detection (`main/detect/detect.c`), so a scan raises an alert before any trap sees a login:
+  - an lwIP IPv4 input hook sees every inbound TCP SYN (plus FIN, NULL and Xmas probes) and UDP datagram to the board, open port or not. It only queues (source, port, protocol); the gateway and replies to the board's own DNS, DHCP, NTP and mDNS are skipped.
+  - Port scan: 5 distinct ports from one source within 10 s (both settings) raise one "Port scan" event with the port count, lowest to highest port, protocol and sample ports. Nothing more while it continues; after 60 s of quiet a summary follows ("Scan ended: N ports total", with the trap ports it found).
+  - Probe: a SYN to a trap port (21, 22, 23, 80, 554) raises one "Probe" per source, port and minute. It is held 1.5 s, so a scan that starts meanwhile folds it in; none while that source is scanning.
+  - ARP sweep: a wrapper on the station interface's input sees ARP who-has requests (every frame is passed on). One MAC asking for 10 distinct hosts within 10 s (settings) raises one "ARP sweep" event with the MAC, vendor, count and range, then a summary after 60 s of quiet. The gateway and the board itself are excluded.
+  - The three are new attack types (appended, so the flash ring stays readable) shown everywhere: panel, dashboard type list, filters and charts, microSD `tname`, Telegram.
+  - The Logs page shows the detector's counters since boot (scans, probes, sweeps, packets queued and dropped, admin SYNs hidden, ARP tap on or off).
+- Alert on: one switch per attack type on the Settings page decides whether that type opens an incident (siren, panel, Telegram, Discord). Every event is logged either way (flash ring, microSD, dashboard).
+- Ignore list: up to 32 entries, each an IP and/or a MAC (DHCP moves IPs), with a note and the time added, in NVS. An entry matches on either. Ignored sources are still logged, flagged "ignored" (`"ignored":true` on the microSD line, a chip in the dashboard tables), and never open an incident or alert. View, add and remove (with a confirm) on the Settings page; the panel can add.
+- Hidden admin ports: with an admin allowlist set (up to 8 IPv4s, Settings), the IPv4 hook drops SYNs to 9999 and 9998 from anyone else, so a scan shows them filtered rather than giving the honeypot away. Those dropped SYNs still count toward port scan detection. An empty list means open, as before. The dashboard refuses a list that does not include the address you are saving it from. Locked out anyway (a new DHCP lease, say)? Open the USB serial console (115200, `pio device monitor -e crowpanel35`) and type `admin-allow clear` then Enter: the list is emptied in NVS and the ports open at once. `admin-allow` alone prints the list.
 - microSD event log: every attack, alarm transition and boot is appended as one JSON line to `/sd/log/YYYY-MM-DD.jsonl` (device local date; `nosync.jsonl` before the clock is set). A writer task drains a queue, so the traps never touch FAT. The card must be FAT32 or exFAT; the firmware never formats it.
 - Summary metrics, kept from every attack and saved to `/sd/stats.bin` once a minute (and before a reboot or OTA): total and per-type counts, 24 hourly and 30 daily buckets, the top 64 sources and top 32 credential pairs. Top-N counts are upper bounds for entries that were evicted and came back.
 - Dashboard tabs: Dashboard (upstream, plus the incident banner: Acknowledge while unacknowledged, Re-arm once acknowledged), Logs and Settings.
   - Heartbeat: the shield in the header gives one soft pulse (a slight glow and scale, under 1 s) each time the 5 s status poll gets an answer. After two missed polls in a row it stops and fades to grey until the device answers again. The ACTIVE pill is unchanged.
   - Logs: summary cards, 24 h, daily and by-type charts, top sources and top credentials, card status, and a day picker that loads a day file (the last 256 KB, or the whole file) into a filterable table, newest first, with a download link.
-  - Settings: admin password, Wi-Fi, Telegram, timezone (POSIX TZ, with presets), alarm timings, brightness and the three sounds, plus Save, Reboot and Test buzzer. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
+  - Settings: admin password, Wi-Fi, Telegram, timezone (POSIX TZ, with presets), alarm timings, brightness and the three sounds, the Alert on switches, the scan and sweep thresholds, the admin allowlist, plus Save, Reboot and Test buzzer, and below them the ignore list. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
 - Memory: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
 
@@ -68,9 +78,11 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 
 | Method | Path | |
 |---|---|---|
-| `GET` | `/api/settings` | settings; secrets only as `*_set` flags |
+| `GET` | `/api/settings` | settings; secrets only as `*_set` flags; also `alert_mask` (bit per type), `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow` (array) and `client_ip` |
 | `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone; `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
 | `POST` | `/api/reboot` | 204, restart after 500 ms |
+| `GET` | `/api/ignore` | `{"max":32,"entries":[{"index","ip","mac","vendor","note","ts"}]}` |
+| `POST` | `/api/ignore` | `{"action":"add","ip":"..","mac":"..","note":".."}` (one of ip, mac) or `{"action":"remove","index":N,"ip":"..","mac":".."}` (ip and mac as listed; 409 if the list changed); answers with the list |
 | `POST` | `/api/buzzer/test` | the alarm siren, even with the sound off; 204 at once, the siren plays after |
 | `GET` | `/api/summary` | card status and summary metrics |
 | `GET` | `/api/logs` | day files, newest first |

@@ -20,12 +20,17 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_TZ
 #define DISPLAY_TZ "UTC0"
 #endif
+// Detection defaults (main\detect\detect.c reads them live).
+#define DET_SCAN_PORTS     5
+#define DET_SCAN_WINDOW_S  10
+#define DET_ARP_TARGETS    10
+#define DET_ARP_WINDOW_S   10
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
 static SemaphoreHandle_t s_mutex;
 static bool              s_wifi_overridden = false;
-static void            (*s_on_change[3])(void);
+static void            (*s_on_change[4])(void);
 static int               s_on_change_count = 0;
 
 static void defaults(settings_t *s)
@@ -43,6 +48,14 @@ static void defaults(settings_t *s)
     s->alarm_sound    = true;
     s->boot_chirp     = true;
     s->touch_click    = true;
+    // Detection: every type alerts (bits past the known types stay set, so a
+    // type added later alerts by default), thresholds, admin ports open.
+    s->alert_mask     = 0xFFFFFFFFu;
+    s->scan_ports     = DET_SCAN_PORTS;
+    s->scan_window_s  = DET_SCAN_WINDOW_S;
+    s->arp_targets    = DET_ARP_TARGETS;
+    s->arp_window_s   = DET_ARP_WINDOW_S;
+    s->admin_allow_n  = 0;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
@@ -71,6 +84,18 @@ static void get_bool(nvs_handle_t h, const char *key, bool *dst)
     if (nvs_get_u8(h, key, &v) == ESP_OK) *dst = v != 0;
 }
 
+// The admin allowlist: a blob of 0..SETTINGS_ADMIN_ALLOW_MAX IPv4s. Anything
+// else in NVS (wrong size, a zero address) is ignored: admin ports stay open.
+static void get_allow(nvs_handle_t h, settings_t *s)
+{
+    uint32_t ips[SETTINGS_ADMIN_ALLOW_MAX];
+    size_t n = sizeof(ips);
+    if (nvs_get_blob(h, "admin_allow", ips, &n) != ESP_OK || n % 4) return;
+    for (size_t i = 0; i < n / 4; i++) if (!ips[i]) return;
+    memcpy(s->admin_allow, ips, n);
+    s->admin_allow_n = (uint8_t)(n / 4);
+}
+
 void settings_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
@@ -92,6 +117,12 @@ void settings_init(void)
         get_bool(h, "alarm_snd", &s_live.alarm_sound);
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
+        get_u32(h, "alert_mask", &s_live.alert_mask);
+        get_u32(h, "scan_ports", &s_live.scan_ports);
+        get_u32(h, "scan_win_s", &s_live.scan_window_s);
+        get_u32(h, "arp_targets", &s_live.arp_targets);
+        get_u32(h, "arp_win_s", &s_live.arp_window_s);
+        get_allow(h, &s_live);
         nvs_close(h);
     }
     s_saved = s_live;
@@ -131,7 +162,7 @@ bool settings_reboot_pending(void)
 
 void settings_on_change(void (*cb)(void))
 {
-    if (cb && s_on_change_count < 3) s_on_change[s_on_change_count++] = cb;
+    if (cb && s_on_change_count < 4) s_on_change[s_on_change_count++] = cb;
 }
 
 bool settings_wifi_overridden(void) { return s_wifi_overridden; }
@@ -199,6 +230,21 @@ static const char *validate(const settings_t *s)
                                        return "quiet time must be 60-86400 s";
     if (s->brightness < 5 || s->brightness > 100)
                                        return "brightness must be 5-100 %";
+    if (s->scan_ports < 3 || s->scan_ports > 32)
+                                       return "port scan threshold must be 3-32 ports";
+    if (s->scan_window_s < 2 || s->scan_window_s > 300)
+                                       return "port scan window must be 2-300 s";
+    if (s->arp_targets < 3 || s->arp_targets > 32)
+                                       return "ARP sweep threshold must be 3-32 hosts";
+    if (s->arp_window_s < 2 || s->arp_window_s > 300)
+                                       return "ARP sweep window must be 2-300 s";
+    if (s->admin_allow_n > SETTINGS_ADMIN_ALLOW_MAX)
+                                       return "admin allowlist holds at most 8 addresses";
+    for (int i = 0; i < s->admin_allow_n; i++) {
+        uint8_t b0 = (uint8_t)(s->admin_allow[i] & 0xff);            // network order
+        if (!s->admin_allow[i] || s->admin_allow[i] == 0xFFFFFFFFu || b0 == 127 || b0 >= 224)
+                                       return "admin allowlist: unicast IPv4 addresses only";
+    }
     return NULL;
 }
 
@@ -222,6 +268,13 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "alarm_snd",  s->alarm_sound));
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
+    SET(nvs_set_u32(h, "alert_mask", s->alert_mask));
+    SET(nvs_set_u32(h, "scan_ports", s->scan_ports));
+    SET(nvs_set_u32(h, "scan_win_s", s->scan_window_s));
+    SET(nvs_set_u32(h, "arp_targets", s->arp_targets));
+    SET(nvs_set_u32(h, "arp_win_s",  s->arp_window_s));
+    if (s->admin_allow_n) SET(nvs_set_blob(h, "admin_allow", s->admin_allow, s->admin_allow_n * 4u));
+    else nvs_erase_key(h, "admin_allow");
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.
@@ -260,5 +313,27 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     tzset();
     for (int i = 0; i < s_on_change_count; i++) s_on_change[i]();
     ESP_LOGI(TAG, "Saved%s", reboot ? " (reboot to apply Wi-Fi/Telegram)" : "");
+    return ESP_OK;
+}
+
+esp_err_t settings_clear_admin_allow(void)
+{
+    nvs_handle_t h;
+    esp_err_t r = nvs_open(NS, NVS_READWRITE, &h);
+    if (r != ESP_OK) return r;
+    r = nvs_erase_key(h, "admin_allow");
+    if (r == ESP_ERR_NVS_NOT_FOUND) r = ESP_OK;
+    if (r == ESP_OK) r = nvs_commit(h);
+    nvs_close(h);
+    if (r != ESP_OK) return r;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_live.admin_allow_n  = 0;
+    s_saved.admin_allow_n = 0;
+    memset(s_live.admin_allow, 0, sizeof(s_live.admin_allow));
+    memset(s_saved.admin_allow, 0, sizeof(s_saved.admin_allow));
+    xSemaphoreGive(s_mutex);
+    for (int i = 0; i < s_on_change_count; i++) s_on_change[i]();
+    ESP_LOGW(TAG, "Admin allowlist cleared: admin ports open to all");
     return ESP_OK;
 }

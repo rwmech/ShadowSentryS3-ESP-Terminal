@@ -55,6 +55,9 @@ void sd_log_flush(void);
 #define STATS_SRC_MAX   64
 #define STATS_CRED_MAX  32
 #define STATS_DAYS      30
+// by_type[] has room for types added later without a stats.bin format change;
+// sd_log.c asserts ATTACK_TYPE_COUNT fits. Only the first ATTACK_TYPE_COUNT are used.
+#define STATS_TYPE_SLOTS 16
 
 typedef struct {
     uint32_t ip;               // network order
@@ -74,7 +77,7 @@ typedef struct {
 typedef struct {
     uint32_t magic, version;
     uint32_t total;
-    uint32_t by_type[8];
+    uint32_t by_type[STATS_TYPE_SLOTS];   // index attack_type_t (v1 had 8)
     uint32_t first_ts, last_ts;
     uint32_t hour_key[24];     // unix hour held in each slot
     uint32_t hour_count[24];

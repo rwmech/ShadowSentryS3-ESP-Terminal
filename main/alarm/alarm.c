@@ -2,6 +2,7 @@
 #include "alarm.h"
 #include "buzzer.h"
 #include "log_store.h"
+#include "ignore.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -68,10 +69,18 @@ void alarm_clear(void)
     xQueueSend(s_queue, &m, 0);
 }
 
+bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6])
+{
+    if (type < 32 && !(settings_get()->alert_mask & (1u << type))) return false;
+    return !ignore_match(src_ip, src_mac);
+}
+
 // log_store listener: runs on the appending honeypot task (as small as 3 KB of
-// stack), so it only copies five fields into the queue.
+// stack), so it only copies five fields into the queue. Types switched off and
+// ignored sources never reach the queue: logged, no incident.
 static void on_event(const attack_log_t *e)
 {
+    if (!alarm_should_alert((uint8_t)e->type, e->src_ip, e->src_mac)) return;
     alarm_msg_t m = { .kind = MSG_EVENT, .ip = e->src_ip,
                       .type = (uint8_t)e->type, .ts = e->timestamp };
     memcpy(m.mac, e->src_mac, sizeof(m.mac));

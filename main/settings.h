@@ -23,6 +23,7 @@ extern "C" {
  */
 
 #define SETTINGS_WIFI_FALLBACK_S   90
+#define SETTINGS_ADMIN_ALLOW_MAX   8
 
 typedef struct {
     char     admin_password[64];
@@ -37,6 +38,14 @@ typedef struct {
     bool     alarm_sound;           // incident alarm + reminders on the buzzer
     bool     boot_chirp;            // chirp at power-up / reboot
     bool     touch_click;           // click on every screen press
+    // Detection and alerting (applied immediately)
+    uint32_t alert_mask;            // bit n set: attack_type_t n opens an incident; logging is always on
+    uint32_t scan_ports;            // distinct ports from one source that make a port scan, 3..32
+    uint32_t scan_window_s;         // ... within this many seconds, 2..300
+    uint32_t arp_targets;           // distinct who-has targets from one MAC that make an ARP sweep, 3..32
+    uint32_t arp_window_s;          // ... within this many seconds, 2..300
+    uint32_t admin_allow[SETTINGS_ADMIN_ALLOW_MAX];  // IPv4, network order; SYNs to the admin
+    uint8_t  admin_allow_n;         // ports from anyone else are dropped. 0 = open to all
 } settings_t;
 
 // Load defaults, then NVS overrides. Call once, after nvs_flash_init().
@@ -71,6 +80,10 @@ bool settings_telegram_enabled(void);
 
 // Register a callback run after every successful save (e.g. apply brightness).
 void settings_on_change(void (*cb)(void));
+
+// Empty the admin allowlist (admin ports open to all again), saved and live.
+// The USB serial console's recovery command; see detect/detect.h.
+esp_err_t settings_clear_admin_allow(void);
 
 #ifdef __cplusplus
 }

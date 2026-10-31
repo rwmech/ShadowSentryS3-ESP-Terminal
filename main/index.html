@@ -178,6 +178,12 @@ main{flex:1;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
 .fb-arp   {background:rgba(244,114,182,.12);color:#f472b6;  border:1px solid rgba(244,114,182,.28)}
 .fb-wifi  {background:rgba(251,146,60,.12); color:#fb923c;  border:1px solid rgba(251,146,60,.28)}
 .fb-shell {background:rgba(163,230,53,.12); color:#a3e635;  border:1px solid rgba(163,230,53,.28)}
+.fb-scan  {background:rgba(34,211,238,.12); color:#22d3ee;  border:1px solid rgba(34,211,238,.28)}
+.fb-probe {background:rgba(148,163,184,.12);color:#94a3b8;  border:1px solid rgba(148,163,184,.28)}
+.fb-sweep {background:rgba(232,121,249,.12);color:#e879f9;  border:1px solid rgba(232,121,249,.28)}
+.ign-chip{font-size:.6rem;padding:1px 6px;margin-left:6px;border-radius:8px;color:var(--muted);border:1px dashed var(--muted)}
+.alerts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px 18px}
+.alerts label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:.75rem}
 .feed-empty{color:var(--muted);font-size:.8rem;text-align:center;padding:24px 0}
 
 /* ── Table ── */
@@ -396,6 +402,9 @@ footer{
           <circle id="arc-arp"    cx="70" cy="70" r="54" fill="none" stroke="#f472b6" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-wifi"   cx="70" cy="70" r="54" fill="none" stroke="#fb923c" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-shell"  cx="70" cy="70" r="54" fill="none" stroke="#a3e635" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-scan"   cx="70" cy="70" r="54" fill="none" stroke="#22d3ee" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-probe"  cx="70" cy="70" r="54" fill="none" stroke="#94a3b8" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-sweep"  cx="70" cy="70" r="54" fill="none" stroke="#e879f9" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
         </svg>
         <div class="donut-center">
           <div class="dc-val" id="dc-total">0</div>
@@ -450,6 +459,24 @@ footer{
           <span class="lname">Wi-Fi deauth</span>
           <div class="lbar"><div class="lbar-fill" id="lb-wifi" style="background:#fb923c;width:0%"></div></div>
           <span class="lval" id="lv-wifi">0</span>
+        </div>
+        <div class="legend-item" data-ftype="8" onclick="setFilter(8)">
+          <div class="legend-dot" style="background:#22d3ee"></div>
+          <span class="lname">Port scan</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-scan" style="background:#22d3ee;width:0%"></div></div>
+          <span class="lval" id="lv-scan">0</span>
+        </div>
+        <div class="legend-item" data-ftype="9" onclick="setFilter(9)">
+          <div class="legend-dot" style="background:#94a3b8"></div>
+          <span class="lname">Probe</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-probe" style="background:#94a3b8;width:0%"></div></div>
+          <span class="lval" id="lv-probe">0</span>
+        </div>
+        <div class="legend-item" data-ftype="10" onclick="setFilter(10)">
+          <div class="legend-dot" style="background:#e879f9"></div>
+          <span class="lname">ARP sweep</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-sweep" style="background:#e879f9;width:0%"></div></div>
+          <span class="lval" id="lv-sweep">0</span>
         </div>
       </div>
     </div>
@@ -556,12 +583,39 @@ footer{
       <label for="st-snd">Alarm sound</label><input type="checkbox" id="st-snd">
       <label for="st-chirp">Boot sound</label><input type="checkbox" id="st-chirp">
       <label for="st-click">Touch click</label><input type="checkbox" id="st-click">
+      <h4>Alert on</h4>
+      <div class="alerts" id="st-alerts"></div>
+      <div class="hint" style="grid-column:1/-1">Ticked types open an incident (siren, panel, Telegram, Discord). Every event is logged either way.</div>
+      <h4>Recon detection</h4>
+      <label for="st-sp">Port scan: distinct ports</label><input type="number" id="st-sp" min="3" max="32" step="1">
+      <label for="st-sw">Port scan: within (s)</label><input type="number" id="st-sw" min="2" max="300" step="1">
+      <label for="st-at">ARP sweep: distinct hosts</label><input type="number" id="st-at" min="3" max="32" step="1">
+      <label for="st-aw">ARP sweep: within (s)</label><input type="number" id="st-aw" min="2" max="300" step="1">
+      <div class="hint">One event per scan or sweep, a summary after 60 s of quiet.</div>
+      <h4>Admin access</h4>
+      <label for="st-allow">Admin allowlist</label><input id="st-allow" maxlength="140" placeholder="empty = open to all">
+      <div class="hint" id="st-allow-hint"></div>
       <div></div>
       <div class="ctl" style="margin-top:10px">
         <button class="btn" type="submit">Save</button>
         <button class="btn" type="button" onclick="testBuzzer()">Test buzzer</button>
         <button class="btn btn-red" type="button" onclick="rebootDev()">Reboot</button>
       </div>
+    </form>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-title">Ignore list</div>
+    <div class="msg" id="ig-msg"></div>
+    <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">Ignored sources are still logged (flagged "ignored") but never open an incident or send an alert. The panel's IGNORE SOURCE adds here; only this page removes.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>IP</th><th>MAC / Vendor</th><th>Note</th><th>Added</th><th></th></tr></thead>
+      <tbody id="ig-body"></tbody>
+    </table></div>
+    <form class="ctl" style="margin-top:10px" onsubmit="addIgnore(event)" autocomplete="off">
+      <input id="ig-ip" maxlength="15" placeholder="IP, e.g. 192.168.0.50">
+      <input id="ig-mac" maxlength="17" placeholder="MAC, optional">
+      <input id="ig-note" maxlength="39" placeholder="Note">
+      <button class="btn" type="submit">Add</button>
     </form>
   </div>
 </main>
@@ -603,12 +657,17 @@ function fmt(ts){
   const d=new Date(ts*1000),p=n=>String(n).padStart(2,'0');
   return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-const BADGE=['<span class="feed-badge fb-rtsp">RTSP</span>','<span class="feed-badge fb-http">HTTP</span>','<span class="feed-badge fb-telnet">TELNET</span>','<span class="feed-badge fb-ssh">SSH</span>','<span class="feed-badge fb-ftp">FTP</span>','<span class="feed-badge fb-arp">ARP</span>','<span class="feed-badge fb-wifi">WIFI</span>','<span class="feed-badge fb-shell">SHELL</span>'];
-const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;'];
+const BADGE=['<span class="feed-badge fb-rtsp">RTSP</span>','<span class="feed-badge fb-http">HTTP</span>','<span class="feed-badge fb-telnet">TELNET</span>','<span class="feed-badge fb-ssh">SSH</span>','<span class="feed-badge fb-ftp">FTP</span>','<span class="feed-badge fb-arp">ARP</span>','<span class="feed-badge fb-wifi">WIFI</span>','<span class="feed-badge fb-shell">SHELL</span>',
+  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>'];
+const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;'];
 const CIRC=2*Math.PI*54;
-const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session'];
-const TPORT=[554,80,23,22,21,'—','—',23];
-const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured'];
+// One entry per attack_type_t (main/storage/log_store.h), in order.
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep'];
+const TCOUNT=TNAME.length;
+const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none'];
+const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured',
+  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts'];
+const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
   ?String.fromCodePoint(...[...c.toUpperCase()].map(x=>0x1F1E6+x.charCodeAt(0)-65)):'';
@@ -642,6 +701,7 @@ function showDetailKey(key){
     ['Username', v(e.user)],
     ['Password', v(e.pass)],
     ['Payload', v(e.payload)],
+    ['Alerting', e.ign?'ignored source: logged, no alarm':'<span class="muted">normal</span>'],
     ['From this IP', `${sameIp} event(s) <span class="muted">in current window</span>`],
   ];
   if(mac)rows.push(['From this MAC', `${sameMac} event(s) <span class="muted">in current window</span>`]);
@@ -681,8 +741,8 @@ function setVal(id,val){
   })(performance.now());
 }
 
-// donut chart — 8 attack types (index = attack_type_t)
-const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell'];
+// donut chart, one arc per attack type (index = attack_type_t)
+const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep'];
 function updateDonut(vals){
   vals=vals||[];const sum=vals.reduce((a,b)=>a+(b||0),0),tot=sum||1,gap=4,n=DKEYS.length;
   let off=0;
@@ -735,7 +795,7 @@ function updateFeed(entries){
     const fl=flagOf(e.cc);
     div.innerHTML=`<span class="feed-icon">${ICON[e.type]||'?'}</span>`+
       `<div class="feed-info"><div class="fi-ip">${fl?fl+' ':''}${ip4(e.ip)}${vchip}</div><div class="fi-cred">${cred}</div></div>`+
-      `${BADGE[e.type]||''}<span class="feed-time">${fmt(e.ts).split(' ')[1]||''}</span>`;
+      `${BADGE[e.type]||''}${e.ign?IGN:''}<span class="feed-time">${fmt(e.ts).split(' ')[1]||''}</span>`;
     feed.insertBefore(div,feed.firstChild);
   });
   while(feed.children.length>40)feed.removeChild(feed.lastChild);
@@ -750,7 +810,7 @@ function updateTable(entries){
     <td class="td-ts">${fmt(e.ts)}</td>
     <td class="td-ip">${flagOf(e.cc)?flagOf(e.cc)+' ':''}${ip4(e.ip)}</td>
     <td class="td-mac">${macCell(e)}</td>
-    <td>${BADGE[e.type]||e.type}</td>
+    <td>${BADGE[e.type]||e.type}${e.ign?IGN:''}</td>
     <td class="td-cred">${e.user?esc(e.user):'—'}</td>
     <td class="td-cred">${e.pass?esc(e.pass):'—'}</td>
     <td class="td-payload" title="${esc(e.payload||'')}">${esc(e.payload||'')}</td>
@@ -850,7 +910,7 @@ function applyEntry(e){
   if(!_entries.some(x=>`${x.ts}-${x.ip}-${x.type}`===key)){
     _entries.unshift(e);if(_entries.length>50)_entries.pop();
   }
-  const bt=[0,0,0,0,0,0,0,0];_entries.forEach(x=>{if(x.type<8)bt[x.type]++;});
+  const bt=new Array(TCOUNT).fill(0);_entries.forEach(x=>{if(x.type<TCOUNT)bt[x.type]++;});
   setVal('s-total',(_prev['s-total']||0)+1);
   setVal('s-ips',new Set(_entries.map(x=>x.ip)).size);
   setVal('s-rtsp',bt[0]);setVal('s-http',bt[1]);setVal('s-telnet',bt[2]);setVal('s-ssh',bt[3]);setVal('s-ftp',bt[4]);
@@ -887,7 +947,7 @@ function showPage(p){
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
   if(p==='logs'){loadSummary();loadDays();}
-  if(p==='settings')loadSettings();
+  if(p==='settings'){loadSettings();loadIgnore();}
 }
 window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
 setInterval(()=>{if(!$('page-logs').hidden)loadSummary();},30000);
@@ -939,7 +999,11 @@ function renderSummary(d){
     'Lines written since boot: '+sd.lines,
     'Write errors since boot: '+sd.errors,
     'Dropped (queue full): '+sd.dropped,
-  ]:['No microSD card mounted. Metrics are kept in RAM only.']).map(t=>el('div','',t)));
+  ]:['No microSD card mounted. Metrics are kept in RAM only.']).concat(d.detect?[
+    'Recon since boot: '+d.detect.scans+' scans, '+d.detect.probes+' probes, '+d.detect.sweeps+' ARP sweeps',
+    'Packets queued '+d.detect.queued+', dropped '+d.detect.dropped+', admin SYNs hidden '+d.detect.admin_dropped,
+    'ARP requests seen '+d.detect.arp_requests+', ARP tap '+(d.detect.arp_tap?'on':'off'),
+  ]:[]).map(t=>el('div','',t)));
 
   const ts=$('top-src');
   if(!(d.top_sources||[]).length)emptyRow(ts,5,'No sources yet');
@@ -1001,7 +1065,7 @@ function renderDay(){
 function logRow(o){
   const kind=String(o.kind||'?');
   let type='',ip='',mac='',user='',pass='',det='';
-  if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=o.payload;}
+  if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=(o.ignored===true?'(ignored) ':'')+(o.payload==null?'':o.payload);}
   else if(kind==='alarm'){type=TNAME[o.type]||'';ip=o.ip;det='incident #'+o.id+' '+o.event+', '+o.count+' event(s)';}
   else if(kind==='boot'){det='firmware '+o.fw+', reset: '+(RESET[o.reset]||o.reset);}
   const tr=el('tr'),mc=td(mac&&mac!=='unknown'?mac:'','td-mac'),dc=td(det==null?'':det,'td-payload');
@@ -1018,6 +1082,8 @@ const TZP=[['UTC','UTC0'],['US Eastern','EST5EDT,M3.2.0,M11.1.0'],['US Central',
 {const s=$('st-tzp'),o=el('option','','Custom');o.value='';s.append(o);TZP.forEach(([n,v])=>{const x=el('option','',n+'  ('+v+')');x.value=v;s.append(x);});}
 function syncTz(){const v=$('st-tz').value.trim();$('st-tzp').value=TZP.some(p=>p[1]===v)?v:'';}
 function showMsg(kind,text){const m=$('st-msg');m.className='msg '+kind;m.textContent=text;}
+TNAME.forEach((n,i)=>{const l=el('label'),c=el('input');c.type='checkbox';c.id='st-al-'+i;l.append(c,document.createTextNode(n));$('st-alerts').append(l);});
+let _clientIp='';
 async function loadSettings(){
   try{
     const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();
@@ -1032,6 +1098,12 @@ async function loadSettings(){
     $('st-wifi-hint').textContent='Running on "'+s.running_wifi_ssid+'" from '+(s.wifi_overridden?'these settings':'config.h')+
       '. A saved network that gets no IP within 90 s at boot is dropped and the board goes back to the config.h network.';
     $('st-tg-hint').textContent='Alerts are '+(s.telegram_enabled?'on':'off')+'. Clear the chat id to turn them off.';
+    const am=Number(s.alert_mask)>>>0;TNAME.forEach((_,i)=>{$('st-al-'+i).checked=!!((am>>>i)&1);});
+    $('st-sp').value=s.scan_ports;$('st-sw').value=s.scan_window_s;$('st-at').value=s.arp_targets;$('st-aw').value=s.arp_window_s;
+    _clientIp=String(s.client_ip||'');
+    $('st-allow').value=(s.admin_allow||[]).join(', ');
+    $('st-allow-hint').textContent='IPv4s, comma separated, up to 8. When set, ports 9999 and 9998 drop connections from anyone else, so a scan shows them filtered. '+
+      'It must include your address ('+(_clientIp||'unknown')+'). Locked out? On the USB serial console type: admin-allow clear';
     if(s.reboot_pending)showMsg('ok','Saved Wi-Fi or Telegram changes are waiting for a reboot.');
   }catch{showMsg('err','Could not load the settings.');}
 }
@@ -1045,6 +1117,14 @@ async function saveSettings(ev){
   const body={wifi_ssid:$('st-ssid').value,tg_chat_id:$('st-chat').value.trim(),tz:$('st-tz').value.trim(),
     alarm_remind_s:Number($('st-rem').value),alarm_quiet_s:Number($('st-quiet').value),brightness:Number($('st-br').value),
     alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked};
+  let am=0;TNAME.forEach((_,i)=>{if($('st-al-'+i).checked)am|=(1<<i);});
+  body.alert_mask=am>>>0;
+  body.scan_ports=Number($('st-sp').value);body.scan_window_s=Number($('st-sw').value);
+  body.arp_targets=Number($('st-at').value);body.arp_window_s=Number($('st-aw').value);
+  const allow=$('st-allow').value.split(/[\s,]+/).filter(Boolean);
+  if(allow.length&&_clientIp&&!allow.includes(_clientIp))
+    return showMsg('err','The admin allowlist must include your own address, '+_clientIp+', or you would lock yourself out.');
+  body.admin_allow=allow;
   if(pw)body.admin_password=pw;
   if($('st-open').checked)body.wifi_open=true;
   else if($('st-wpw').value)body.wifi_password=$('st-wpw').value;
@@ -1060,6 +1140,40 @@ async function saveSettings(ev){
     else loadSettings();
     showMsg('ok',m);
   }catch{showMsg('err','Save failed: device unreachable.');}
+}
+// ── Ignore list ──
+function igMsg(kind,text){const m=$('ig-msg');m.className='msg '+kind;m.textContent=text;}
+function renderIgnore(d){
+  const tb=$('ig-body'),en=d.entries||[];
+  if(!en.length)return emptyRow(tb,5,'Nothing ignored');
+  tb.replaceChildren(...en.map(x=>{
+    const tr=el('tr'),mc=td(x.mac||'','td-mac'),b=el('button','btn btn-red','Remove'),bc=td('');
+    if(x.vendor)mc.append(el('span','vendor-chip',x.vendor));
+    b.type='button';b.onclick=()=>removeIgnore(x);bc.append(b);
+    tr.append(td(x.ip||'','td-ip'),mc,td(x.note||''),td(x.ts?fmt(x.ts):'-','td-ts'),bc);return tr;}));
+}
+async function loadIgnore(){
+  try{const r=await fetch('/api/ignore');if(!r.ok)throw 0;renderIgnore(await r.json());}
+  catch{igMsg('err','Could not load the ignore list.');}
+}
+async function postIgnore(body){
+  const r=await fetch('/api/ignore',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
+  let d={};try{d=await r.json();}catch{}
+  if(!r.ok)throw new Error(String(d.error||r.status));
+  renderIgnore(d);
+}
+async function addIgnore(ev){
+  ev.preventDefault();
+  const ip=$('ig-ip').value.trim(),mac=$('ig-mac').value.trim(),note=$('ig-note').value.trim();
+  if(!ip&&!mac)return igMsg('err','Give an IP, a MAC or both.');
+  try{await postIgnore({action:'add',ip,mac,note});['ig-ip','ig-mac','ig-note'].forEach(i=>$(i).value='');igMsg('ok','Added.');}
+  catch(e){igMsg('err','Add failed: '+e.message);}
+}
+async function removeIgnore(x){
+  const who=[x.ip,x.mac].filter(Boolean).join(' / ');
+  if(!confirm('Remove '+who+' from the ignore list? Its events will alarm again.'))return;
+  try{await postIgnore({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||''});igMsg('ok','Removed '+who+'.');}
+  catch(e){igMsg('err','Remove failed: '+e.message);loadIgnore();}
 }
 async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
 async function rebootDev(){

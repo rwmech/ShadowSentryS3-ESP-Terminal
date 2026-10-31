@@ -6,7 +6,9 @@
  * Incident alarm, Core 1
  *
  * Every event appended to the log store is an attack on the internal network
- * (nothing legitimate touches a honeypot), so any event can open an incident.
+ * (nothing legitimate touches a honeypot), so any event can open an incident,
+ * unless its type is switched off in the alert mask or its source is on the
+ * ignore list (alarm_should_alert): those are logged and nothing more.
  *
  *   IDLE   → ACTIVE  first event: buzzer_alarm() (the siren), panel + web
  *                    show the incident
@@ -63,6 +65,12 @@ void alarm_clear(void);
 
 // Snapshot of the current incident. Safe from any task.
 void alarm_get(alarm_info_t *out);
+
+// Should an event of this type from this source alert (open or extend an
+// incident, Telegram, Discord)? False when the type's bit is clear in the
+// settings' alert_mask or the source is on the ignore list. Logging never
+// depends on it. Cheap and safe from any task.
+bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6]);
 
 // Called from the alarm task on every state or count change. Must be
 // non-blocking (copy and queue). Up to 4 listeners, registered at boot.

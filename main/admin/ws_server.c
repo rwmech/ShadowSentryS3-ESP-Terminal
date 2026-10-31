@@ -3,6 +3,7 @@
 #include "log_store.h"
 #include "geoip.h"
 #include "wifi_manager.h"
+#include "ignore.h"
 #include "config.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -59,12 +60,13 @@ static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
     }
 
     snprintf(buf, len,
-        "{\"ts\":%lu,\"ip\":%lu,\"type\":%d,"
+        "{\"ts\":%lu,\"ip\":%lu,\"type\":%d,\"ign\":%s,"
         "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
         "\"mac\":\"%s\",\"vendor\":\"%s\","
         "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
         "\"asn\":\"%s\",\"geotag\":\"%s\"}",
         (unsigned long)e->timestamp, (unsigned long)e->src_ip, (int)e->type,
+        ignore_match(e->src_ip, e->src_mac) ? "true" : "false",
         user_j, pass_j, pay_j, mac_j, vendor,
         gi.cc, ctry_j, org_j, gi.asn, gi.tag);
 }
