@@ -463,6 +463,52 @@ footer{
 
   </div>
 
+  <!-- Fork: camera, last panel action (GET /api/snap/last[.json]). Self-contained. -->
+  <div class="card" id="snap-card" style="margin-bottom:14px">
+    <div class="card-title">Last panel action</div>
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <a id="snap-link" href="/api/snap/last" target="_blank" rel="noopener" hidden>
+        <img id="snap-img" alt="Snapshot of the last panel press" width="200" height="150"
+             style="display:block;border-radius:8px;object-fit:cover;background:#000;border:1px solid var(--border)">
+      </a>
+      <div class="kv">
+        <div id="snap-what" class="muted">Loading&hellip;</div>
+        <div id="snap-when" class="muted"></div>
+        <div id="snap-file" class="muted" style="font-size:.68rem"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    const g=id=>document.getElementById(id);
+    const NAME={ack:'Acknowledged',clear:'Cleared / re-armed'};
+    let shown=-1;
+    async function snapLoad(){
+      try{
+        const r=await fetch('/api/snap/last.json',{cache:'no-store'});if(!r.ok)throw 0;
+        const d=await r.json();
+        if(!d.seq){
+          g('snap-link').hidden=true;
+          g('snap-what').textContent=d.camera?'No panel press captured since boot':'Camera not detected';
+          g('snap-when').textContent='';g('snap-file').textContent='';shown=0;return;
+        }
+        g('snap-what').textContent=(NAME[d.action]||d.action)+' on the panel';
+        g('snap-when').textContent=d.ts>1600000000?new Date(d.ts*1000).toLocaleString():'clock not set';
+        g('snap-file').textContent=d.file?d.file+' ('+Math.ceil(d.size/1024)+' KB)':'not saved to the card';
+        if(d.seq!==shown){shown=d.seq;g('snap-img').src='/api/snap/last?s='+d.seq;g('snap-link').hidden=false;}
+      }catch{}
+    }
+    // After the main scripts: refresh on every alarm state change (ACK or CLEAR
+    // on the panel; the photo is taken at the press, so it is ready by then).
+    window.addEventListener('DOMContentLoaded',()=>{
+      snapLoad();setInterval(snapLoad,30000);
+      if(typeof renderAlarm!=='function')return;
+      const base=renderAlarm;let st;
+      renderAlarm=function(a){base(a);if(a&&a.state!==st){if(st!==undefined)setTimeout(snapLoad,1500);st=a.state;}};
+    });
+  })();
+  </script>
+
   <div class="table-card">
     <div class="table-hdr">
       <div class="card-title">Attack Log</div>

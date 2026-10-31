@@ -19,6 +19,7 @@
 #include "esp_heap_caps.h"
 #include "lwip/ip4_addr.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -31,13 +32,28 @@ static const char *TAG = "SDLOG";
 #define SD_BUS_WAIT_MS   15000     // give up waiting for the display after this
 #define BUS_READY_BIT    BIT0
 
-typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH } sdm_kind_t;
+typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH, SDM_FILE, SDM_SNAP } sdm_kind_t;
+
+typedef struct {                    // SDM_FILE: the writer owns data and frees it
+    char   path[64];
+    void  *data;
+    size_t len;
+} sdm_file_t;
+
+typedef struct {                    // SDM_SNAP: one "snap" line in the day log
+    uint32_t ts;
+    uint32_t size;
+    char     action[16];
+    char     file[64];
+} sdm_snap_t;
 
 typedef struct {
     sdm_kind_t kind;
     union {
         attack_log_t e;
         alarm_info_t a;
+        sdm_file_t   f;
+        sdm_snap_t   s;
     };
 } sdm_t;
 
@@ -89,6 +105,34 @@ void sd_log_flush(void)
     sdm_t m = { .kind = SDM_FLUSH };
     // Front of the queue, so it isn't stuck behind a backlog of line writes.
     if (s_q) xQueueSendToFront(s_q, &m, pdMS_TO_TICKS(100));
+}
+
+bool sd_log_write_file(const char *path, void *data, size_t len)
+{
+    sdm_t m = { .kind = SDM_FILE };
+    bool ok = s_q && s_status.mounted && data && len &&
+              strncmp(path, SD_MOUNT_POINT "/", sizeof(SD_MOUNT_POINT)) == 0 &&
+              strlcpy(m.f.path, path, sizeof(m.f.path)) < sizeof(m.f.path);
+    if (ok) {
+        m.f.data = data;
+        m.f.len  = len;
+        ok = xQueueSend(s_q, &m, 0) == pdTRUE;
+        if (!ok) s_status.dropped++;
+    }
+    if (!ok) free(data);
+    return ok;
+}
+
+bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size)
+{
+    if (!s_q || !s_status.mounted) return false;
+    sdm_t m = { .kind = SDM_SNAP };
+    m.s.ts   = ts;
+    m.s.size = (uint32_t)size;
+    strlcpy(m.s.action, action ? action : "", sizeof(m.s.action));
+    strlcpy(m.s.file, file ? file : "", sizeof(m.s.file));
+    if (xQueueSend(s_q, &m, 0) != pdTRUE) { s_status.dropped++; return false; }
+    return true;
 }
 
 void sd_log_status(sd_status_t *out)
@@ -164,6 +208,16 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
             "\"type\":%u,\"count\":%lu}\n",
             (unsigned long)*ts_out, a->state <= 2 ? STATE[a->state] : "?",
             (unsigned long)a->id, ip, (unsigned)a->type, (unsigned long)a->count);
+    }
+    case SDM_SNAP: {
+        const sdm_snap_t *s = &m->s;
+        char act_j[40], file_j[136];
+        jesc(s->action, act_j, sizeof(act_j));
+        jesc(s->file, file_j, sizeof(file_j));
+        *ts_out = clock_valid(s->ts) ? s->ts : (uint32_t)time(NULL);
+        return snprintf(buf, len,
+            "{\"kind\":\"snap\",\"ts\":%lu,\"action\":\"%s\",\"file\":\"%s\",\"size\":%lu}\n",
+            (unsigned long)*ts_out, act_j, file_j, (unsigned long)s->size);
     }
     case SDM_BOOT:
     default:
@@ -371,6 +425,32 @@ static bool mount(bool display_has_bus)
 
 // ── Writer task ───────────────────────────────────────────────────────────────
 
+// SDM_FILE: write a whole file (parent directory created if missing), then free
+// the caller's buffer. Write-then-rename, so a power cut never leaves a torn file
+// under the final name.
+static void write_file(sdm_file_t *f)
+{
+    char dir[sizeof(f->path)], tmp[sizeof(f->path) + 4];
+    f->path[sizeof(f->path) - 1] = '\0';
+    strlcpy(dir, f->path, sizeof(dir));
+    char *slash = strrchr(dir, '/');
+    if (slash && slash != dir) { *slash = '\0'; mkdir(dir, 0775); }
+    snprintf(tmp, sizeof(tmp), "%s.tmp", f->path);
+
+    FILE *fp = fopen(tmp, "wb");
+    bool ok = fp && fwrite(f->data, 1, f->len, fp) == f->len;
+    if (fp) ok = (fclose(fp) == 0) && ok;
+    if (ok) { remove(f->path); ok = rename(tmp, f->path) == 0; }
+    else remove(tmp);
+    free(f->data);
+    f->data = NULL;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!ok) s_status.write_errors++;
+    xSemaphoreGive(s_mutex);
+    if (!ok) ESP_LOGW(TAG, "write to %s failed", f->path);
+}
+
 static void sd_task(void *arg)
 {
     (void)arg;
@@ -381,6 +461,7 @@ static void sd_task(void *arg)
         sdm_t m;
         for (;;) {
             xQueueReceive(s_q, &m, portMAX_DELAY);
+            if (m.kind == SDM_FILE) free(m.f.data);
             if (m.kind == SDM_ATTACK)
                 stats_add(&m.e, clock_valid(m.e.timestamp) ? m.e.timestamp : (uint32_t)time(NULL));
         }
@@ -405,6 +486,10 @@ static void sd_task(void *arg)
         }
         if (m.kind == SDM_FLUSH) {          // reboot or OTA coming
             if (s_stats_dirty) stats_save();
+            continue;
+        }
+        if (m.kind == SDM_FILE) {
+            write_file(&m.f);
             continue;
         }
 

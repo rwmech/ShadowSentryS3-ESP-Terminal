@@ -37,10 +37,11 @@ This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/Sha
 | Display | 3.5" ILI9488, 480x320, SPI (SCLK 12, MOSI 13, MISO 14, CS 3, DC 42, backlight 46) |
 | Touch | FT6236 capacitive, I2C 0x38 (SDA 2, SCL 1) |
 | microSD | on the display's SPI bus, CS 10 |
+| Camera | OV2640 on J5 (24-pin FPC): XCLK 7, PCLK 17, VSYNC 4, HREF 5, D0-D7 8, 47, 48, 21, 18, 16, 15, 6; SCCB on the touch I2C bus, 0x30; no PWDN or RESET |
 | Buzzer | passive, GPIO 45 |
 | USB | CH340C serial bridge; V1.0 has no auto-reset wiring |
 
-Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S microphone are not used.
+Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not used.
 
 ### What this fork adds
 
@@ -64,6 +65,7 @@ Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S m
   - Event log (the Discord twin of the microSD log), on by default: events are folded by source IP, attack type and a short summary (shell: the command's first word, so 110 runs of `ls` post once as `ran ls x110`; credential traps: user:pass; HTTP: method and path; otherwise the first 40 characters), and posted every 15 s as lines in a code block. A line that has posted waits 5 minutes before its next post, which shows only the new count (`+40 more`); a line idle for 10 minutes is forgotten. At most 32 lines per post, the rest follow in the next one.
   - Set it up: in Discord, channel settings, Integrations, Webhooks, New Webhook, Copy Webhook URL. Paste the URL into Settings, Discord (or set `DISCORD_WEBHOOK_URL` in `main/config.h` as the default), Save, then Send test. It applies at once, no reboot. "Clear webhook" turns Discord off; "Post the event log" turns the log off while incident alerts stay on.
   - The URL is a secret: it is never logged or returned by the API, only reported as set. Every post has `allowed_mentions` empty, attacker text is cut to printable ASCII with backticks replaced, so it can't ping anyone or break out of its code formatting. Posts are paced for Discord's webhook limit and honour HTTP 429 `retry_after`.
+- Panel-press camera: the OV2640 faces whoever stands at the screen. A press on the panel's ACKNOWLEDGE button (incident card or strobing overlay, action `ack`) or RE-ARM button (action `clear`) takes a photo (640x480 JPEG, Elecrow's sensor settings) at the moment the press starts, not when the hold completes, so a press let go early is photographed too. It is saved as `/sd/snap/YYYY-MM-DD_HH-MM-SS_<action>.jpg` (through the SD writer task) with a `snap` line in the day log (shown on the Logs page, kind "snap"), and the last one is kept in PSRAM for the dashboard's "Last panel action" card (thumbnail, action, time; refreshed on every alarm state change and every 30 s). At most one photo a second. Without a camera the board logs it once and runs as before. The camera's SCCB runs on the new `i2c_master` driver and attaches to the bus touch already owns, so the legacy I2C driver (which would abort IDF 5.4 at boot) is never linked.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
 - Memory: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
 
@@ -84,6 +86,8 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `GET` | `/api/discord/status` | `test_done`, `test_ok`, `test_status` (HTTP status, -1 no connection), post and drop counters |
 | `POST` | `/api/ack` | acknowledge the incident |
 | `POST` | `/api/alarm/clear` | re-arm: end an acknowledged incident, 204; 409 `{"error":"acknowledge first"}` while unacknowledged; logs untouched |
+| `GET` | `/api/snap/last` | last panel-press photo, `image/jpeg`; 404 if none since boot |
+| `GET` | `/api/snap/last.json` | `{camera, seq, ts, action, file, size, width, height}`; `seq` 0 if none |
 | `POST` | `/api/ota` | raw app image |
 
 ### Build and flash (PlatformIO)

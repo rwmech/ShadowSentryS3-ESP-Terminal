@@ -41,6 +41,18 @@ void sd_log_bus_ready(void);
 
 void sd_log_status(sd_status_t *out);
 
+// Write a whole file on the card from the writer task, so callers never touch
+// FAT. path must start with SD_MOUNT_POINT "/" and fit 63 chars; its directory
+// is created if missing. Ownership of data (any heap_caps_malloc'd buffer)
+// passes to sd_log in every case: it is free()d after the write, or at once if
+// the request is refused (no card, queue full, bad path). Never blocks.
+// Returns true if queued.
+bool sd_log_write_file(const char *path, void *data, size_t len);
+
+// Append {"kind":"snap","ts","action","file","size"} to the day log (camera
+// snapshot of a panel press). Never blocks. Returns true if queued.
+bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size);
+
 // Save the summary metrics now (queued to the writer task). Call before a
 // deliberate restart, then give it ~300 ms.
 void sd_log_flush(void);

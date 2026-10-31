@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "api_ext.h"
 #include "discord.h"
+#include "api_cam.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -400,6 +401,7 @@ static void handle_request(int sock, char *buf, int len)
         return;
     }
     if (api_ext_handle(sock, buf, len)) return;   // fork routes (settings, logs, ...)
+    if (api_cam_handle(sock, buf, len)) return;   // camera snapshot routes
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);
