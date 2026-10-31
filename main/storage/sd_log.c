@@ -6,6 +6,7 @@
 #include "notify.h"
 #include "wifi_manager.h"
 #include "ignore.h"
+#include "http_engine.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -34,7 +35,7 @@ static const char *TAG = "SDLOG";
 #define SD_BUS_WAIT_MS   15000     // give up waiting for the display after this
 #define BUS_READY_BIT    BIT0
 
-typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH, SDM_FILE, SDM_SNAP } sdm_kind_t;
+typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH, SDM_FILE, SDM_SNAP, SDM_LINE } sdm_kind_t;
 
 typedef struct {                    // SDM_FILE: the writer owns data and frees it
     char   path[64];
@@ -49,6 +50,12 @@ typedef struct {                    // SDM_SNAP: one "snap" line in the day log
     char     file[64];
 } sdm_snap_t;
 
+typedef struct {                    // SDM_LINE: a whole JSON line; the writer frees it
+    char    *text;
+    size_t   len;
+    uint32_t ts;
+} sdm_line_t;
+
 typedef struct {
     sdm_kind_t kind;
     bool       ignored;        // SDM_ATTACK: source on the ignore list when it was logged
@@ -57,6 +64,7 @@ typedef struct {
         alarm_info_t a;
         sdm_file_t   f;
         sdm_snap_t   s;
+        sdm_line_t   l;
     };
 } sdm_t;
 
@@ -155,6 +163,21 @@ bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size)
     return true;
 }
 
+bool sd_log_line(char *line, size_t len)
+{
+    sdm_t m = { .kind = SDM_LINE };
+    bool ok = s_q && s_status.mounted && line && len && line[len - 1] == '\n';
+    if (ok) {
+        m.l.text = line;
+        m.l.len  = len;
+        m.l.ts   = (uint32_t)time(NULL);
+        ok = xQueueSend(s_q, &m, 0) == pdTRUE;
+        if (!ok) s_status.dropped++;
+    }
+    if (!ok) free(line);
+    return ok;
+}
+
 void sd_log_status(sd_status_t *out)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -204,19 +227,21 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
     switch (m->kind) {
     case SDM_ATTACK: {
         const attack_log_t *e = &m->e;
-        char user_j[96], pass_j[192], pay_j[400];
+        char user_j[96], pass_j[192], pay_j[400], cat_j[48] = "";
         jesc(e->username, user_j, sizeof(user_j));
         jesc(e->password, pass_j, sizeof(pass_j));
         jesc(e->payload,  pay_j,  sizeof(pay_j));
         fmt_ip(e->src_ip, ip, sizeof(ip));
         wifi_manager_format_mac(e->src_mac, mac, sizeof(mac));
         uint8_t t = (uint8_t)e->type;
+        const char *cat = t == ATTACK_HTTP ? http_engine_category_key(e->payload) : NULL;
+        if (cat) snprintf(cat_j, sizeof(cat_j), ",\"category\":\"%s\"", cat);   // fixed keys
         *ts_out = clock_valid(e->timestamp) ? e->timestamp : (uint32_t)time(NULL);
         return snprintf(buf, len,
             "{\"kind\":\"attack\",\"ts\":%lu,\"ip\":\"%s\",\"type\":%u,\"tname\":\"%s\","
-            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s}\n",
+            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s%s}\n",
             (unsigned long)*ts_out, ip, t, t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?",
-            user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac),
+            user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac), cat_j,
             m->ignored ? ",\"ignored\":true" : "");
     }
     case SDM_ALARM: {
@@ -509,6 +534,7 @@ static void sd_task(void *arg)
         for (;;) {
             xQueueReceive(s_q, &m, portMAX_DELAY);
             if (m.kind == SDM_FILE) free(m.f.data);
+            if (m.kind == SDM_LINE) free(m.l.text);
             if (m.kind == SDM_ATTACK)
                 stats_add(&m.e, clock_valid(m.e.timestamp) ? m.e.timestamp : (uint32_t)time(NULL));
         }
@@ -541,14 +567,23 @@ static void sd_task(void *arg)
         }
 
         uint32_t ts = 0;
-        int n = format_line(&m, line, sizeof(line), &ts);
-        if (m.kind == SDM_ATTACK) stats_add(&m.e, ts);
-        if (n <= 0) continue;
-        if (n >= (int)sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
+        const char *out = line;
+        int n;
+        if (m.kind == SDM_LINE) {
+            out = m.l.text;
+            n   = (int)m.l.len;
+            ts  = m.l.ts;
+        } else {
+            n = format_line(&m, line, sizeof(line), &ts);
+            if (m.kind == SDM_ATTACK) stats_add(&m.e, ts);
+            if (n <= 0) continue;
+            if (n >= (int)sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
+        }
         day_path(ts, path, sizeof(path));
 
         FILE *f = fopen(path, "a");
-        bool ok = f && fwrite(line, 1, (size_t)n, f) == (size_t)n;
+        bool ok = f && fwrite(out, 1, (size_t)n, f) == (size_t)n;
+        if (m.kind == SDM_LINE) free(m.l.text);
         if (f) ok = (fclose(f) == 0) && ok;   // close per line: power loss costs one line
 
         xSemaphoreTake(s_mutex, portMAX_DELAY);

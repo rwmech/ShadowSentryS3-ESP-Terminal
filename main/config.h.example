@@ -141,6 +141,16 @@
 #define SSH_ALT_PORT                2222    // SSH bruteforce on the common alt port
 #define ADB_PORT                    5555    // Android Debug Bridge (TV boxes, Kimwolf, BADBOX)
 
+// HTTP engine (main/honeypot/http_engine.c): one task serves HTTP_PORT and the
+// alternate HTTP ports, up to 4 connections at once, every port with upstream's
+// NVR page. Each request is logged with a label from its shape and User-Agent.
+// 0 = upstream's single-port http_trap_task. main/honeypot/http_engine.h has the
+// defaults and collision checks for a config.h without these.
+#define HTTP_ENGINE_ENABLE          1
+#define HTTP_ALT_PORT1              8080    // DShield top 10; 0 disables a port
+#define HTTP_ALT_PORT2              8000
+#define HTTP_ALT_PORT3              9000
+
 // ── Telnet fake shell (Cowrie-style) ───────────────────────────────────────────
 //
 // After the Telnet honeypot collects credentials it can "accept" the login and

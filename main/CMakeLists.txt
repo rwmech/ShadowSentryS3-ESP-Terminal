@@ -10,6 +10,7 @@
 #   honeypot/telnet_trap.c  — port 23,  fake Ubuntu banner   (Core 0)
 #   honeypot/adb_trap.c     - port 5555, fake Android TV box (Core 0)
 #   honeypot/trap_listen.c  - 2323 and 2222 on the Telnet and SSH tasks
+#   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -30,6 +31,7 @@ idf_component_register(
         "wifi_monitor.c"
         "honeypot/rtsp_trap.c"
         "honeypot/http_trap.c"
+        "honeypot/http_engine.c"
         "honeypot/telnet_trap.c"
         "honeypot/fake_shell.c"
         "honeypot/ssh_trap.c"

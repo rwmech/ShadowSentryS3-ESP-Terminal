@@ -11,6 +11,7 @@
 #include "wifi_manager.h"
 #include "config.h"
 #include "trap_listen.h"            // TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT
+#include "http_engine.h"            // HTTP_ENG_PORT1..3 (0 when the engine is off)
 #include "ss_lwip_hooks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,7 +55,7 @@ static const char *TAG = "DETECT";
 #define PROBE_PEND_MAX    16
 #define PROBE_SEEN_MAX    64
 #define SAMPLE_MAX        6
-#define TRAP_N            8         // fits the uint8_t traps bitmap
+#define TRAP_N            11        // fits the uint16_t traps bitmap
 
 // ── Messages, hook and ARP tap to the detector task ───────────────────────────
 
@@ -234,7 +235,7 @@ typedef struct {
     int8_t   slot;              // bitmap index, -1 = none (counts from the ring)
     uint8_t  head;
     uint8_t  protos;            // bit 0 TCP, bit 1 UDP
-    uint8_t  traps;             // bit per trap port hit during the scan
+    uint16_t traps;             // bit per trap port hit during the scan
     uint8_t  ns;
     uint32_t ip, last;
     uint32_t start, scan_last, total, admin_drops;
@@ -273,11 +274,17 @@ static uint8_t      s_gw_mac[6];
 static uint32_t     s_gw_ip;
 
 // A 0 entry is a disabled port (trap_listen.h) and never matches.
+#define TRAP_STR_(x)  #x
+#define TRAP_STR(x)   TRAP_STR_(x)
 static const uint16_t    TRAP_PORT[TRAP_N] = { FTP_PORT, SSH_PORT, TELNET_PORT, HTTP_PORT, RTSP_PORT,
-                                               TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT };
+                                               TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT,
+                                               HTTP_ENG_PORT1, HTTP_ENG_PORT2, HTTP_ENG_PORT3 };
 static const char *const TRAP_NAME[TRAP_N] = { "FTP", "SSH", "Telnet", "HTTP", "RTSP",
-                                               "Telnet alt", "SSH alt", "ADB" };
-_Static_assert(TRAP_N <= 8, "src_t.traps is a uint8_t bitmap");
+                                               "Telnet alt", "SSH alt", "ADB",
+                                               "HTTP " TRAP_STR(HTTP_ALT_PORT1),
+                                               "HTTP " TRAP_STR(HTTP_ALT_PORT2),
+                                               "HTTP " TRAP_STR(HTTP_ALT_PORT3) };
+_Static_assert(TRAP_N <= 16, "src_t.traps is a uint16_t bitmap");
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -401,7 +408,7 @@ static void sample_str(const src_t *s, char *buf, size_t len)
     }
 }
 
-static void traps_str(uint8_t traps, char *buf, size_t len)
+static void traps_str(uint16_t traps, char *buf, size_t len)
 {
     size_t o = 0;
     buf[0] = '\0';
@@ -430,7 +437,7 @@ static void scan_start(src_t *s, uint32_t now, uint32_t win_ms, unsigned distinc
         probe_t *p = &S->pend[i];
         if (!p->used || p->ip != s->ip) continue;
         int t = trap_index(p->port);
-        if (t >= 0) s->traps |= (uint8_t)(1u << t);
+        if (t >= 0) s->traps |= (uint16_t)(1u << t);
         p->used = 0;
     }
     char smp[48];
@@ -443,7 +450,7 @@ static void scan_start(src_t *s, uint32_t now, uint32_t win_ms, unsigned distinc
 
 static void scan_end(src_t *s)
 {
-    char traps[48];
+    char traps[96];
     traps_str(s->traps, traps, sizeof(traps));
     unsigned long secs = (unsigned long)((s->scan_last - s->start) / 1000);
     emit(ATTACK_SCAN, s->ip, NULL, false, "Scan ended: %lu ports total (%s), %u-%u, %lu s%s%s",
@@ -505,7 +512,7 @@ static void on_port(const det_msg_t *m, uint32_t now)
         s->scan_last = now;
         bool fresh = s->slot < 0 && ring_touch(s, m->port, m->kind, now);
         scan_count_port(s, m->port, m->kind, fresh);
-        if (trap >= 0) s->traps |= (uint8_t)(1u << trap);
+        if (trap >= 0) s->traps |= (uint16_t)(1u << trap);
         return;
     }
     ring_touch(s, m->port, m->kind, now);
