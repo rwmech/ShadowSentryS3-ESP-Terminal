@@ -104,9 +104,9 @@ static const char *TYPE_HEX[] = {   // same palette as the web dashboard
 //   y  33..204  incident card: headline and age, source, details, buttons
 //   y 209..318  the incident's last 3 events
 //   x 0..39 and 440..479, y 31..319: the side bars, while unacknowledged
-// Armed (no incident): no card and no event list, only
-//   y 150..173  key figures
-//   y 182..197  one muted line on the last incident, if there was one
+// Armed (no incident): no card and no event list, only, under the light:
+//   y  34..57   key figures
+//   y  66..81   one muted line on the last incident, if there was one
 #define STATUS_H        28
 #define INC_X           FLASH_INSET
 #define INC_W           (480 - 2 * FLASH_INSET)         // 392
@@ -115,9 +115,9 @@ static const char *TYPE_HEX[] = {   // same palette as the web dashboard
 #define CARD_INNER_W    (INC_W - 2 * 2 - 2 * 6)         // 376: border 2, padding 6
 #define FEED_Y          209
 #define FEED_H          110     // 3 rows of 34 px
-#define FIG_Y_IDLE      150
+#define FIG_Y_IDLE      34
 #define FIG_H           24
-#define LAST_Y_IDLE     182
+#define LAST_Y_IDLE     66
 
 // Incident card buttons, along the card's bottom edge. ACKNOWLEDGE and RE-ARM
 // share the left slot (one shows at a time); the right slot, CARD_SLOT2_W wide,
@@ -648,6 +648,45 @@ static void refresh_age(void)
                           (unsigned long)s_alarm.id, type_name(s_alarm.type), ip, age);
 }
 
+// The two views. Each sets every widget's visibility and position itself, so
+// no path into a state relies on what an earlier one toggled.
+static void view_incident(void)
+{
+    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_figs, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void view_armed(bool last)
+{
+    lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_c_ack, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_c_rearm, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_figs, LV_ALIGN_TOP_MID, 0, FIG_Y_IDLE);
+    lv_obj_clear_flag(s_figs, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_last, LV_ALIGN_TOP_MID, 0, LAST_Y_IDLE);
+    if (last) lv_obj_clear_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+    else      lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Once per state change: what the panel now renders, with the figures row's
+// placement, so a console capture shows it.
+static void log_view(void)
+{
+    static const char *NAME[] = { "ARMED", "ALARM", "ACKED" };
+    lv_obj_update_layout(lv_scr_act());
+    lv_area_t f;
+    lv_obj_get_coords(s_figs, &f);
+    ESP_LOGI(TAG, "UI state: %s #%lu, card %s, events %s, figures %s at y %d..%d, last line %s",
+             s_alarm.state <= ALARM_ACKED ? NAME[s_alarm.state] : "?", (unsigned long)s_alarm.id,
+             lv_obj_has_flag(s_card, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown",
+             lv_obj_has_flag(s_feed, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown",
+             lv_obj_has_flag(s_figs, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown", f.y1, f.y2,
+             lv_obj_has_flag(s_last, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown");
+}
+
 static void apply_alarm(const alarm_info_t *a)
 {
     char ip[16], mac[WIFI_MAC_STR_LEN], t0[12], t1[12];
@@ -679,10 +718,7 @@ static void apply_alarm(const alarm_info_t *a)
         lv_label_set_text_fmt(s_c_times, "MAC %s  %s,  %s to %s",
                               mac, wifi_manager_mac_vendor(a->src_mac), t0, t1);
         runlight_set(acc, active);
-        lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_figs, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+        view_incident();
         if (active) {
             if (changed) lv_label_set_text(s_c_ack_lbl, TXT_ACK);
             lv_obj_clear_flag(s_c_ack, LV_OBJ_FLAG_HIDDEN);
@@ -698,15 +734,19 @@ static void apply_alarm(const alarm_info_t *a)
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         lv_label_set_text(s_pill_lbl, "ARMED");
         runlight_set(COL_GREEN, false);
-        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_figs, LV_OBJ_FLAG_HIDDEN);
-        if (a->id) lv_obj_clear_flag(s_last, LV_OBJ_FLAG_HIDDEN);
-        else       lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+        view_armed(a->id != 0);
     }
     if (reseed) feed_reseed();
     refresh_age();
     flash_set(a->state == ALARM_ACTIVE);
+    // A new view repaints the whole screen once (a few hundred ms over SPI, only
+    // on a state change), so no area keeps pixels from the old one.
+    static bool logged;
+    if (changed || !logged) {
+        logged = true;
+        lv_obj_invalidate(lv_scr_act());
+        log_view();
+    }
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────
@@ -756,12 +796,21 @@ static lv_obj_t *card_button(lv_obj_t *parent, lv_color_t base, lv_color_t fill_
     return b;
 }
 
+// Every second. Also re-reads the alarm state: its change messages are sent to
+// the UI queue without waiting, so one can be dropped behind a burst of
+// events, and the panel must not stay on a stale view.
 static void clock_cb(lv_timer_t *t)
 {
     (void)t;
     char buf[12];
     fmt_time((uint32_t)time(NULL), buf, sizeof(buf));
     lv_label_set_text(s_clock, buf);
+    alarm_info_t a;
+    alarm_get(&a);
+    if (a.state != s_alarm.state || a.id != s_alarm.id) {
+        ESP_LOGW(TAG, "Alarm state ahead of the UI queue (message dropped or late), applying it now");
+        apply_alarm(&a);
+    }
     refresh_age();
 }
 
@@ -864,7 +913,6 @@ static void build_ui(void)
     lv_obj_set_width(s_last, 464);
     lv_obj_set_style_text_align(s_last, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_last, LV_ALIGN_TOP_MID, 0, LAST_Y_IDLE);
-    lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
 
     // Running light: a dark track the full width, and the moving segment on it.
     // On the top layer, so a detail box opened from the list cannot stop it.

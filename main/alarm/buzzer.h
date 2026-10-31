@@ -14,8 +14,9 @@ extern "C" {
  * return at once: the siren (about 3.2 s) plays on the buzzer's own task, one
  * request after another, so call them from any task. buzzer_stop() ends the
  * siren that is playing. buzzer_boot() and buzzer_play_melody() block for the
- * whole tune (about 3.7 s for the startup melody), so run them from a task of
- * their own; a siren requested meanwhile waits for the tune to end.
+ * whole tune (about 8 s for the startup melody), so run them from a task of
+ * their own. A siren requested meanwhile cuts the tune short within 10 ms and
+ * plays at once.
  * buzzer_click() is a few milliseconds and never waits: if a siren or tune is
  * playing, the click is skipped. buzzer_confirm() queues a short tone for the
  * buzzer task and returns at once.
