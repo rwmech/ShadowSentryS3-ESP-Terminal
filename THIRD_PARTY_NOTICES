@@ -31,3 +31,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+IEEE Registration Authority: MAC address block assignments (MA-L, MA-M, MA-S, IAB)
+https://standards.ieee.org/products-programs/regauth/
+https://standards-oui.ieee.org/oui/oui.csv (and oui28/mam.csv, oui36/oui36.csv, iab/iab.csv)
+
+Used by: tools/make_oui.py, which turns the IEEE's public registry listings
+into the board's vendor database (/sd/oui.bin, read by main/storage/oui.c).
+No IEEE data is committed to this repository; the file is built on the PC
+from the listings as published. The organisation names are the IEEE's public
+registry data, shortened (corporate suffixes dropped, at most 40 characters).

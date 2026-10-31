@@ -1,4 +1,5 @@
 #include "wifi_manager.h"
+#include "oui.h"
 #include "config.h"
 #include "settings.h"
 #include "freertos/FreeRTOS.h"
@@ -456,6 +457,11 @@ const char *wifi_manager_mac_vendor(const uint8_t mac[6])
     // (iOS / Android) randomise their MAC, so this is a strong "mobile / private"
     // signal and far more reliable than any OUI table.
     if (mac[0] & 0x02) return "randomized (private)";
+
+    // Fork: the microSD vendor database (main/storage/oui.c), cache only, never
+    // reads the card here; the compact table below is the fallback.
+    const char *db = oui_cached(mac);
+    if (db) return db;
 
     // Curated OUI → vendor table. Deliberately small: covers the chips most
     // likely to appear on a home / SMB LAN. No match → "" (caller shows none).

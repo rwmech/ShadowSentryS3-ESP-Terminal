@@ -34,6 +34,7 @@
 #include "cam.h"
 #include "detect.h"
 #include "discovery.h"
+#include "oui.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -219,6 +220,7 @@ void app_main(void)
     }
     notify_init();                  // reset reason (the SD boot line uses it), incident listener
     sd_log_init();
+    oui_init();                     // vendor database cache (the file is read later, from the card)
     ui_start();
     cam_snap_init();                // waits on its own task for the touch I2C bus
 

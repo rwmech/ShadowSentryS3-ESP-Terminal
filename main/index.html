@@ -720,6 +720,17 @@ footer{
       <button class="btn" type="submit">Add</button>
     </form>
   </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-title">Vendor database</div>
+    <div class="msg" id="ou-msg"></div>
+    <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">MAC vendor names from the IEEE registry, kept on the microSD card. Build it on a PC with tools/make_oui.py, then upload the oui.bin here (or with tools/oui_upload.py). Without it a short built-in list is used.</div>
+    <div class="kv" id="ou-status">Loading...</div>
+    <div class="ctl" style="margin-top:10px">
+      <input type="file" id="ou-file" accept=".bin">
+      <button class="btn" type="button" onclick="uploadOui()">Update vendor database</button>
+      <progress id="ou-prog" max="100" value="0" hidden></progress>
+    </div>
+  </div>
 </main>
 
 <footer>
@@ -1050,7 +1061,7 @@ function showPage(p){
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
   if(p==='logs'){loadSummary();loadDays();}
-  if(p==='settings'){loadSettings();loadIgnore();}
+  if(p==='settings'){loadSettings();loadIgnore();loadOui();}
   if(p==='devices')loadDevices();
 }
 window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
@@ -1311,6 +1322,32 @@ async function testDiscord(){
     setTimeout(poll,1500);
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
+// ── Vendor database (GET/POST /api/oui) ──
+function ouMsg(kind,text){const m=$('ou-msg');m.className='msg '+kind;m.textContent=text;}
+async function loadOui(){
+  try{const r=await fetch('/api/oui',{cache:'no-store'});if(!r.ok)throw 0;const d=await r.json();
+    $('ou-status').replaceChildren(...(d.present?[
+      'Present: '+d.count+' prefixes, '+kb(d.size)+', built '+fmt(d.build_ts),
+      'Lookups '+d.lookups+', cache hits '+d.hits+', names cached '+kb(d.pool_used)]
+      :[d.card?'Not on the card: the built-in list is used.':'No microSD card: the built-in list is used.']).map(t=>el('div','',t)));}
+  catch{$('ou-status').textContent='Status unavailable';}
+}
+function uploadOui(){
+  const f=$('ou-file').files[0];
+  if(!f){ouMsg('err','Choose an oui.bin first.');return;}
+  if(f.size>4*1024*1024){ouMsg('err','That file is over 4 MB.');return;}
+  const x=new XMLHttpRequest(),pr=$('ou-prog');
+  x.open('POST','/api/oui');x.setRequestHeader('X-ShadowSentry','1');x.setRequestHeader('Content-Type','application/octet-stream');
+  pr.hidden=false;pr.value=0;ouMsg('ok','Uploading...');
+  x.upload.onprogress=e=>{if(e.lengthComputable)pr.value=Math.round(e.loaded/e.total*100);};
+  x.onload=()=>{pr.hidden=true;let d={};try{d=JSON.parse(x.responseText);}catch{}
+    if(x.status===200)ouMsg('ok','Uploaded: '+d.count+' prefixes. The card writes it in the background.');
+    else ouMsg('err','Upload failed ('+x.status+'): '+String(d.error||x.statusText));
+    setTimeout(loadOui,3000);};
+  x.onerror=()=>{pr.hidden=true;ouMsg('err','Upload failed: connection lost.');};
+  x.send(f);
+}
+
 // ── Ignore list ──
 function igMsg(kind,text){const m=$('ig-msg');m.className='msg '+kind;m.textContent=text;}
 function renderIgnore(d){

@@ -50,6 +50,10 @@ extern "C" {
  * slots carry their own). DHCP uses the packet's chaddr. Otherwise the ARP
  * cache is asked.
  *
+ * Vendors: oui_lookup() (main/storage/oui.h: the microSD database, else the
+ * compact table) on this task, cached; a device with nothing better is
+ * labelled "<vendor> device".
+ *
  * Seen devices (PSRAM): up to DISCOVERY_DEV_MAX keyed by MAC (by IP while the
  * MAC is unknown), least recently seen evicted. Each has the IP, first and
  * last seen, the protocols and a count per protocol, the best label so far,
@@ -64,6 +68,13 @@ extern "C" {
  *   - an SD line {"kind":"discovery",...} per new device, new protocol, new
  *     label or new query string for a device (DISCOVERY_SD_BURST, then one per
  *     DISCOVERY_SD_REFILL_MS)
+ *   - a Discord digest every DISCOVERY_DIGEST_S, only when something new was
+ *     seen: "LAN devices seen (last 30 min)", one line per device with news
+ *     (label, IP or MAC, what it did in plain words from a table in flash:
+ *     "looking for media servers (DLNA)", "asked for WPAD (proxy
+ *     auto-discovery)", "DHCP request, hostname LGwebOSTV"), at most
+ *     DISCOVERY_DIGEST_LINES, cut at word boundaries, then "+N more on the
+ *     Devices tab". Discovery events no longer post line by line.
  *   - an ATTACK_DISCOVERY event only for a new device, protocol or label,
  *     DISCOVERY_EV_BURST then one per DISCOVERY_EV_REFILL_S; the rest are
  *     counted into the next one as "(+N held)". It never goes through
@@ -102,7 +113,13 @@ extern "C" {
 #define DISCOVERY_SD_REFILL_MS  3000    // ... then one per this many ms
 #define DISCOVERY_MDNS_SLOTS    8       // mDNS queries waiting for the task
 #define DISCOVERY_MDNS_COPY     512     // bytes of each query kept (the questions come first)
-#define DISCOVERY_TASK_STACK    3584    // PSRAM; high-water logged on each new low
+#define DISCOVERY_ACT_KEEP      3       // plain-words activities per device per digest
+#define DISCOVERY_ACT_LEN       64
+#define DISCOVERY_DIGEST_S      1800    // Discord digest period
+#define DISCOVERY_DIGEST_LINES  20      // devices per digest, the rest "+N more"
+#define DISCOVERY_DIGEST_LINE   90      // characters per line, cut at a word
+#define DISCOVERY_DIGEST_MAX    1800    // characters in all (Discord allows 2000)
+#define DISCOVERY_TASK_STACK    4096    // PSRAM; high-water logged on each new low
 #define DISCOVERY_TASK_PRIO     2
 
 _Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
