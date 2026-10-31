@@ -110,6 +110,11 @@ void discovery_frame_tap(const uint8_t *frame, size_t len);
 // Returns the length. For GET /api/devices.
 size_t discovery_devices_json(char *buf, size_t cap);
 
+// For the front panel: the number of devices seen (in the table), and the
+// newest one's label (or IP) into label and its first-seen uptime (s) into
+// *first_up_s. Either pointer may be NULL. Any task; takes the table lock.
+int discovery_summary(char *label, size_t len, uint32_t *first_up_s);
+
 #ifdef __cplusplus
 }
 #endif

@@ -8,6 +8,7 @@
 #include "ignore.h"
 #include "http_engine.h"
 #include "tripwire.h"
+#include "describe.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -229,9 +230,12 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
     case SDM_ATTACK: {
         const attack_log_t *e = &m->e;
         char user_j[96], pass_j[192], pay_j[400], cat_j[48] = "";
+        char hl[DESCRIBE_MAX], hl_j[2 * DESCRIBE_MAX];
         jesc(e->username, user_j, sizeof(user_j));
         jesc(e->password, pass_j, sizeof(pass_j));
         jesc(e->payload,  pay_j,  sizeof(pay_j));
+        describe_event(e, hl, sizeof(hl));
+        jesc(hl, hl_j, sizeof(hl_j));
         fmt_ip(e->src_ip, ip, sizeof(ip));
         wifi_manager_format_mac(e->src_mac, mac, sizeof(mac));
         uint8_t t = (uint8_t)e->type;
@@ -242,10 +246,11 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
         *ts_out = clock_valid(e->timestamp) ? e->timestamp : (uint32_t)time(NULL);
         return snprintf(buf, len,
             "{\"kind\":\"attack\",\"ts\":%lu,\"ip\":\"%s\",\"type\":%u,\"tname\":\"%s\","
-            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s%s}\n",
+            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s%s,"
+            "\"headline\":\"%s\",\"tier\":\"%s\"}\n",
             (unsigned long)*ts_out, ip, t, t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?",
             user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac), cat_j,
-            m->ignored ? ",\"ignored\":true" : "");
+            m->ignored ? ",\"ignored\":true" : "", hl_j, describe_tier_key(describe_tier(e)));
     }
     case SDM_ALARM: {
         const alarm_info_t *a = &m->a;
@@ -348,6 +353,7 @@ static void stats_add_cred(const attack_log_t *e)
 
 static void stats_add(const attack_log_t *e, uint32_t ts)
 {
+    if (e->type == ATTACK_DISCOVERY) return;    // LAN background, not attacks: kept out of the metrics
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_stats->total++;
     if ((unsigned)e->type < ATTACK_TYPE_COUNT) s_stats->by_type[e->type]++;

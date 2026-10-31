@@ -13,6 +13,7 @@
 #include "settings.h"
 #include "wifi_manager.h"
 #include "ignore.h"
+#include "describe.h"
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -79,7 +80,8 @@ typedef struct {
     uint32_t pending;       // events since the last post
     int64_t  last_seen;     // monotonic s
     int64_t  last_post;
-    char     summary[DC_SUMMARY_LEN];   // printable ASCII, no backticks
+    char     summary[DC_SUMMARY_LEN];   // printable ASCII, no backticks: the dedup key
+    char     headline[DESCRIBE_MAX];    // what the batch line shows (the key's first event)
 } dc_key_t;
 
 typedef struct {
@@ -518,9 +520,20 @@ static void post_opened(const alarm_info_t *a)
     char dev[64];
     device_str(dev, sizeof(dev));
 
+    // The headline of the opening event, from the recent ring when it is there.
+    char hl[DESCRIBE_MAX], desc[DESCRIBE_MAX];
+    attack_log_t ev = { .timestamp = a->first_ts, .src_ip = a->src_ip, .type = (attack_type_t)a->type };
+    memcpy(ev.src_mac, a->src_mac, 6);
+    if (r) {
+        strlcpy(ev.username, r->user, sizeof(ev.username));
+        strlcpy(ev.payload, r->payload, sizeof(ev.payload));
+    }
+    describe_event(&ev, hl, sizeof(hl));
+    clean(desc, sizeof(desc), hl, sizeof(hl));
+
     jb_t j;
     bool first = true;
-    embed_begin(&j, title, COLOR_RED, NULL);
+    embed_begin(&j, title, COLOR_RED, desc[0] ? desc : NULL);
     field(&j, &first, "Source IP", ip, true, false);
     field(&j, &first, "MAC", macv, true, false);
     field(&j, &first, "Attack", type_long(a->type), true, false);
@@ -770,6 +783,9 @@ static void handle_event(const attack_log_t *e, int64_t now)
     k->last_seen = now;
     k->ignored = ign;
     strlcpy(k->summary, sum, sizeof(k->summary));
+    char hl[DESCRIBE_MAX];
+    describe_event(e, hl, sizeof(hl));
+    clean(k->headline, sizeof(k->headline), hl, sizeof(hl));
 }
 
 static bool eligible(const dc_key_t *k, int64_t now)
@@ -805,8 +821,10 @@ static void flush_batch(int64_t now)
         cnt[0] = '\0';
         if (k->posted)          snprintf(cnt, sizeof(cnt), " +%lu more", (unsigned long)k->pending);
         else if (k->pending > 1) snprintf(cnt, sizeof(cnt), " x%lu", (unsigned long)k->pending);
-        int n = snprintf(line, sizeof(line), "%-15s %-6s %s%s%s\n", ip, type_short(k->type), k->summary, cnt,
-                         k->ignored ? " (ignored)" : "");
+        int n = k->headline[0]
+            ? snprintf(line, sizeof(line), "%s%s%s\n", k->headline, cnt, k->ignored ? " (ignored)" : "")
+            : snprintf(line, sizeof(line), "%-15s %-6s %s%s%s\n", ip, type_short(k->type), k->summary, cnt,
+                       k->ignored ? " (ignored)" : "");
         if (n <= 0) continue;
         if ((size_t)n >= sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
         size_t d = display_len(line, (size_t)n);

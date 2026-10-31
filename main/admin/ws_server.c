@@ -4,6 +4,7 @@
 #include "geoip.h"
 #include "wifi_manager.h"
 #include "ignore.h"
+#include "describe.h"
 #include "config.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -42,10 +43,12 @@ static void jesc(const char *in, char *out, size_t outlen)
 // usually empty at push time (enrichment is async) and fill in on the next poll.
 static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
 {
-    char user_j[96], pass_j[192], pay_j[400];
+    char user_j[96], pass_j[192], pay_j[400], hl[DESCRIBE_MAX], hl_j[2 * DESCRIBE_MAX];
     jesc(e->username, user_j, sizeof(user_j));
     jesc(e->password, pass_j, sizeof(pass_j));
     jesc(e->payload,  pay_j,  sizeof(pay_j));
+    describe_event(e, hl, sizeof(hl));
+    jesc(hl, hl_j, sizeof(hl_j));
 
     char mac_j[WIFI_MAC_STR_LEN];
     wifi_manager_format_mac(e->src_mac, mac_j, sizeof(mac_j));
@@ -65,11 +68,11 @@ static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
         "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
         "\"mac\":\"%s\",\"vendor\":\"%s\","
         "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
-        "\"asn\":\"%s\",\"geotag\":\"%s\"}",
+        "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\"}",
         (unsigned long)e->timestamp, (unsigned long)e->src_ip, (int)e->type,
         ignore_match(e->src_ip, e->src_mac) ? "true" : "false",
         user_j, pass_j, pay_j, mac_j, vendor,
-        gi.cc, ctry_j, org_j, gi.asn, gi.tag);
+        gi.cc, ctry_j, org_j, gi.asn, gi.tag, hl_j, describe_tier_key(describe_tier(e)));
 }
 
 // ── Client tracking (httpd task context only) ───────────────────────────────────
@@ -93,11 +96,16 @@ typedef struct { attack_log_t e; } ws_msg_t;
 
 static void broadcast_text(const char *json);
 
+#define WS_JSON_MAX 1024        // one entry, with its headline
+
 static void broadcast_work(void *arg)
 {
     ws_msg_t *m = (ws_msg_t *)arg;
-    char json[512];
-    format_entry_json(&m->e, json, sizeof(json));      // heavy work on httpd stack
+    // 1 KB in PSRAM, made once: httpd is one task, so no reentry.
+    static char *json;
+    if (!json) json = heap_caps_malloc(WS_JSON_MAX, MALLOC_CAP_SPIRAM);
+    if (!json) { free(m); return; }
+    format_entry_json(&m->e, json, WS_JSON_MAX);       // heavy work on httpd stack
     free(m);
     broadcast_text(json);
 }
