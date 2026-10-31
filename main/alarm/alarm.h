@@ -79,5 +79,6 @@ bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6])
 
 // Called from the alarm task on every state or count change. Must be
 // non-blocking (copy and queue). Up to 6 listeners (ALARM_MAX_LISTENERS in
-// alarm.c), registered at boot; four are used (UI, WebSocket, SD log, Discord).
+// alarm.c), registered at boot; five are used (UI, WebSocket, SD log, Discord,
+// notify).
 void alarm_add_listener(void (*cb)(const alarm_info_t *info));

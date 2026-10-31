@@ -624,6 +624,13 @@ footer{
       <div class="hint" id="st-dc-hint"></div>
       <div></div>
       <div class="ctl"><button class="btn" type="button" id="st-dctest" onclick="testDiscord()">Send test</button><span id="st-dcres" class="muted"></span></div>
+      <h4>WhatsApp, via CallMeBot (applies at once)</h4>
+      <label for="st-waph">Phone number</label><input id="st-waph" maxlength="16" autocomplete="off" spellcheck="false" placeholder="+34123123123">
+      <label for="st-wakey">CallMeBot apikey</label><input type="password" id="st-wakey" maxlength="32" autocomplete="off" spellcheck="false">
+      <label for="st-waclr">Clear apikey (turn WhatsApp off)</label><input type="checkbox" id="st-waclr" onchange="$('st-wakey').disabled=this.checked">
+      <div class="hint" id="st-wa-hint"></div>
+      <div></div>
+      <div class="ctl"><button class="btn" type="button" id="st-watest" onclick="testWhatsApp()">Send test</button><span id="st-wares" class="muted"></span></div>
       <h4>Time</h4>
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
@@ -1145,11 +1152,15 @@ async function loadSettings(){
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
     $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
-    ['st-pw','st-pw2','st-wpw','st-tok','st-dch'].forEach(i=>$(i).value='');
+    ['st-pw','st-pw2','st-wpw','st-tok','st-dch','st-wakey'].forEach(i=>$(i).value='');
     $('st-dcclr').checked=false;$('st-dch').disabled=false;$('st-dclog').checked=!!s.discord_log_events;
     $('st-dch').placeholder=s.discord_webhook_set?'set; blank = unchanged':'not set';
     $('st-dc-hint').textContent='Discord is '+(s.discord_enabled?'on':'off')+
       '. Incidents post when opened, acknowledged and closed, with a reminder while unacknowledged. The event log posts deduplicated lines every 15 s. Send test uses the saved webhook: save first.';
+    $('st-waph').value=s.whatsapp_phone||'';$('st-waclr').checked=false;$('st-wakey').disabled=false;
+    $('st-wakey').placeholder=s.whatsapp_apikey_set?'set; blank = unchanged':'not set';
+    $('st-wa-hint').textContent='WhatsApp is '+(s.whatsapp_enabled?'on':'off')+
+      '. Boot and incident messages (opened, acknowledged, closed) go to this number, at most 20 an hour and 10 s apart; the event log does not. Get the apikey from callmebot.com (free, personal use, your own number only). Send test uses the saved settings: save first. WhatsApp starts at boot: after setting it up for the first time, save and reboot.';
     $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
     $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
     $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
@@ -1191,6 +1202,9 @@ async function saveSettings(ev){
   body.discord_log_events=$('st-dclog').checked;
   if($('st-dcclr').checked)body.discord_webhook_clear=true;
   else if($('st-dch').value.trim())body.discord_webhook=$('st-dch').value.trim();
+  body.whatsapp_phone=$('st-waph').value.replace(/\s+/g,'');
+  if($('st-waclr').checked)body.whatsapp_apikey_clear=true;
+  else if($('st-wakey').value.trim())body.whatsapp_apikey=$('st-wakey').value.trim();
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
     let d={};try{d=await r.json();}catch{}
@@ -1256,6 +1270,27 @@ async function removeIgnore(x){
   if(!confirm('Remove '+who+' from the ignore list? Its events will alarm again.'))return;
   try{await postIgnore({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||''});igMsg('ok','Removed '+who+'.');}
   catch(e){igMsg('err','Remove failed: '+e.message);loadIgnore();}
+}
+async function testWhatsApp(){
+  const res=$('st-wares'),b=$('st-watest');
+  res.textContent='Sending...';b.disabled=true;
+  try{
+    const r=await fetch('/api/whatsapp/test',POSTH);let d={};try{d=await r.json();}catch{}
+    if(!r.ok){res.textContent=String(d.error||('Failed ('+r.status+')'));b.disabled=false;return;}
+    const want=d.test,t0=Date.now();
+    const poll=async()=>{
+      try{
+        const s=await(await fetch('/api/whatsapp/status',{cache:'no-store'})).json();
+        if(s.test_done>=want){
+          res.textContent=s.test_ok?'Sent (HTTP '+s.test_status+'). Check WhatsApp.':
+            (s.test_status<0?'Failed: no connection to CallMeBot.':'Failed: HTTP '+s.test_status+'.');
+          b.disabled=false;return;
+        }
+      }catch{}
+      if(Date.now()-t0<90000)setTimeout(poll,2000);else{res.textContent='No result after 90 s.';b.disabled=false;}
+    };
+    setTimeout(poll,2000);
+  }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
 async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
 async function rebootDev(){

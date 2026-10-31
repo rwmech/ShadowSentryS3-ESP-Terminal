@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "api_ext.h"
 #include "discord.h"
+#include "notify.h"
 #include "api_cam.h"
 #include "sd_log.h"
 #include "ws_server.h"
@@ -360,6 +361,7 @@ static void handle_ota(int sock, const char *req, int req_len)
     shutdown(sock, SHUT_RDWR);
     close(sock);
     vTaskDelay(pdMS_TO_TICKS(500));
+    notify_restart_intent(NOTIFY_RESTART_OTA);     // the next boot's online message says so
     esp_restart();
 }
 

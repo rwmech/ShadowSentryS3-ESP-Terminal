@@ -16,6 +16,8 @@
 #include "ws_server.h"
 #include "telegram.h"
 #include "discord.h"
+#include "whatsapp.h"
+#include "notify.h"
 #include "arp_monitor.h"
 #include "geoip.h"
 #include "wifi_monitor.h"
@@ -98,6 +100,9 @@ static const char *TAG = "MAIN";
 //  discord: small locals (<1 KB), body/content/key table in PSRAM, plus the
 //           esp_http_client + TLS frames; size and high-water in discord.h
 #define PRIO_DISCORD    3
+//  whatsapp: small locals, URL and text in PSRAM, plus the esp_http_client +
+//            TLS frames; size and high-water in whatsapp.h
+#define PRIO_WHATSAPP   3
 
 // ── Helper macro ──────────────────────────────────────────────────────────────
 
@@ -172,6 +177,7 @@ void app_main(void)
     if (xTaskCreate(startup_melody_task, "melody", 3072, NULL, 1, NULL) != pdPASS) {
         ESP_LOGW(TAG, "No heap for the startup melody task, skipping it");
     }
+    notify_init();                  // reset reason (the SD boot line uses it), incident listener
     sd_log_init();
     ui_start();
     cam_snap_init();                // waits on its own task for the touch I2C bus
@@ -189,6 +195,7 @@ void app_main(void)
         if (!wifi_manager_wait_for_ip_ms(SETTINGS_WIFI_FALLBACK_S * 1000)) {
             ESP_LOGE(TAG, "No IP on saved Wi-Fi \"%s\", reverting to config.h network", ssid);
             settings_forget_wifi();
+            notify_restart_intent(NOTIFY_RESTART_WIFI_FALLBACK);
             esp_restart();
         }
     } else {
@@ -223,6 +230,8 @@ void app_main(void)
              settings_telegram_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  Discord alerts: %s",
              settings_discord_enabled() ? "enabled" : "NOT CONFIGURED");
+    ESP_LOGI(TAG, "  │  WhatsApp alerts: %s",
+             settings_whatsapp_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");
@@ -231,6 +240,9 @@ void app_main(void)
 
     // Discord queues and listeners before the traps can append (task below).
     discord_init();
+    // Notification backends register with notify.c (boot message below).
+    telegram_init();
+    whatsapp_init();
 
     // ── Core 0 — Hacker World ────────────────────────────────────────────────
     // Each honeypot is a blocking accept loop; lower-priority tasks (Core 1)
@@ -242,17 +254,25 @@ void app_main(void)
     SPAWN(ftp_trap_task,    "ftp",    STACK_FTP,      PRIO_HONEYPOT, 0);
 
     // ── Core 1 — Admin World ─────────────────────────────────────────────────
-    // Pass IP to telegram before spawning so the task can send the boot alert.
-    telegram_set_boot_ip(ip);
     SPAWN(geoip_task,       "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
     SPAWN(telegram_task,    "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
     SPAWN(discord_task,     "discord", DISCORD_TASK_STACK, PRIO_DISCORD, 1);
+    if (settings_whatsapp_enabled()) {
+        SPAWN(whatsapp_task, "whatsapp", WHATSAPP_TASK_STACK, PRIO_WHATSAPP, 1);
+    } else {
+        // Not configured: no task, so its 6 KB internal stack stays free.
+        // Enabling it in Settings marks a reboot pending.
+        ESP_LOGI(TAG, "WhatsApp not configured: task not started");
+    }
     SPAWN(admin_panel_task, "admin",  STACK_ADMIN,    PRIO_ADMIN,    1);
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();
+
+    // One "online" message per boot to every enabled backend, with the reset reason.
+    notify_boot(ip);
 
     ESP_LOGI(TAG, "All tasks spawned — free heap: %lu B  (internal: %lu B)",
              (unsigned long)esp_get_free_heap_size(),

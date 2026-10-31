@@ -87,6 +87,20 @@
 
 #define DISCORD_WEBHOOK_URL         ""
 
+// ── WhatsApp (CallMeBot) ─────────────────────────────────────────────────────
+//
+// Boot and incident alerts (opened, acknowledged, closed) to your own WhatsApp
+// number through CallMeBot's free personal API. Get the apikey by following the
+// activation steps on https://www.callmebot.com/blog/free-api-whatsapp-messages/
+//
+// WHATSAPP_PHONE is the number that activated the key, in international format
+// with the country code first, e.g. "+34123123123" (no spaces).
+// WHATSAPP_APIKEY is a secret. "" for either disables WhatsApp; the dashboard's
+// Settings page can set or clear both at run time.
+
+#define WHATSAPP_PHONE              ""
+#define WHATSAPP_APIKEY             ""
+
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
 // Dashboard is accessible at http://<device-ip>:ADMIN_PORT
@@ -238,6 +252,11 @@ _Static_assert(ADMIN_WS_PORT != ADMIN_PORT,
 // mDNS label: at least 1 char, max 31 (RFC 1035 label limit is 63; keep margin)
 _Static_assert(sizeof(MDNS_HOSTNAME) >= 2 && sizeof(MDNS_HOSTNAME) <= 32,
     "MDNS_HOSTNAME must be 1–31 characters");
+
+_Static_assert(sizeof(WHATSAPP_PHONE) <= 17,
+    "WHATSAPP_PHONE must be at most 16 characters (+ and up to 15 digits)");
+_Static_assert(sizeof(WHATSAPP_APIKEY) <= 33,
+    "WHATSAPP_APIKEY must be at most 32 characters");
 
 _Static_assert(LOG_RING_SIZE >= 10 && LOG_RING_SIZE <= 500,
     "LOG_RING_SIZE must be 10–500  (500 entries ≈ 117 KB RAM)");

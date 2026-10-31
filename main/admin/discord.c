@@ -7,6 +7,7 @@
 // incident tracking and the one HTTPS sender. Big buffers are PSRAM.
 
 #include "discord.h"
+#include "notify.h"
 #include "alarm.h"
 #include "log_store.h"
 #include "settings.h"
@@ -34,6 +35,7 @@ static const char *TAG = "DISCORD";
 
 #define DC_EVENT_QUEUE      96      // attack_log_t each (~236 B), PSRAM
 #define DC_ALARM_QUEUE      8
+#define DC_NOTICE_QUEUE     4       // notify_msg_t each (~390 B), PSRAM
 #define DC_BODY_MAX         8192    // JSON body, PSRAM
 #define DC_CONTENT_CAP      2048    // raw content before escaping, PSRAM
 #define DC_CONTENT_MAX      1900    // Discord's limit is 2000 characters
@@ -87,7 +89,7 @@ typedef struct {
     char     payload[128];
 } dc_recent_t;
 
-static QueueHandle_t     s_evq, s_alq;
+static QueueHandle_t     s_evq, s_alq, s_ntq;
 static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;
 static discord_status_t  s_stat;                // guarded by s_mux
 static bool              s_running;
@@ -164,6 +166,19 @@ void discord_note_dashboard_ack(void)
     s_dash_ack_tick = xTaskGetTickCount() | 1;
 }
 
+// notify.c backend: the boot message only (incidents post from on_alarm).
+static bool notice_send(const notify_msg_t *m)
+{
+    return s_ntq && xQueueSend(s_ntq, m, 0) == pdTRUE;
+}
+
+static const notify_backend_t s_backend = {
+    .name    = "Discord",
+    .kinds   = NOTIFY_BIT(NOTIFY_BOOT),
+    .enabled = settings_discord_enabled,
+    .send    = notice_send,
+};
+
 void discord_init(void)
 {
     s_evq = xQueueCreateWithCaps(DC_EVENT_QUEUE, sizeof(attack_log_t), MALLOC_CAP_SPIRAM);
@@ -176,6 +191,8 @@ void discord_init(void)
     if (s_prev.state == ALARM_ACTIVE) s_carry = s_prev;   // survived a reboot
     alarm_add_listener(on_alarm);
     log_store_add_listener(on_event);
+    s_ntq = xQueueCreateWithCaps(DC_NOTICE_QUEUE, sizeof(notify_msg_t), MALLOC_CAP_SPIRAM);
+    if (s_ntq) notify_register(&s_backend);
 }
 
 uint32_t discord_request_test(void)
@@ -582,6 +599,16 @@ static void post_test(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
+// A notify.c message (boot): green, amber or red by severity.
+static void post_notice(const notify_msg_t *m)
+{
+    static const uint32_t COLOR[] = { COLOR_GREEN, COLOR_AMBER, COLOR_RED };
+    jb_t j;
+    embed_begin(&j, m->title, COLOR[m->severity <= NOTIFY_ALERT ? m->severity : NOTIFY_ALERT], m->text);
+    embed_end(&j, 0);
+    dc_send(&j);
+}
+
 static int remind_s(void)
 {
     uint32_t r = settings_get()->alarm_remind_s;
@@ -883,6 +910,9 @@ void discord_task(void *arg)
         // incident's embed is built (the trap appends before the alarm sees it).
         dc_alarm_msg_t m;
         while (xQueueReceive(s_alq, &m, 0) == pdTRUE) handle_alarm(&m, now);
+
+        static notify_msg_t nm;      // task only; off the stack
+        while (s_ntq && xQueueReceive(s_ntq, &nm, 0) == pdTRUE) post_notice(&nm);
 
         discord_status_t st;
         discord_get_status(&st);

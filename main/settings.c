@@ -28,12 +28,20 @@ static const char *TAG = "SETTINGS";
 #define DET_SCAN_WINDOW_S  10
 #define DET_ARP_TARGETS    10
 #define DET_ARP_WINDOW_S   10
+#ifndef WHATSAPP_PHONE
+#define WHATSAPP_PHONE ""
+#endif
+#ifndef WHATSAPP_APIKEY
+#define WHATSAPP_APIKEY ""
+#endif
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
 static SemaphoreHandle_t s_mutex;
 static bool              s_wifi_overridden = false;
+static bool              s_wa_at_boot;   // WhatsApp configured at boot: its task runs only then
 static void            (*s_on_change[4])(void);
+static bool wa_ok(const settings_t *s);
 static int               s_on_change_count = 0;
 
 static void defaults(settings_t *s)
@@ -61,6 +69,8 @@ static void defaults(settings_t *s)
     s->arp_targets    = DET_ARP_TARGETS;
     s->arp_window_s   = DET_ARP_WINDOW_S;
     s->admin_allow_n  = 0;
+    strlcpy(s->whatsapp_phone, WHATSAPP_PHONE, sizeof(s->whatsapp_phone));
+    strlcpy(s->whatsapp_apikey, WHATSAPP_APIKEY, sizeof(s->whatsapp_apikey));
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
@@ -130,9 +140,12 @@ void settings_init(void)
         get_u32(h, "arp_targets", &s_live.arp_targets);
         get_u32(h, "arp_win_s", &s_live.arp_window_s);
         get_allow(h, &s_live);
+        get_str(h, "wa_phone", s_live.whatsapp_phone, sizeof(s_live.whatsapp_phone));
+        get_str(h, "wa_key", s_live.whatsapp_apikey, sizeof(s_live.whatsapp_apikey));
         nvs_close(h);
     }
     s_saved = s_live;
+    s_wa_at_boot = wa_ok(&s_live);
     setenv("TZ", s_live.tz, 1);
     tzset();
     ESP_LOGI(TAG, "Loaded (Wi-Fi %s, Telegram %s)",
@@ -162,7 +175,8 @@ bool settings_reboot_pending(void)
     bool p = strcmp(s_saved.wifi_ssid, s_live.wifi_ssid) ||
              strcmp(s_saved.wifi_password, s_live.wifi_password) ||
              strcmp(s_saved.tg_token, s_live.tg_token) ||
-             strcmp(s_saved.tg_chat_id, s_live.tg_chat_id);
+             strcmp(s_saved.tg_chat_id, s_live.tg_chat_id) ||
+             (wa_ok(&s_saved) && !s_wa_at_boot);     // WhatsApp's task starts only at boot
     xSemaphoreGive(s_mutex);
     return p;
 }
@@ -227,6 +241,25 @@ static bool discord_url_ok(const char *u)
 
 bool settings_discord_enabled(void) { return discord_url_ok(s_live.discord_webhook); }
 
+// +<country code><number>: an optional '+', then 7 to 15 digits (E.164).
+static bool whatsapp_phone_ok(const char *p)
+{
+    if (*p == '+') p++;
+    size_t n = strlen(p);
+    return n >= 7 && n <= 15 && strspn(p, "0123456789") == n;
+}
+
+static bool wa_ok(const settings_t *s)
+{
+    return whatsapp_phone_ok(s->whatsapp_phone) && s->whatsapp_apikey[0] &&
+           alnum_ok(s->whatsapp_apikey, "");
+}
+
+bool settings_whatsapp_enabled(void)
+{
+    return wa_ok(&s_live);
+}
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -269,6 +302,10 @@ static const char *validate(const settings_t *s)
         if (!s->admin_allow[i] || s->admin_allow[i] == 0xFFFFFFFFu || b0 == 127 || b0 >= 224)
                                        return "admin allowlist: unicast IPv4 addresses only";
     }
+    if (s->whatsapp_phone[0] && !whatsapp_phone_ok(s->whatsapp_phone))
+        return "WhatsApp phone: + and 7-15 digits, country code first, no spaces";
+    if (!alnum_ok(s->whatsapp_apikey, ""))
+                                       return "WhatsApp apikey: letters and digits only";
     return NULL;
 }
 
@@ -301,6 +338,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u32(h, "arp_win_s",  s->arp_window_s));
     if (s->admin_allow_n) SET(nvs_set_blob(h, "admin_allow", s->admin_allow, s->admin_allow_n * 4u));
     else nvs_erase_key(h, "admin_allow");
+    SET(nvs_set_str(h, "wa_phone",   s->whatsapp_phone));
+    SET(nvs_set_str(h, "wa_key",     s->whatsapp_apikey));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.
@@ -323,7 +362,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     bool reboot = strcmp(s->wifi_ssid, s_live.wifi_ssid) ||
                   strcmp(s->wifi_password, s_live.wifi_password) ||
                   strcmp(s->tg_token, s_live.tg_token) ||
-                  strcmp(s->tg_chat_id, s_live.tg_chat_id);
+                  strcmp(s->tg_chat_id, s_live.tg_chat_id) ||
+                  (wa_ok(s) && !s_wa_at_boot);       // WhatsApp's task starts only at boot
     // Wi-Fi and Telegram keep their running values until the reboot.
     settings_t next = *s;
     strlcpy(next.wifi_ssid, s_live.wifi_ssid, sizeof(next.wifi_ssid));

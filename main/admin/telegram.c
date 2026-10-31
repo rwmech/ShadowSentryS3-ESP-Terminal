@@ -4,9 +4,12 @@
 #include "config.h"
 #include "settings.h"
 #include "alarm.h"
+#include "notify.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -17,7 +20,8 @@
 static const char *TAG = "TELEGRAM";
 
 static QueueHandle_t s_queue;
-static char s_boot_ip[INET_ADDRSTRLEN];
+static QueueHandle_t s_notice_queue;   // notify.c messages (boot), PSRAM
+static char *s_notice_title, *s_notice_text, *s_notice_msg;   // PSRAM, task only
 
 // ── UTF-8 emoji constants ─────────────────────────────────────────────────────
 // Stored as byte sequences to avoid editor encoding issues.
@@ -213,7 +217,9 @@ static bool send_message(const char *html_text)
 
 void telegram_notify(const attack_log_t *entry)
 {
-    if (!s_queue) return;
+    // Off (placeholder or empty token / chat id): don't queue, so the task
+    // never spends TLS handshakes against api.telegram.org for nothing.
+    if (!s_queue || !settings_telegram_enabled()) return;
     // The dashboard's "Alert on" switches and the ignore list apply here too.
     if ((unsigned)entry->type >= ATTACK_TYPE_COUNT ||
         !alarm_should_alert((uint8_t)entry->type, entry->src_ip, entry->src_mac)) return;
@@ -222,9 +228,78 @@ void telegram_notify(const attack_log_t *entry)
         ESP_LOGD(TAG, "Queue full — notification dropped");
 }
 
-void telegram_set_boot_ip(const char *ip_str)
+// ── Notification layer backend (notify.c) ────────────────────────────────────
+
+#define TELEGRAM_NOTICE_QUEUE  4
+#define TELEGRAM_NOTICE_TITLE  (NOTIFY_TITLE_MAX * 5)   // worst case: every byte "&amp;"
+#define TELEGRAM_NOTICE_TEXT   960
+#define TELEGRAM_NOTICE_MSG    768
+
+static bool notice_send(const notify_msg_t *m)
 {
-    strlcpy(s_boot_ip, ip_str, sizeof(s_boot_ip));
+    return s_notice_queue && xQueueSend(s_notice_queue, m, 0) == pdTRUE;
+}
+
+static const notify_backend_t s_backend = {
+    .name    = "Telegram",
+    .kinds   = NOTIFY_BIT(NOTIFY_BOOT),     // attacks go out per event, below
+    .enabled = settings_telegram_enabled,
+    .send    = notice_send,
+};
+
+void telegram_init(void)
+{
+    s_notice_queue = xQueueCreateWithCaps(TELEGRAM_NOTICE_QUEUE, sizeof(notify_msg_t),
+                                          MALLOC_CAP_SPIRAM);
+    s_notice_title = heap_caps_malloc(TELEGRAM_NOTICE_TITLE, MALLOC_CAP_SPIRAM);
+    s_notice_text  = heap_caps_malloc(TELEGRAM_NOTICE_TEXT, MALLOC_CAP_SPIRAM);
+    s_notice_msg   = heap_caps_malloc(TELEGRAM_NOTICE_MSG, MALLOC_CAP_SPIRAM);
+    if (!s_notice_queue || !s_notice_title || !s_notice_text || !s_notice_msg) {
+        ESP_LOGE(TAG, "No memory for the notice queue, boot message off");
+        return;
+    }
+    notify_register(&s_backend);
+}
+
+// A deauth / ARP attack often knocks us offline at the very moment we need to
+// alert. Wait for the link to recover, then retry, so the notification
+// survives the outage it is reporting.
+static void deliver(const char *msg)
+{
+    for (int attempt = 1; attempt <= TELEGRAM_SEND_RETRIES; attempt++) {
+        int waited = 0;
+        while (!wifi_manager_is_connected() &&
+               waited < TELEGRAM_RECONNECT_WAIT_MS) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            waited += 500;
+        }
+        if (send_message(msg)) break;
+        if (attempt < TELEGRAM_SEND_RETRIES) {
+            ESP_LOGW(TAG, "Alert send attempt %d/%d failed — retrying in %dms",
+                     attempt, TELEGRAM_SEND_RETRIES, TELEGRAM_RETRY_DELAY_MS);
+            vTaskDelay(pdMS_TO_TICKS(TELEGRAM_RETRY_DELAY_MS));
+        } else {
+            ESP_LOGE(TAG, "Alert delivery failed after %d attempts",
+                     TELEGRAM_SEND_RETRIES);
+        }
+    }
+}
+
+// notify.c message: severity dot, bold title, plain text. Buffers are PSRAM
+// so the task's stack budget (see main.c) is unchanged.
+static void send_notice(const notify_msg_t *m)
+{
+    static const char *const DOT[] = {
+        "\xF0\x9F\x9F\xA2",    // U+1F7E2 green circle: info
+        "\xF0\x9F\x9F\xA0",    // U+1F7E0 orange circle: warning
+        "\xF0\x9F\x94\xB4",    // U+1F534 red circle: alert
+    };
+    html_escape(m->title, s_notice_title, TELEGRAM_NOTICE_TITLE);
+    html_escape(m->text, s_notice_text, TELEGRAM_NOTICE_TEXT);
+    snprintf(s_notice_msg, TELEGRAM_NOTICE_MSG, "%s <b>%s</b>\n\n%s",
+             DOT[m->severity <= NOTIFY_ALERT ? m->severity : NOTIFY_ALERT],
+             s_notice_title, s_notice_text);
+    deliver(s_notice_msg);
 }
 
 // ── Task entry point ──────────────────────────────────────────────────────────
@@ -237,26 +312,21 @@ void telegram_task(void *arg)
     ESP_LOGI(TAG, "Ready (queue=%d, timeout=%dms, rate_limit=%dms)",
              TELEGRAM_QUEUE_DEPTH, TELEGRAM_HTTP_TIMEOUT_MS, TELEGRAM_RATE_LIMIT_MS);
 
-    // Send boot-online notification if Telegram is configured and IP is known
-    if (settings_telegram_enabled() && s_boot_ip[0] != '\0') {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-            "\xF0\x9F\x9F\xA2"  // 🟢
-            " <b>ShadowSentry S3 Online</b>\n\n"
-            "\xF0\x9F\x8C\x90"  // 🌐
-            " IP: <code>%s</code>\n"
-            "\xF0\x9F\x9B\xA1"  // 🛡
-            " Honeypots: RTSP / HTTP / Telnet / SSH / FTP\n"
-            "\xF0\x9F\x94\x91"  // 🔑
-            " Admin: <code>http://%s:%d</code>",
-            s_boot_ip, s_boot_ip, ADMIN_PORT);
-        send_message(msg);
-        ESP_LOGI(TAG, "Boot notification sent");
-    }
+    // The boot-online message now arrives through notify.c (notify_boot()),
+    // with the firmware version and the reset reason, on s_notice_queue.
 
     attack_log_t entry;
+    static notify_msg_t notice;     // task only; off the stack
     while (1) {
-        if (xQueueReceive(s_queue, &entry, portMAX_DELAY) != pdTRUE) continue;
+        while (s_notice_queue && xQueueReceive(s_notice_queue, &notice, 0) == pdTRUE) {
+            if (!settings_telegram_enabled()) continue;
+            vTaskDelay(pdMS_TO_TICKS(TELEGRAM_RATE_LIMIT_MS));
+            send_notice(&notice);
+        }
+        if (xQueueReceive(s_queue, &entry, pdMS_TO_TICKS(500)) != pdTRUE) continue;
+
+        // Telegram off: drop the entry (it may predate the setting).
+        if (!settings_telegram_enabled()) continue;
 
         // Rate limit: enforce minimum gap between API calls
         vTaskDelay(pdMS_TO_TICKS(TELEGRAM_RATE_LIMIT_MS));
@@ -392,25 +462,6 @@ void telegram_task(void *arg)
         ESP_LOGD(TAG, "Sending alert for %s (%s)", ip_str,
                  s_type_label[entry.type]);
 
-        // A deauth / ARP attack often knocks us offline at the very moment we
-        // need to alert. Wait for the link to recover, then retry, so the
-        // notification survives the outage it is reporting.
-        for (int attempt = 1; attempt <= TELEGRAM_SEND_RETRIES; attempt++) {
-            int waited = 0;
-            while (!wifi_manager_is_connected() &&
-                   waited < TELEGRAM_RECONNECT_WAIT_MS) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                waited += 500;
-            }
-            if (send_message(msg)) break;
-            if (attempt < TELEGRAM_SEND_RETRIES) {
-                ESP_LOGW(TAG, "Alert send attempt %d/%d failed — retrying in %dms",
-                         attempt, TELEGRAM_SEND_RETRIES, TELEGRAM_RETRY_DELAY_MS);
-                vTaskDelay(pdMS_TO_TICKS(TELEGRAM_RETRY_DELAY_MS));
-            } else {
-                ESP_LOGE(TAG, "Alert delivery failed after %d attempts",
-                         TELEGRAM_SEND_RETRIES);
-            }
-        }
+        deliver(msg);
     }
 }
