@@ -19,7 +19,8 @@ extern "C" {
 #endif
 
 // Boot sound: the opening of Grieg's "In the Hall of the Mountain King"
-// (1875, public domain), at the score's tempo, closing on the tonic. About 3.7 s.
+// (1875, public domain) at the score's tempo: the theme's first statement
+// (bars 2 to 5), then a short close on the tonic. About 8 s.
 extern const melody_note_t MELODY_STARTUP[];
 extern const size_t        MELODY_STARTUP_LEN;
 

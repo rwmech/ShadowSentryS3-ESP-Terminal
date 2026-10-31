@@ -39,6 +39,11 @@ typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_CONFIRM } buz_cmd_t;
 static bool              s_ok = false;
 static SemaphoreHandle_t s_lock;    // buzzer, melody and UI tasks share the buzzer
 static QueueHandle_t     s_cmds;    // NULL: no buzzer task, play on the caller
+// A siren is waiting for the buzzer. Set on request, cleared once it holds the
+// lock. A tune playing checks it every 10 ms and gives way. A flag, not a peek
+// at the queue: the buzzer task takes the SIREN off the queue at once and then
+// waits on the lock, so the queue head never shows it.
+static volatile bool     s_siren_wanted;
 
 static void buzzer_task(void *arg);
 
@@ -105,6 +110,7 @@ static bool stop_requested(void)
 static void siren_play(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_siren_wanted = false;
     ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, SIREN_LO_HZ);
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);   // duty is a count: holds 50 % across frequencies
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
@@ -151,6 +157,8 @@ static void buzzer_task(void *arg)
                 ESP_LOGI(TAG, "First siren done, stack high-water %u B",
                          (unsigned)uxTaskGetStackHighWaterMark(NULL));
             }
+        } else if (c == CMD_SIREN) {
+            s_siren_wanted = false;     // switched off since it was queued
         }
         // A STOP with nothing playing has nothing to stop.
     }
@@ -159,6 +167,8 @@ static void buzzer_task(void *arg)
 static void request(buz_cmd_t cmd)
 {
     if (!s_ok) return;
+    if (cmd == CMD_TEST || (cmd == CMD_SIREN && settings_get()->alarm_sound))
+        s_siren_wanted = true;          // a tune playing stops for it
     if (s_cmds) {
         uint8_t c = (uint8_t)cmd;
         if (xQueueSend(s_cmds, &c, 0) != pdTRUE) ESP_LOGW(TAG, "Buzzer queue full, request dropped");
@@ -182,10 +192,23 @@ void buzzer_stop(void)
     if (xQueueSendToFront(s_cmds, &c, 0) != pdTRUE) ESP_LOGW(TAG, "Buzzer queue full, stop dropped");
 }
 
+// Wait ms in steps of 10 ms. False as soon as a siren wants the buzzer.
+static bool tune_wait(int ms)
+{
+    while (ms > 0) {
+        if (s_siren_wanted) return false;
+        int step = ms < 10 ? ms : 10;
+        vTaskDelay(pdMS_TO_TICKS(step));
+        ms -= step;
+    }
+    return !s_siren_wanted;
+}
+
 // Caller holds s_lock. Each note sounds for ms, then is silent for the rest
 // of its slot; the last note's silence is skipped. A rest (hz 0), or a note
-// LEDC refuses, waits out its slot so the rhythm holds. The timer goes back to
-// BOARD_BUZZER_HZ before the lock is released.
+// LEDC refuses, waits out its slot so the rhythm holds. A siren request ends
+// the tune within 10 ms. The timer goes back to BOARD_BUZZER_HZ before the
+// lock is released.
 static void play_melody_locked(const melody_note_t *notes, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
@@ -195,15 +218,18 @@ static void play_melody_locked(const melody_note_t *notes, size_t n)
         int rest = last ? 0 : slot - on;
         if (notes[i].hz == 0 ||
             ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, notes[i].hz) != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(on + rest));
+            if (!tune_wait(on + rest)) break;
             continue;
         }
         ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-        vTaskDelay(pdMS_TO_TICKS(on));
+        bool go = tune_wait(on);
         ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-        if (rest) vTaskDelay(pdMS_TO_TICKS(rest));
+        if (!go || !tune_wait(rest)) {
+            ESP_LOGI(TAG, "Tune cut at note %u of %u for the siren", (unsigned)(i + 1), (unsigned)n);
+            break;
+        }
     }
     ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
 }
