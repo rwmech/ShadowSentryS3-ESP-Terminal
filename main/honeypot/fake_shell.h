@@ -51,6 +51,7 @@ typedef struct {
     int (*read_byte)(void *io);                     // one byte, or <0 on close/timeout
     int (*write)(void *io, const char *buf, int len);
     bool echo;                                      // server echoes input (SSH: true)
+    uint16_t port;                                  // alternate listen port, 0 = standard (fork)
 } shell_io_t;
 
 // Run the fake shell over an already-"authenticated" transport.

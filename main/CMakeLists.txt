@@ -8,6 +8,8 @@
 #   honeypot/rtsp_trap.c    — port 554, fake Hikvision camera (Core 0)
 #   honeypot/http_trap.c    — port 80,  fake NVR login page  (Core 0)
 #   honeypot/telnet_trap.c  — port 23,  fake Ubuntu banner   (Core 0)
+#   honeypot/adb_trap.c     - port 5555, fake Android TV box (Core 0)
+#   honeypot/trap_listen.c  - 2323 and 2222 on the Telnet and SSH tasks
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -32,6 +34,8 @@ idf_component_register(
         "honeypot/fake_shell.c"
         "honeypot/ssh_trap.c"
         "honeypot/ftp_trap.c"
+        "honeypot/trap_listen.c"
+        "honeypot/adb_trap.c"
         "admin/admin_panel.c"
         "admin/api_ext.c"
         "admin/ws_server.c"

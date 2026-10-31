@@ -12,6 +12,8 @@
 #include "telnet_trap.h"
 #include "ssh_trap.h"
 #include "ftp_trap.h"
+#include "adb_trap.h"
+#include "trap_listen.h"
 #include "admin_panel.h"
 #include "ws_server.h"
 #include "telegram.h"
@@ -83,6 +85,11 @@ static const char *TAG = "MAIN";
 //  wifimon: promiscuous setup + MAC format buffers + attack_log_t(240)
 //           + overhead (~1200)  → 3072 gives ~1.5 KB headroom
 #define STACK_WIFIMON   3072
+//  adb    : session buffers (body, tx, cmd, out, streams) are in PSRAM; the
+//           stack holds attack_log_t(240) + vsnprintf in adb_event, the SPIFFS
+//           append under log_store_append, and the SHA-256 finish
+//           → 6144 (high-water printed at the end of each session)
+#define STACK_ADB       6144
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
 // Telegram is 3 — non-critical, may wait behind WiFi driver work on Core 1.
@@ -207,6 +214,9 @@ void app_main(void)
     ESP_LOGI(TAG, "  │  Telnet  port %-5d  (Fake Ubuntu 20.04)",      TELNET_PORT);
     ESP_LOGI(TAG, "  │  SSH     port %-5d  (Fake OpenSSH 8.9p1)",     SSH_PORT);
     ESP_LOGI(TAG, "  │  FTP     port %-5d  (Fake vsFTPd 3.0.5)",      FTP_PORT);
+    ESP_LOGI(TAG, "  │  Telnet  port %-5d  (alt, same shell, 0 = off)", TELNET_ALT_PORT);
+    ESP_LOGI(TAG, "  │  SSH     port %-5d  (alt, same server, 0 = off)", SSH_ALT_PORT);
+    ESP_LOGI(TAG, "  │  ADB     port %-5d  (Fake Android TV box, 0 = off)", ADB_PORT);
     ESP_LOGI(TAG, "  ├─ Core 1  Admin World ───────────────────");
     ESP_LOGI(TAG, "  │  Panel   http://%s:%d", ip, ADMIN_PORT);
 #if MDNS_ENABLE
@@ -229,6 +239,9 @@ void app_main(void)
     SPAWN(telnet_trap_task, "telnet", STACK_TELNET,   PRIO_HONEYPOT, 0);
     SPAWN(ssh_trap_task,    "ssh",    STACK_SSH,      PRIO_HONEYPOT, 0);
     SPAWN(ftp_trap_task,    "ftp",    STACK_FTP,      PRIO_HONEYPOT, 0);
+#if ADB_PORT
+    SPAWN(adb_trap_task,    "adb",    STACK_ADB,      PRIO_HONEYPOT, 0);
+#endif
 
     // ── Core 1 — Admin World ─────────────────────────────────────────────────
     // Pass IP to telegram before spawning so the task can send the boot alert.
