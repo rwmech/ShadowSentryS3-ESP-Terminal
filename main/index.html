@@ -381,6 +381,30 @@ footer{font-size:13px}
 #page-devices table{min-width:1040px}
 #dv-body td{vertical-align:top}
 #dv-body td:first-child{min-width:220px}
+/* Devices: click a row for its analysis. */
+.dv-row td:first-child::before{content:'\25B8';display:inline-block;width:1.1em;color:var(--g)}
+.dv-row.open td:first-child::before{content:'\25BE'}
+tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var(--border-hi);padding:14px 20px}
+.an{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 28px}
+.an h5{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--g);margin:0 0 6px}
+.an ul{padding-left:18px}
+.an li{font-size:14px;line-height:1.5;margin:3px 0;overflow-wrap:anywhere}
+.an .sg{font-size:15px;font-weight:700;margin-bottom:12px}
+.sg-ok{color:var(--g)}
+.sg-watch{color:var(--amber)}
+.sg-iso{color:var(--red)}
+.an-foot{grid-column:1/-1;font-size:13px;color:var(--muted)}
+/* Logs: Details takes the remaining width and wraps; credentials only when present. */
+.td-dev{min-width:170px;max-width:300px;overflow-wrap:anywhere}
+.td-dev .mono{font-size:14px;color:var(--muted)}
+#lg-table{min-width:960px}
+#lg-table td{vertical-align:top}
+#lg-table td.nw{white-space:nowrap}
+#lg-table.no-cred .c-cred{display:none}
+#lg-table .td-det{width:100%;min-width:300px}
+.tsub{font-size:13px;color:var(--muted)}
+.rep{display:inline-block;margin-right:8px;padding:0 8px;border-radius:10px;font-size:13px;font-weight:700;
+  background:rgba(129,140,248,.15);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
 @media(max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){
   header{flex-wrap:wrap;padding:12px 16px;gap:10px}
@@ -679,7 +703,7 @@ footer{font-size:13px}
   </div>
   <div class="grid2">
     <div class="table-card"><div class="table-hdr"><div class="card-title">Top sources</div></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Source IP</th><th>MAC / Vendor</th><th>Events</th><th>Last seen</th><th>Last type</th></tr></thead><tbody id="top-src"></tbody></table></div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Source IP</th><th>Vendor (MAC)</th><th>Events</th><th>Last seen</th><th>Last type</th></tr></thead><tbody id="top-src"></tbody></table></div></div>
     <div class="table-card"><div class="table-hdr"><div class="card-title">Top credentials</div></div>
       <div class="tbl-wrap"><table><thead><tr><th>Username</th><th>Password</th><th>Tries</th></tr></thead><tbody id="top-cred"></tbody></table></div></div>
   </div>
@@ -691,14 +715,15 @@ footer{font-size:13px}
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option><option>snap</option><option>discovery</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
+        <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
         <a class="btn" id="lg-dl" href="#" download>Download</a>
       </div>
     </div>
     <div class="note" id="lg-note"></div>
-    <div class="tbl-wrap"><table>
-      <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Source IP</th><th>MAC / Vendor</th><th>Username</th><th>Password</th><th>Details</th></tr></thead>
+    <div class="tbl-wrap"><table id="lg-table" class="no-cred">
+      <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Source IP</th><th>Vendor (MAC)</th><th class="c-cred">Username</th><th class="c-cred">Password</th><th>Details</th></tr></thead>
       <tbody id="lg-body"></tbody>
     </table></div>
   </div>
@@ -787,7 +812,7 @@ footer{font-size:13px}
     <div class="msg" id="ig-msg"></div>
     <div class="hint muted" style="margin-bottom:8px">Ignored sources are still logged (flagged "ignored") but never open an incident or send an alert. The panel's IGNORE SOURCE adds here; only this page removes.</div>
     <div class="tbl-wrap"><table>
-      <thead><tr><th>IP</th><th>MAC / Vendor</th><th>Note</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>IP</th><th>Vendor (MAC)</th><th>Note</th><th>Added</th><th></th></tr></thead>
       <tbody id="ig-body"></tbody>
     </table></div>
     <form class="ctl" style="margin-top:10px" onsubmit="addIgnore(event)" autocomplete="off">
@@ -1147,8 +1172,8 @@ async function loadDevices(){
   $('dv-count').textContent=(d.count||0)+' of '+(d.max||64)+(d.truncated?' (list cut)':'');
   const tb=$('dv-body'),devs=d.devices||[];
   if(!devs.length){emptyRow(tb,6,'No devices yet');return;}
-  tb.replaceChildren(...devs.map(x=>{
-    const tr=el('tr'),lab=td(x.label||'unknown');
+  tb.replaceChildren(...devs.flatMap(x=>{
+    const tr=el('tr','dv-row'),lab=td(x.label||'unknown');
     if(x.label_src)lab.append(el('div','dev-sub','from '+x.label_src));
     if(x.host&&x.host!==x.label)lab.append(el('div','dev-sub','host '+x.host));
     const mac=td(x.mac&&x.mac!=='unknown'?x.mac:'','td-mac');
@@ -1159,7 +1184,111 @@ async function loadDevices(){
     last.title=x.last_ts?'last '+fmt(x.last_ts)+(x.first_ts?', first '+fmt(x.first_ts):''):'first seen '+ago(x.first_ago_s);
     const q=td((x.queries||[]).join('\n'),'dev-q');
     tr.append(lab,td(x.ip||'','td-ip'),mac,td(pr+' ('+(x.total||0)+')'),last,q);
-    return tr;}));
+    return dvRows(tr,x);}));
+}
+// ── Device analysis (Devices tab, click a row) ──
+// Plain-language notes on one device, worked out here from the /api/devices
+// fields: no firmware change, no device RAM. Descriptive only. The device keeps
+// its last 4 distinct queries, so older behaviour may not show.
+// Brand of a label, hostname or MAC vendor, for "other makers' gear".
+const DV_BRAND=[[/webOS|\bLG\b|LG Electronics/i,'LG'],[/PlayStation|Sony|BDP|Bravia/i,'Sony'],[/HDHomeRun|SiliconDust/i,'SiliconDust'],
+  [/Roku/i,'Roku'],[/Sonos/i,'Sonos'],[/Chromecast|CrKey|Google|Nest/i,'Google'],[/Samsung|Tizen|SEC_HHP/i,'Samsung'],
+  [/Philips|\bHue\b|IpBridge|Signify/i,'Philips'],[/Xbox|Windows|Microsoft|MSFT/i,'Microsoft'],[/Amazon|Fire TV|Echo/i,'Amazon'],
+  [/Apple|iPhone|iPad/i,'Apple'],[/Belkin|WeMo/i,'Belkin'],[/TP-?Link|Kasa/i,'TP-Link'],[/LIFX/i,'LIFX']];
+// What it searches for. q: tested on each M-SEARCH query; p: a protocol it sent;
+// brand: whose gear that is; w: risk weight of the note (2 isolate, 1 watch).
+const DV_LOOK=[
+  {q:/urn:Belkin:/i,brand:'Belkin',t:'Searching for Belkin WeMo smart plugs (LG Home Dashboard style device discovery)'},
+  {p:'kasa',brand:'TP-Link',t:'Probing for TP-Link Kasa plugs',google:'Probing for TP-Link Kasa plugs; on a Google or Nest device this is usually a leftover smart-home integration'},
+  {p:'lifx',brand:'LIFX',t:'Looking for LIFX bulbs'},
+  {p:'playstation',brand:'Sony',t:'Looking for a PlayStation (Remote Play or the PlayStation App)'},
+  {q:/roku:ecp/i,brand:'Roku',t:'Looking for Roku players'},
+  {q:/ZonePlayer|Sonos/i,brand:'Sonos',t:'Looking for Sonos speakers'},
+  {q:/IpBridge|\bhue\b/i,brand:'Philips',t:'Looking for Philips Hue bridges'},
+  {q:/samsung\.com/i,brand:'Samsung',t:'Looking for Samsung devices'},
+  {q:/dial-multiscreen|:dial:/i,t:'Looking for cast targets (DIAL)'},
+  {q:/MediaServer|ContentDirectory/i,t:'Looking for DLNA media servers'},
+  {q:/MediaRenderer|AVTransport|RenderingControl/i,t:'Looking for DLNA media renderers (screens and speakers to play to)'},
+  {q:/InternetGatewayDevice|WANIPConnection|WANPPPConnection/i,t:'Looking for the router\'s UPnP port-mapping service',
+    risk:'Opens router ports by UPnP if the router allows it: check whether UPnP is on',w:1},
+  {q:/ssdp:all|upnp:rootdevice/i,t:'Looking for every UPnP device'},
+];
+// What it announces itself as, from NOTIFY queries.
+const DV_SAY=[[/MediaRenderer/i,'a DLNA media renderer'],[/MediaServer/i,'a DLNA media server'],[/dial/i,'a DIAL cast target'],
+  [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
+const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
+  dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname'};
+const DV_CHATTY=360;      // packets an hour, all protocols: more than one every 10 s
+const DV_MIN_SPAN=600;    // seconds seen before a rate means anything
+function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}
+function dvAnalysis(x){
+  const id=[],beh=[],risk=[],rate=[];let w=0;
+  const qs=(x.queries||[]).map(String),pr=x.protos||{},vendor=String(x.vendor||''),label=String(x.label||''),host=String(x.host||'');
+  const own=(DV_BRAND.find(([re])=>re.test(label+' '+host+' '+vendor))||[])[1]||'';
+  const span=(+x.first_ago_s||0)-(+x.last_ago_s||0),total=+x.total||0;
+  const flag=(t,weight)=>{risk.push(t);w=Math.max(w,weight);};
+  // Identity
+  id.push(vendor?'MAC vendor: '+vendor:'MAC vendor unknown');
+  if(label&&x.label_src!=='mac-vendor')id.push('Model hint: "'+label+'", from '+(DV_SRC[x.label_src]||String(x.label_src||'?')));
+  if(host&&host!==label)id.push('Hostname: '+host);
+  const vc=(qs.join(' ').match(/class=(\S+)/)||[])[1]||'';
+  const av=vc.match(/android-dhcp-(\d+)/i);
+  if(vc)id.push('DHCP vendor class: '+vc+(av?' (Android '+av[1]+')':/MSFT/i.test(vc)?' (Windows)':''));
+  if(x.random_mac)id.push('Randomised MAC: a phone, or privacy mode on');
+  // Behaviour
+  const looked=new Set();
+  for(const r of DV_LOOK){
+    const hit=r.p?pr[r.p]:qs.some(q=>/^M-SEARCH/i.test(q)&&r.q.test(q));
+    if(!hit)continue;
+    beh.push(r.google&&own==='Google'?r.google:r.t);
+    if(r.brand&&r.brand!==own)looked.add(r.brand==='Belkin'?'Belkin WeMo':r.brand==='TP-Link'?'TP-Link Kasa':r.brand);
+    if(r.risk)flag(r.risk,r.w);
+  }
+  if(pr['ssdp-search']&&!qs.some(q=>/^M-SEARCH/i.test(q)&&DV_LOOK.some(r=>r.q&&r.q.test(q))))beh.push('Searching for UPnP devices');
+  if(pr['ssdp-notify']){
+    const as=DV_SAY.filter(([re])=>qs.some(q=>/^NOTIFY/i.test(q)&&re.test(q))).map(s=>s[1]);
+    beh.push('Announcing itself'+(as.length?' as '+as.join(', '):'')+(span>=DV_MIN_SPAN?', '+dvRate(pr['ssdp-notify'],span)+' times an hour':''));
+  }
+  if(qs.some(q=>/^(Probe|Resolve)\b/.test(q)))beh.push('Looking for WS-Discovery devices (printers, scanners, PCs)');
+  if(qs.some(q=>/^Hello\b/.test(q)))beh.push('Announcing itself over WS-Discovery');
+  const wpad=qs.some(q=>/\bwpad\b/i.test(q));
+  if(wpad)beh.push('Proxy auto-discovery lookup (WPAD)');
+  const names=qs.filter(q=>/^(A|AAAA|ANY|PTR) /.test(q)||/^query /.test(q)).filter(q=>!/\bwpad\b/i.test(q));
+  if(names.length)beh.push('Broadcast name lookups that DNS did not answer: '+names.join('; '));
+  if(qs.some(q=>/^(register|refresh) /.test(q)))beh.push('Registers its NetBIOS name on the LAN');
+  if(pr.dhcp)beh.push('Asked for an address by DHCP');
+  if(!beh.length)beh.push('Nothing beyond the packets counted below');
+  // Risk notes
+  if(av&&+av[1]<=8)flag('Android '+av[1]+'.x, no security updates for years',2);
+  if(wpad)flag('WPAD can be answered by a hostile host to intercept web traffic (the honeypot never answers)',1);
+  if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', '),2);
+  if(span>=DV_MIN_SPAN&&total*3600/span>DV_CHATTY)flag('Very chatty multicast: '+dvRate(total,span)+' packets an hour in all',1);
+  if(!vendor&&x.random_mac)flag('Can\'t identify; check your router\'s client list',1);
+  // Rates
+  if(span>=DV_MIN_SPAN){
+    for(const [k,v] of Object.entries(pr))rate.push(k+': '+dvRate(+v||0,span)+' an hour ('+v+' in '+dur(span)+')');
+  }else rate.push('Seen over '+span+' s only, too short for a rate: '+Object.entries(pr).map(([k,v])=>k+' '+v).join(', '));
+  // Suggestion
+  const known=own||vendor||(label&&x.label_src!=='mac-vendor');
+  const sug=w>=2?['Isolate (guest or IoT network)','sg-iso']:w===1||!known?['Watch','sg-watch']:['Known and benign: name it','sg-ok'];
+  const box=el('div','an'),sec=(h,items)=>{const s=el('div'),u=el('ul');s.append(el('h5','',h));items.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);};
+  sec('Identity',id);sec('Behaviour',beh);sec('Risk notes',risk.length?risk:['None from these rules']);
+  const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
+  const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
+  box.append(el('div','an-foot','Worked out in this page from the table above, by fixed rules. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
+  return box;
+}
+// A device row and its analysis row under it; a click opens or closes it, and
+// the open ones stay open across the 10 s refresh.
+const _dvOpen=new Set();
+function dvRows(tr,x){
+  const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
+  c.colSpan=6;c.append(dvAnalysis(x));an.append(c);
+  const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
+  set(_dvOpen.has(k));
+  tr.title='Click for the analysis';
+  tr.onclick=()=>set(an.hidden);
+  return [tr,an];
 }
 
 // ── Summary metrics ──
@@ -1218,9 +1347,8 @@ function renderSummary(d){
   const ts=$('top-src');
   if(!(d.top_sources||[]).length)emptyRow(ts,5,'No sources yet');
   else ts.replaceChildren(...d.top_sources.map(s=>{
-    const tr=el('tr'),ip=td(s.ip,'td-ip link'),mac=td(s.mac&&s.mac!=='unknown'?s.mac:'','td-mac');
+    const tr=el('tr'),ip=td(s.ip,'td-ip link'),mac=devCell(s.vendor,s.mac);
     ip.title='Filter the log by this IP';ip.onclick=()=>{$('lg-q').value=String(s.ip);renderDay();$('lg-q').scrollIntoView({block:'center'});};
-    if(s.vendor)mac.append(el('span','vendor-chip',s.vendor));
     tr.append(ip,mac,td(s.count),td(fmt(s.last_ts),'td-ts'),td(TNAME[s.last_type]||'?'));return tr;}));
   const tc=$('top-cred');
   if(!(d.top_creds||[]).length)emptyRow(tc,3,'No credentials yet');
@@ -1261,29 +1389,68 @@ async function loadDay(){
     renderDay();
   }catch{note('Could not load '+name+'.');}
 }
-const MAXROWS=1000;
+// Discovery is hidden unless "Show discovery" is ticked (kept in localStorage),
+// or the kind or type filter asks for it. Discovery lines are the kind
+// "discovery" and the Discovery attack type.
+const MAXROWS=1000,DISCO_T=TNAME.indexOf('Discovery'),LS_DISCO='ss_logs_show_discovery';
+const isDisco=o=>o.kind==='discovery'||(o.kind==='attack'&&o.type===DISCO_T);
+try{$('lg-disco').checked=localStorage.getItem(LS_DISCO)==='1';}catch{}
+function setShowDisco(on){try{localStorage.setItem(LS_DISCO,on?'1':'0');}catch{}renderDay();}
 function renderDay(){
   if(!_loaded)return;
   const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value;
-  const rows=_lines.filter(o=>(!k||o.kind===k)&&(t===''||o.type===+t)&&(!q||o._raw.includes(q)));
-  const tb=$('lg-body');
-  if(!rows.length)emptyRow(tb,8,_lines.length?'No matching lines':'No lines');
-  else{const fr=document.createDocumentFragment();rows.slice(0,MAXROWS).forEach(o=>fr.append(logRow(o)));tb.replaceChildren(fr);}
+  const disco=$('lg-disco').checked||k==='discovery'||(t!==''&&+t===DISCO_T);
+  let hid=0;
+  const rows=_lines.filter(o=>{
+    if((k&&o.kind!==k)||(t!==''&&o.type!==+t)||(q&&!o._raw.includes(q)))return false;
+    if(!disco&&isDisco(o)){hid++;return false;}
+    return true;});
+  const vs=groupViews(rows.map(logView)),shown=vs.slice(0,MAXROWS),tb=$('lg-body');
+  // Username and Password only when a row on screen has one.
+  $('lg-table').classList.toggle('no-cred',!shown.some(v=>v.user||v.pass));
+  if(!shown.length)emptyRow(tb,8,_lines.length?'No matching lines':'No lines');
+  else{const fr=document.createDocumentFragment();shown.forEach(v=>fr.append(logRow(v)));tb.replaceChildren(fr);}
   note(_loaded.name+': '+_lines.length+' lines'+(_loaded.cut?' (last '+kb(_tail)+' only; tick "whole file" for all)':'')+
-    (_loaded.bad?', '+_loaded.bad+' unreadable':'')+'. Showing '+Math.min(rows.length,MAXROWS)+' of '+rows.length+' matching, newest first.');
+    (_loaded.bad?', '+_loaded.bad+' unreadable':'')+'. '+rows.length+' matching in '+vs.length+' rows'+
+    (vs.length>MAXROWS?', the newest '+MAXROWS+' shown':'')+', newest first'+
+    (hid?'; '+hid+' discovery lines hidden (tick "Show discovery")':'')+'.');
 }
-function logRow(o){
-  const kind=String(o.kind||'?');
-  let type='',ip='',mac='',user='',pass='',det='';
-  if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=(o.ignored===true?'(ignored) ':'')+(o.payload==null?'':o.payload);}
-  else if(kind==='alarm'){type=TNAME[o.type]||'';ip=o.ip;det='incident #'+o.id+' '+o.event+', '+o.count+' event(s)';}
-  else if(kind==='boot'){det='firmware '+o.fw+', reset: '+(RESET[o.reset]||o.reset);}
-  else if(kind==='discovery'){type=String(o.proto||'');ip=o.ip;mac=o.mac;user=o.host||'';det=(o.what||'')+': '+(o.label?o.label+', ':'')+(o.query||'');}
-  else if(kind==='snap'){det=(o.action||'press')+' photo'+(o.file?': '+o.file+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
-  const tr=el('tr'),mc=td(mac&&mac!=='unknown'?mac:'','td-mac'),dc=td(det==null?'':det,'td-payload');
-  if((kind==='attack'||kind==='discovery')&&o.vendor)mc.append(el('span','vendor-chip',o.vendor));
-  dc.title=String(det==null?'':det);
-  tr.append(td(fmt(+o.ts),'td-ts'),td(kind),td(type),td(ip==null?'':ip,'td-ip'),mc,td(user==null?'':user,'td-cred'),td(pass==null?'':pass,'td-cred'),dc);
+const S=v=>v==null?'':String(v);
+// One log line as table cells, all plain strings.
+function logView(o){
+  const kind=S(o.kind)||'?',v={kind,ts:+o.ts||0,type:'',ip:'',mac:'',vendor:'',user:'',pass:'',det:''};
+  if(kind==='attack'){v.type=TNAME[o.type]||S(o.tname)||'?';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);v.user=S(o.user);v.pass=S(o.pass);v.det=(o.ignored===true?'(ignored) ':'')+S(o.payload);}
+  else if(kind==='alarm'){v.type=TNAME[o.type]||'';v.ip=S(o.ip);v.det='incident #'+S(o.id)+' '+S(o.event)+', '+S(o.count)+' event(s)';}
+  else if(kind==='http'){v.type='HTTP '+S(o.port);v.ip=S(o.ip);v.det=[S(o.category),S(o.request),o.host?'Host '+S(o.host):'',o.ua?'UA '+S(o.ua):'',o.body?'body '+S(o.body):''].filter(Boolean).join(', ');}
+  else if(kind==='boot'){v.det='firmware '+S(o.fw)+', reset: '+(o.reason?S(o.reason):(RESET[o.reset]||S(o.reset)));}
+  else if(kind==='discovery'){v.type=S(o.proto);v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
+    v.det=S(o.what)+': '+[S(o.label),o.host&&o.host!==o.label?'host '+S(o.host):'',S(o.query)].filter(Boolean).join(', ');}
+  else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
+  v.key=isDisco(o)?[kind,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
+  v.n=1;v.t0=v.t1=v.ts;
+  return v;
+}
+// Consecutive identical discovery lines (same source, type and details) become one row.
+function groupViews(vs){
+  const out=[];
+  for(const v of vs){const p=out[out.length-1];
+    if(v.key&&p&&p.key===v.key){p.n++;p.t0=Math.min(p.t0,v.ts);p.t1=Math.max(p.t1,v.ts);}else out.push(v);}
+  return out;
+}
+const isMac=m=>!!m&&m!=='unknown'&&m!=='00:00:00:00:00:00';
+// "vendor (mac)" in one cell; the MAC alone when the vendor is unknown.
+function devCell(vendor,mac){
+  const c=td('','td-dev');vendor=S(vendor);mac=isMac(mac)?S(mac):'';
+  if(vendor)c.append(document.createTextNode(vendor+(mac?' (':'')));
+  if(mac)c.append(el('span','mono',mac));
+  if(vendor&&mac)c.append(document.createTextNode(')'));
+  return c;
+}
+function logRow(v){
+  const tr=el('tr'),tc=td(fmt(v.t0),'td-ts nw'),dc=td('','td-payload td-det');
+  if(v.n>1){const a=fmt(v.t0),b=fmt(v.t1);tc.append(el('div','tsub','to '+(a.slice(0,10)===b.slice(0,10)?b.slice(11):b)));dc.append(el('span','rep','x'+v.n));}
+  dc.append(document.createTextNode(v.det));
+  tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
   return tr;
 }
 
@@ -1394,8 +1561,7 @@ function renderIgnore(d){
   const tb=$('ig-body'),en=d.entries||[];
   if(!en.length)return emptyRow(tb,5,'Nothing ignored');
   tb.replaceChildren(...en.map(x=>{
-    const tr=el('tr'),mc=td(x.mac||'','td-mac'),b=el('button','btn btn-red','Remove'),bc=td('');
-    if(x.vendor)mc.append(el('span','vendor-chip',x.vendor));
+    const tr=el('tr'),mc=devCell(x.vendor,x.mac),b=el('button','btn btn-red','Remove'),bc=td('');
     b.type='button';b.onclick=()=>removeIgnore(x);bc.append(b);
     tr.append(td(x.ip||'','td-ip'),mc,td(x.note||''),td(x.ts?fmt(x.ts):'-','td-ts'),bc);return tr;}));
 }
