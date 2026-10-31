@@ -102,3 +102,8 @@ const char *notify_reset_reason_str(esp_reset_reason_t reason);
 // This boot's reset reason with the stored intent, e.g. "software restart (OTA
 // update)". Valid after notify_init().
 const char *notify_boot_reason(void);
+
+// Internal heap free once every task is up (app_main records it), for
+// GET /api/status now that the board has no serial console. 0 until then.
+void     notify_note_boot_heap(uint32_t internal_free);
+uint32_t notify_boot_heap(void);

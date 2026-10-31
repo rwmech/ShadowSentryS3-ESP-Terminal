@@ -72,6 +72,10 @@ static const char *intent_str(notify_restart_t why)
 
 const char *notify_boot_reason(void) { return s_reason; }
 
+static uint32_t s_boot_internal;
+void notify_note_boot_heap(uint32_t internal_free) { s_boot_internal = internal_free; }
+uint32_t notify_boot_heap(void) { return s_boot_internal; }
+
 void notify_restart_intent(notify_restart_t why)
 {
     nvs_handle_t h;

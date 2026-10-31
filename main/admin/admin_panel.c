@@ -142,12 +142,19 @@ static void serve_status_json(int sock)
     char alarm_j[256];
     ws_format_alarm_json(&a, alarm_j, sizeof(alarm_j));
 
-    char json[400];
+    // No serial console on the board any more: the reset reason and the
+    // internal heap figures come from here instead.
+    char json[640];
     int len = snprintf(json, sizeof(json),
-        "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d,\"alarm\":%s}",
+        "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d,"
+        "\"reset_reason\":\"%s\",\"internal_free\":%lu,\"internal_min\":%lu,"
+        "\"internal_after_boot\":%lu,\"alarm\":%s}",
         (unsigned long long)(esp_timer_get_time() / 1000000ULL),
         (unsigned long)esp_get_free_heap_size(),
-        (int)rssi, alarm_j);
+        (int)rssi, notify_boot_reason(),
+        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned long)notify_boot_heap(), alarm_j);
 
     char hdr[160];
     int hdr_len = snprintf(hdr, sizeof(hdr),

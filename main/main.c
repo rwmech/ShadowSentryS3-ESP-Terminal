@@ -338,9 +338,10 @@ void app_main(void)
     // One "online" message per boot to every enabled backend, with the reset reason.
     notify_boot(ip);
 
+    uint32_t internal_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    notify_note_boot_heap(internal_free);   // shown by GET /api/status
     ESP_LOGI(TAG, "All tasks spawned — free heap: %lu B  (internal: %lu B)",
-             (unsigned long)esp_get_free_heap_size(),
-             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+             (unsigned long)esp_get_free_heap_size(), (unsigned long)internal_free);
 
     // app_main() may return — FreeRTOS scheduler keeps the tasks running.
 }
