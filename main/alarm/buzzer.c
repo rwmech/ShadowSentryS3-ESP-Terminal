@@ -30,7 +30,11 @@ static const char *TAG = "BUZZER";
 #define BUZ_TASK_PRIO    3          // below the alarm task (4), above the UI (2)
 #define BUZ_QUEUE_DEPTH  8
 
-typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP } buz_cmd_t;
+typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_CONFIRM } buz_cmd_t;
+
+// Hold-to-confirm done: two short rising pips, about 110 ms.
+#define CONFIRM_LO_HZ    2700
+#define CONFIRM_HI_HZ    3400
 
 static bool              s_ok = false;
 static SemaphoreHandle_t s_lock;    // buzzer, melody and UI tasks share the buzzer
@@ -127,6 +131,17 @@ static void buzzer_task(void *arg)
     for (;;) {
         uint8_t c;
         if (xQueueReceive(s_cmds, &c, portMAX_DELAY) != pdTRUE) continue;
+        if (c == CMD_CONFIRM) {
+            // Touch feedback, so the click setting governs it. Skipped, not
+            // queued, while the boot tune holds the buzzer.
+            if (settings_get()->touch_click && xSemaphoreTake(s_lock, 0) == pdTRUE) {
+                tone(CONFIRM_LO_HZ, 40, 30);
+                tone(CONFIRM_HI_HZ, 40, 0);
+                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+                xSemaphoreGive(s_lock);
+            }
+            continue;
+        }
         // The alarm sound setting is read when the siren starts, not when queued.
         if (c == CMD_TEST || (c == CMD_SIREN && settings_get()->alarm_sound)) {
             siren_play();
@@ -156,26 +171,39 @@ static void request(buz_cmd_t cmd)
 void buzzer_alarm(void)  { request(CMD_SIREN); }
 void buzzer_remind(void) { request(CMD_SIREN); }
 void buzzer_test(void)   { request(CMD_TEST); }
-void buzzer_stop(void)   { if (s_cmds) request(CMD_STOP); }
+void buzzer_confirm(void){ if (s_cmds) request(CMD_CONFIRM); }   // no task: skip, never block the UI
 
-// Caller holds s_lock. A rest (hz 0), or a note LEDC refuses, waits out its
-// slot so the rhythm holds. The timer goes back to BOARD_BUZZER_HZ before the
-// lock is released.
+// To the front of the queue: stop_requested() only looks at the head, so a
+// CONFIRM (or anything else) queued behind the playing siren must not hide it.
+void buzzer_stop(void)
+{
+    if (!s_ok || !s_cmds) return;
+    uint8_t c = CMD_STOP;
+    if (xQueueSendToFront(s_cmds, &c, 0) != pdTRUE) ESP_LOGW(TAG, "Buzzer queue full, stop dropped");
+}
+
+// Caller holds s_lock. Each note sounds for ms, then is silent for the rest
+// of its slot; the last note's silence is skipped. A rest (hz 0), or a note
+// LEDC refuses, waits out its slot so the rhythm holds. The timer goes back to
+// BOARD_BUZZER_HZ before the lock is released.
 static void play_melody_locked(const melody_note_t *notes, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
-        int gap = (i + 1 < n) ? MELODY_GAP_MS : 0;
+        bool last = i + 1 == n;
+        int on   = notes[i].ms;
+        int slot = notes[i].slot > notes[i].ms ? notes[i].slot : notes[i].ms;
+        int rest = last ? 0 : slot - on;
         if (notes[i].hz == 0 ||
             ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, notes[i].hz) != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(notes[i].ms + gap));
+            vTaskDelay(pdMS_TO_TICKS(on + rest));
             continue;
         }
         ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-        vTaskDelay(pdMS_TO_TICKS(notes[i].ms));
+        vTaskDelay(pdMS_TO_TICKS(on));
         ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-        if (gap) vTaskDelay(pdMS_TO_TICKS(gap));
+        if (rest) vTaskDelay(pdMS_TO_TICKS(rest));
     }
     ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
 }

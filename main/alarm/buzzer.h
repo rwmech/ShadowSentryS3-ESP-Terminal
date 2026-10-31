@@ -14,10 +14,11 @@ extern "C" {
  * return at once: the siren (about 3.2 s) plays on the buzzer's own task, one
  * request after another, so call them from any task. buzzer_stop() ends the
  * siren that is playing. buzzer_boot() and buzzer_play_melody() block for the
- * whole tune (about 3.6 s for the startup melody), so run them from a task of
+ * whole tune (about 3.7 s for the startup melody), so run them from a task of
  * their own; a siren requested meanwhile waits for the tune to end.
  * buzzer_click() is a few milliseconds and never waits: if a siren or tune is
- * playing, the click is skipped.
+ * playing, the click is skipped. buzzer_confirm() queues a short tone for the
+ * buzzer task and returns at once.
  */
 
 void buzzer_init(void);
@@ -39,6 +40,11 @@ void buzzer_boot(void);
 
 // Touch feedback: a ~10 ms click. Safe from the UI task.
 void buzzer_click(void);
+
+// A hold-to-confirm button completed: two short rising pips (~110 ms), queued
+// to the buzzer task, so it returns at once. Follows the touch click setting;
+// skipped while the boot tune plays or if there is no buzzer task.
+void buzzer_confirm(void);
 
 // Play a note table (see melody.h), then put the tone back to BOARD_BUZZER_HZ.
 // Blocks for the whole tune.
