@@ -167,6 +167,17 @@
 #define TRIPWIRE_MSSQL_PORT         1433    // Microsoft SQL Server (client first)
 #define TRIPWIRE_JETDIRECT_PORT     9100    // HP JetDirect raw printing (client first)
 
+// LAN discovery listeners (main/detect/discovery.c): log only, these sockets
+// never send. SSDP 1900, WS-Discovery 3702, LLMNR 5355, NBNS 137, Kasa UDP
+// 9999 and 20002, LIFX 56700, PlayStation 987 and 9302, and DHCP 67 (client
+// broadcasts: hostname, vendor class, parameter list) feed a seen-devices
+// table: GET /api/devices and the dashboard's Devices tab. A new device,
+// protocol or label is logged as a Discovery event, which opens no incident
+// unless switched on under "Alert on". mDNS 5353 is not bound (the mdns
+// component owns it). main/detect/discovery.h has the defaults.
+#define DISCOVERY_ENABLE            1
+#define DISCOVERY_DHCP              1       // 0: leave UDP 67 alone
+
 // ── Telnet fake shell (Cowrie-style) ───────────────────────────────────────────
 //
 // After the Telnet honeypot collects credentials it can "accept" the login and
@@ -336,3 +347,7 @@ _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_REDIS_PORT),     "TRIPWIRE_REDIS_PORT col
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MYSQL_PORT),     "TRIPWIRE_MYSQL_PORT collides with another port");
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MSSQL_PORT),     "TRIPWIRE_MSSQL_PORT collides with another port");
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT collides with another port");
+
+// Discovery: on or off (its ports are UDP and fixed by the protocols)
+_Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
+_Static_assert(DISCOVERY_DHCP == 0 || DISCOVERY_DHCP == 1, "DISCOVERY_DHCP must be 0 or 1");

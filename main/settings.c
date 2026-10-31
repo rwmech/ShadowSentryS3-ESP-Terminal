@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "config.h"
+#include "log_store.h"        // ATTACK_DISCOVERY, ATTACK_TYPE_COUNT
 #include "nvs.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +29,17 @@ static const char *TAG = "SETTINGS";
 #define DET_SCAN_WINDOW_S  10
 #define DET_ARP_TARGETS    10
 #define DET_ARP_WINDOW_S   10
+// Alert switches. Every type opens an incident by default, except LAN
+// discovery, which is background noise (logged, no incident). Bits past the
+// known types stay set, so a type added later alerts unless listed here.
+#define ALERT_DEFAULT_OFF   (1u << ATTACK_DISCOVERY)
+#define ALERT_MASK_DEFAULT  (0xFFFFFFFFu & ~ALERT_DEFAULT_OFF)
+// A saved mask records how many types its firmware knew (NVS "alert_known").
+// Bits from there up were set by the rule above, not by a choice, so on load
+// they take this firmware's default. A mask saved before the key existed
+// knew the 13 types before ATTACK_DISCOVERY.
+#define ALERT_KNOWN_LEGACY  ATTACK_DISCOVERY
+_Static_assert(ATTACK_TYPE_COUNT <= 32, "alert_mask has a bit per type");
 #ifndef WHATSAPP_PHONE
 #define WHATSAPP_PHONE ""
 #endif
@@ -61,9 +73,9 @@ static void defaults(settings_t *s)
     s->touch_click    = true;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
-    // Detection: every type alerts (bits past the known types stay set, so a
-    // type added later alerts by default), thresholds, admin ports open.
-    s->alert_mask     = 0xFFFFFFFFu;
+    // Detection: every type alerts except discovery (ALERT_MASK_DEFAULT),
+    // thresholds, admin ports open.
+    s->alert_mask     = ALERT_MASK_DEFAULT;
     s->scan_ports     = DET_SCAN_PORTS;
     s->scan_window_s  = DET_SCAN_WINDOW_S;
     s->arp_targets    = DET_ARP_TARGETS;
@@ -135,6 +147,12 @@ void settings_init(void)
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
         get_u32(h, "alert_mask", &s_live.alert_mask);
+        uint8_t known = ALERT_KNOWN_LEGACY;
+        get_u8(h, "alert_known", &known);
+        if (known < 32) {               // types newer than the saved mask: default
+            uint32_t newer = ~((1u << known) - 1u);
+            s_live.alert_mask = (s_live.alert_mask & ~newer) | (ALERT_MASK_DEFAULT & newer);
+        }
         get_u32(h, "scan_ports", &s_live.scan_ports);
         get_u32(h, "scan_win_s", &s_live.scan_window_s);
         get_u32(h, "arp_targets", &s_live.arp_targets);
@@ -332,6 +350,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
     SET(nvs_set_u32(h, "alert_mask", s->alert_mask));
+    SET(nvs_set_u8(h,  "alert_known", ATTACK_TYPE_COUNT));
     SET(nvs_set_u32(h, "scan_ports", s->scan_ports));
     SET(nvs_set_u32(h, "scan_win_s", s->scan_window_s));
     SET(nvs_set_u32(h, "arp_targets", s->arp_targets));

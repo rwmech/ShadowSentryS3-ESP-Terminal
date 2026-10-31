@@ -72,11 +72,11 @@ static QueueHandle_t s_q;
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
-    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
 };
 static const char *TYPE_HEX[] = {   // same palette as the web dashboard
     "a78bfa", "fbbf24", "f87171", "38bdf8", "34d399", "f472b6", "fb923c", "a3e635",
-    "22d3ee", "94a3b8", "e879f9", "3ddc84", "ef4444",
+    "22d3ee", "94a3b8", "e879f9", "3ddc84", "ef4444", "818cf8",
 };
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
 _Static_assert(sizeof(TYPE_HEX) / sizeof(TYPE_HEX[0]) == ATTACK_TYPE_COUNT, "TYPE_HEX: one per attack_type_t");

@@ -5,6 +5,7 @@
 
 #include "detect.h"
 #include "ignore.h"
+#include "discovery.h"            // discovery_frame_tap(): source MACs for the discovery listeners
 #include "settings.h"
 #include "log_store.h"
 #include "telegram.h"
@@ -178,11 +179,13 @@ int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
     return 0;
 }
 
-// Station netif input wrapper (Wi-Fi RX task): peek at ARP requests, pass all on.
+// Station netif input wrapper (Wi-Fi RX task): peek at ARP requests, hand every
+// frame to the discovery tap (source MACs), pass all on.
 static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
 {
+    if (p && p->payload) discovery_frame_tap((const uint8_t *)p->payload, p->len);
     if (s_q && p && p->payload && p->len >= 42) {
         const uint8_t *f = (const uint8_t *)p->payload;
         static const uint8_t REQ[8] = { 0, 1, 8, 0, 6, 4, 0, 1 };   // Ethernet, IPv4, who-has

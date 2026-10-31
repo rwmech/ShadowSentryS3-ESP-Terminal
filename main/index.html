@@ -183,6 +183,9 @@ main{flex:1;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
 .fb-sweep {background:rgba(232,121,249,.12);color:#e879f9;  border:1px solid rgba(232,121,249,.28)}
 .fb-adb   {background:rgba(61,220,132,.12); color:#3ddc84;  border:1px solid rgba(61,220,132,.28)}
 .fb-trip  {background:rgba(239,68,68,.12);  color:#ef4444;  border:1px solid rgba(239,68,68,.28)}
+.fb-disco {background:rgba(129,140,248,.12);color:#818cf8;  border:1px solid rgba(129,140,248,.28)}
+.dev-q{color:var(--muted);font-family:monospace;font-size:.68rem;white-space:pre-line;max-width:380px;overflow-wrap:anywhere}
+.dev-sub{color:var(--muted);font-size:.66rem}
 .ign-chip{font-size:.6rem;padding:1px 6px;margin-left:6px;border-radius:8px;color:var(--muted);border:1px dashed var(--muted)}
 .alerts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px 18px}
 .alerts label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:.75rem}
@@ -323,6 +326,7 @@ footer{
   <nav class="tabs">
     <button class="tab" id="tab-dash" onclick="showPage('dash')">Dashboard</button>
     <button class="tab" id="tab-logs" onclick="showPage('logs')">Logs</button>
+    <button class="tab" id="tab-devices" onclick="showPage('devices')">Devices</button>
     <button class="tab" id="tab-settings" onclick="showPage('settings')">Settings</button>
   </nav>
   <div class="spacer"></div>
@@ -409,6 +413,7 @@ footer{
           <circle id="arc-sweep"  cx="70" cy="70" r="54" fill="none" stroke="#e879f9" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-adb"    cx="70" cy="70" r="54" fill="none" stroke="#3ddc84" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-trip"   cx="70" cy="70" r="54" fill="none" stroke="#ef4444" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-disco"  cx="70" cy="70" r="54" fill="none" stroke="#818cf8" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
         </svg>
         <div class="donut-center">
           <div class="dc-val" id="dc-total">0</div>
@@ -493,6 +498,12 @@ footer{
           <span class="lname">Tripwire</span>
           <div class="lbar"><div class="lbar-fill" id="lb-trip" style="background:#ef4444;width:0%"></div></div>
           <span class="lval" id="lv-trip">0</span>
+        </div>
+        <div class="legend-item" data-ftype="13" onclick="setFilter(13)">
+          <div class="legend-dot" style="background:#818cf8"></div>
+          <span class="lname">Discovery</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-disco" style="background:#818cf8;width:0%"></div></div>
+          <span class="lval" id="lv-disco">0</span>
         </div>
       </div>
     </div>
@@ -603,7 +614,7 @@ footer{
         <label class="muted" style="font-size:.72rem"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option><option>snap</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option><option>snap</option><option>discovery</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <a class="btn" id="lg-dl" href="#" download>Download</a>
       </div>
@@ -612,6 +623,21 @@ footer{
     <div class="tbl-wrap"><table>
       <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Source IP</th><th>MAC / Vendor</th><th>Username</th><th>Password</th><th>Details</th></tr></thead>
       <tbody id="lg-body"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<main id="page-devices" hidden>
+  <div class="table-card">
+    <div class="table-hdr" style="flex-wrap:wrap;gap:10px">
+      <div class="card-title">Devices seen on the LAN</div>
+      <span class="muted" style="font-size:.7rem" id="dv-count"></span>
+      <div class="ctl"><button class="btn" onclick="loadDevices()">Refresh</button></div>
+    </div>
+    <div class="note" id="dv-note"></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Label</th><th>IP</th><th>MAC / Vendor</th><th>Protocols (packets)</th><th>Last seen</th><th>Last queries</th></tr></thead>
+      <tbody id="dv-body"></tbody>
     </table></div>
   </div>
 </main>
@@ -734,15 +760,16 @@ function fmt(ts){
   return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 const BADGE=['<span class="feed-badge fb-rtsp">RTSP</span>','<span class="feed-badge fb-http">HTTP</span>','<span class="feed-badge fb-telnet">TELNET</span>','<span class="feed-badge fb-ssh">SSH</span>','<span class="feed-badge fb-ftp">FTP</span>','<span class="feed-badge fb-arp">ARP</span>','<span class="feed-badge fb-wifi">WIFI</span>','<span class="feed-badge fb-shell">SHELL</span>',
-  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>','<span class="feed-badge fb-trip">TRIPWIRE</span>'];
-const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;','&#128276;'];
+  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>','<span class="feed-badge fb-trip">TRIPWIRE</span>','<span class="feed-badge fb-disco">DISCOVERY</span>'];
+const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;','&#128276;','&#128250;'];
 const CIRC=2*Math.PI*54;
 // One entry per attack_type_t (main/storage/log_store.h), in order.
-const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire'];
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery'];
 const TCOUNT=TNAME.length;
-const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies'];
+const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies','UDP'];
 const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured',
-  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL or JetDirect: any connection is the alert'];
+  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL or JetDirect: any connection is the alert',
+  'A device seen on SSDP, WS-Discovery, LLMNR, NBNS, DHCP or a vendor broadcast (log only)'];
 const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
@@ -818,7 +845,7 @@ function setVal(id,val){
 }
 
 // donut chart, one arc per attack type (index = attack_type_t)
-const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb','trip'];
+const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb','trip','disco'];
 function updateDonut(vals){
   vals=vals||[];const sum=vals.reduce((a,b)=>a+(b||0),0),tot=sum||1,gap=4,n=DKEYS.length;
   let off=0;
@@ -1017,16 +1044,46 @@ const dur=s=>{s=s|0;const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Mat
 const RESET=['unknown','power-on','external','software','panic','interrupt WDT','task WDT','other WDT','deep sleep','brownout','SDIO','USB','JTAG','eFuse','power glitch','CPU lockup'];
 const ASTATE=['idle','active, not acknowledged','acknowledged'];
 
-const PAGES=['dash','logs','settings'];
+const PAGES=['dash','logs','devices','settings'];
 function showPage(p){
   if(!PAGES.includes(p))p='dash';
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
   if(p==='logs'){loadSummary();loadDays();}
   if(p==='settings'){loadSettings();loadIgnore();}
+  if(p==='devices')loadDevices();
 }
 window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
 setInterval(()=>{if(!$('page-logs').hidden)loadSummary();},30000);
+setInterval(()=>{if(!$('page-devices').hidden)loadDevices();},10000);
+
+// ── Devices (LAN discovery, GET /api/devices) ──
+// Every string here came off the LAN: textContent only (el/td), never innerHTML.
+const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
+async function loadDevices(){
+  let d;
+  try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw 0;d=await r.json();}
+  catch{$('dv-note').textContent='Devices unavailable';return;}
+  const ls=(d.listeners||[]).map(l=>String(l.name)+' '+l.port+(l.open?'':' ('+(l.error||'closed')+')'));
+  $('dv-note').textContent='Listening, log only: '+ls.join(', ')+'. mDNS: '+String(d.mdns||'')+'. '+
+    (d.packets||0)+' packets'+(d.events_held?', '+d.events_held+' events held':'')+(d.sd_dropped?', '+d.sd_dropped+' log lines rate-limited':'')+'.';
+  $('dv-count').textContent=(d.count||0)+' of '+(d.max||64)+(d.truncated?' (list cut)':'');
+  const tb=$('dv-body'),devs=d.devices||[];
+  if(!devs.length){emptyRow(tb,6,'No devices yet');return;}
+  tb.replaceChildren(...devs.map(x=>{
+    const tr=el('tr'),lab=td(x.label||'unknown');
+    if(x.label_src)lab.append(el('div','dev-sub','from '+x.label_src));
+    if(x.host&&x.host!==x.label)lab.append(el('div','dev-sub','host '+x.host));
+    const mac=td(x.mac&&x.mac!=='unknown'?x.mac:'','td-mac');
+    if(x.vendor)mac.append(el('span','vendor-chip',x.vendor));
+    if(x.random_mac)mac.append(el('div','dev-sub','random MAC'));
+    const pr=Object.entries(x.protos||{}).map(([k,v])=>k+' '+v).join(', ');
+    const last=td(ago(x.last_ago_s),'td-ts');
+    last.title=x.last_ts?'last '+fmt(x.last_ts)+(x.first_ts?', first '+fmt(x.first_ts):''):'first seen '+ago(x.first_ago_s);
+    const q=td((x.queries||[]).join('\n'),'dev-q');
+    tr.append(lab,td(x.ip||'','td-ip'),mac,td(pr+' ('+(x.total||0)+')'),last,q);
+    return tr;}));
+}
 
 // ── Summary metrics ──
 function bars(id,vals,labels){
@@ -1144,9 +1201,10 @@ function logRow(o){
   if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=(o.ignored===true?'(ignored) ':'')+(o.payload==null?'':o.payload);}
   else if(kind==='alarm'){type=TNAME[o.type]||'';ip=o.ip;det='incident #'+o.id+' '+o.event+', '+o.count+' event(s)';}
   else if(kind==='boot'){det='firmware '+o.fw+', reset: '+(RESET[o.reset]||o.reset);}
+  else if(kind==='discovery'){type=String(o.proto||'');ip=o.ip;mac=o.mac;user=o.host||'';det=(o.what||'')+': '+(o.label?o.label+', ':'')+(o.query||'');}
   else if(kind==='snap'){det=(o.action||'press')+' photo'+(o.file?': '+o.file+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
   const tr=el('tr'),mc=td(mac&&mac!=='unknown'?mac:'','td-mac'),dc=td(det==null?'':det,'td-payload');
-  if(kind==='attack'&&o.vendor)mc.append(el('span','vendor-chip',o.vendor));
+  if((kind==='attack'||kind==='discovery')&&o.vendor)mc.append(el('span','vendor-chip',o.vendor));
   dc.title=String(det==null?'':det);
   tr.append(td(fmt(+o.ts),'td-ts'),td(kind),td(type),td(ip==null?'':ip,'td-ip'),mc,td(user==null?'':user,'td-cred'),td(pass==null?'':pass,'td-cred'),dc);
   return tr;

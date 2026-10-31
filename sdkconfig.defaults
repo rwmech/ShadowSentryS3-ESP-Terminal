@@ -27,10 +27,15 @@ CONFIG_MBEDTLS_SSL_PROTO_TLS1_1=n
 CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
-# 39 sockets needed at worst with the extra listeners (Telnet 2323, SSH 2222, ADB 5555),
-# the HTTP engine (80, 8080, 8000, 9000) and the 7 tripwires (one connection at a time);
-# 20 listening PCBs; 19 established TCP connections at worst, without the backlogs
-CONFIG_LWIP_MAX_SOCKETS=48
+# 49 sockets needed at worst with the extra listeners (Telnet 2323, SSH 2222, ADB 5555),
+# the HTTP engine (80, 8080, 8000, 9000), the 7 tripwires (one connection at a time)
+# and the 10 UDP discovery listeners; FD_SETSIZE 64 leaves 14 descriptors for files
+# (SPIFFS 4, FAT 4, stdio 3). 20 listening PCBs; 19 established TCP connections at
+# worst, without the backlogs
+CONFIG_LWIP_MAX_SOCKETS=50
+# UDP PCBs: 10 discovery listeners plus DHCP, DNS, SNTP and mDNS come to about 15 of
+# the default 16
+CONFIG_LWIP_MAX_UDP_PCBS=24
 CONFIG_LWIP_MAX_LISTENING_TCP=32
 CONFIG_LWIP_MAX_ACTIVE_TCP=24
 CONFIG_ESP_TASK_WDT_EN=n
