@@ -194,7 +194,10 @@ void ws_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port      = ADMIN_WS_PORT;
-    cfg.ctrl_port        = ADMIN_WS_PORT + 1;        // own control port (distinct)
+    // The control socket is UDP on localhost. ADMIN_WS_PORT + 1 (9999) took
+    // UDP 9999 from the Kasa discovery listener; this is the only httpd, so the
+    // IDF default port is free.
+    cfg.ctrl_port        = ESP_HTTPD_DEF_CTRL_PORT;
     cfg.max_open_sockets = ADMIN_WS_MAX_CLIENTS + 1;
     cfg.lru_purge_enable = true;
     cfg.stack_size       = 8192;                     // broadcast_work formats JSON here
