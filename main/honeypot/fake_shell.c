@@ -7,6 +7,7 @@
 #include "lwip/sockets.h"   // struct sockaddr_in
 #include "lwip/inet.h"      // inet_ntoa()
 #include "esp_log.h"
+#include "esp_timer.h"      // idle and session timing (fork)
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -114,21 +115,59 @@ typedef struct {
 
 static void put(const shell_io_t *io, const char *s) { io->write(io->io, s, (int)strlen(s)); }
 
+// Input state kept across lines (fork)
+typedef struct {
+    bool last_cr;           // the last line ended in CR, so its LF may follow
+    uint32_t bytes;         // received this session
+    int64_t deadline;       // esp_timer_get_time() at which the session ends
+    const char *end;        // why read_line() gave up
+} rx_t;
+
 // Read one command line through the transport. Handles backspace, treats Ctrl-D
-// on an empty line as logout, swallows a stray LF left by a CRLF terminator, and
+// on an empty line as logout, swallows the LF of a CRLF terminator, and
 // (when io->echo) echoes input back the way an SSH PTY in raw mode expects.
-// Returns line length, 0 for a blank line, or -1 on close/timeout.
-static int read_line(const shell_io_t *io, char *out, size_t outlen)
+// Fork: a bare LF ends a line (only an LF right after a CR is swallowed);
+// Ctrl-C drops the line; ESC [ ... final and ESC O x sequences (arrow and
+// function keys) are dropped; a line longer than the buffer is dropped whole;
+// the session ends on the idle timeout, the session cap or the byte cap.
+// Returns line length, 0 for a blank or dropped line, or -1 on close/timeout
+// (rx->end says why).
+static int read_line(const shell_io_t *io, rx_t *rx, char *out, size_t outlen)
 {
     size_t pos = 0;
+    int esc = 0;                                     // 1 after ESC, 2 in ESC [, 3 after ESC O
+    bool overlong = false;
     for (;;) {
+        int64_t t0 = esp_timer_get_time();
         int ci = io->read_byte(io->io);
-        if (ci < 0) return -1;
+        if (ci < 0) {
+            bool idle = esp_timer_get_time() - t0 >= (int64_t)(FAKE_SHELL_IDLE_S - 1) * 1000000;
+            rx->end = idle ? "idle" : "closed";
+            return -1;
+        }
+        if (++rx->bytes > FAKE_SHELL_MAX_INPUT) { rx->end = "byte cap"; return -1; }
+        if (esp_timer_get_time() > rx->deadline) { rx->end = "session cap"; return -1; }
         unsigned char c = (unsigned char)ci;
 
-        if (pos == 0 && c == '\n') continue;        // LF of a previous line's CRLF
-        if (c == 0x04 && pos == 0) return -1;        // Ctrl-D on empty line → logout
-        if (c == '\r' || c == '\n') break;           // end of line
+        if (c == '\0') continue;                     // CR NUL from a telnet client
+        bool after_cr = rx->last_cr;
+        rx->last_cr = false;
+        if (c == '\n' && after_cr && pos == 0) continue;    // LF of a CRLF
+        if (c == '\r' || c == '\n') {                // end of line
+            rx->last_cr = (c == '\r');
+            break;
+        }
+        if (esc == 1) { esc = c == '[' ? 2 : c == 'O' ? 3 : 0; continue; }
+        if (esc == 2) { if (c >= 0x40 && c <= 0x7E) esc = 0; continue; }
+        if (esc == 3) { esc = 0; continue; }
+        if (c == 0x1B) { esc = 1; continue; }
+        if (c == 0x04 && pos == 0) { rx->end = "logout"; return -1; }  // Ctrl-D on empty line → logout
+        if (c == 0x03) {                             // Ctrl-C: drop the line
+            put(io, "^C\r\n");
+            out[0] = '\0';
+            return 0;
+        }
+        if (overlong) continue;                      // dropped up to the newline
         if (c == 0x7F || c == 0x08) {                // backspace / delete
             if (pos) { pos--; if (io->echo) io->write(io->io, "\b \b", 3); }
             continue;
@@ -137,9 +176,12 @@ static int read_line(const shell_io_t *io, char *out, size_t outlen)
         if (pos < outlen - 1) {
             out[pos++] = (char)c;
             if (io->echo) { char ch = (char)c; io->write(io->io, &ch, 1); }
+        } else {
+            overlong = true;
         }
     }
     if (io->echo) io->write(io->io, "\r\n", 2);      // echo the Enter
+    if (overlong) pos = 0;
     out[pos] = '\0';
     return (int)pos;
 }
@@ -323,14 +365,20 @@ void fake_shell_run(const shell_io_t *io, struct sockaddr_in *addr, const char *
 
     char prompt[128];
     char line[FAKE_SHELL_CMD_MAXLEN];
+    rx_t rx = { .deadline = esp_timer_get_time() + (int64_t)FAKE_SHELL_SESSION_S * 1000000,
+                .end = "command cap" };
 
     for (int n = 0; n < FAKE_SHELL_MAX_COMMANDS; n++) {
         snprintf(prompt, sizeof(prompt), "%s@" HOSTNAME ":%s%s ",
                  sh.user, display_cwd(sh.cwd, sh.home), sh.is_root ? "#" : "$");
         put(io, prompt);
 
-        int len = read_line(io, line, sizeof(line));
-        if (len < 0) break;             // disconnect / Ctrl-D / timeout
+        int len = read_line(io, &rx, line, sizeof(line));
+        if (len < 0) {                  // disconnect / Ctrl-D / timeout / caps
+            // bash with TMOUT set says this before it exits (fork)
+            if (!strcmp(rx.end, "idle")) put(io, "\atimed out waiting for input: auto-logout\r\n");
+            break;
+        }
         if (len == 0) continue;         // blank line — just re-prompt
 
         // Log the command (dashboard transcript); escalate to Telegram on IOCs.
@@ -340,9 +388,10 @@ void fake_shell_run(const shell_io_t *io, struct sockaddr_in *addr, const char *
         log_event(addr, mac, sh.user, detail, ioc);
         ESP_LOGW(TAG, "[%s] cmd: %s%s", ip, line, ioc ? "  <IOC>" : "");
 
-        if (dispatch(&sh, line)) break;
+        if (dispatch(&sh, line)) { rx.end = "logout"; break; }
     }
 
-    ESP_LOGI(TAG, "[%s] shell session ended (task stack free: %u B)",
-             ip, (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+    ESP_LOGI(TAG, "[%s] shell session ended (%s, %u B in, task stack free: %u B)",
+             ip, rx.end, (unsigned)rx.bytes,
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
 }

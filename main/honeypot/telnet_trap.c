@@ -137,6 +137,9 @@ static void handle_client(int sock, struct sockaddr_in *addr, uint16_t port)
                 .echo      = false,          // telnet client echoes locally
                 .port      = port != TELNET_PORT ? port : 0,
             };
+            // The shell's idle limit, not the login prompt's (fork)
+            struct timeval itv = {.tv_sec = FAKE_SHELL_IDLE_S, .tv_usec = 0};
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &itv, sizeof(itv));
             fake_shell_run(&io, addr, user[0] ? user : "root");
             return;
         }
