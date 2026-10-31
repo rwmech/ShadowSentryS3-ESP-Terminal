@@ -40,3 +40,16 @@ project(shadow_sentry_s3)
 idf_component_get_property(lwip lwip COMPONENT_LIB)
 target_include_directories(${lwip} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/main/detect")
 target_compile_definitions(${lwip} PRIVATE "ESP_IDF_LWIP_HOOK_FILENAME=\"ss_lwip_hooks.h\"")
+
+# ── LVGL allocations in PSRAM (main/ui/lv_mem_psram.c) ────────────────────────
+# LV_MEM_CUSTOM=y calls malloc(), which keeps every object under 16 KB internal.
+# The LVGL 8 Kconfig only exposes LV_MEM_CUSTOM_INCLUDE, so the allocator names
+# go in as compile definitions on the lvgl target (they win over the Kconfig
+# include, which lv_conf_internal.h only uses when the macro is undefined).
+idf_component_get_property(lvgl lvgl__lvgl COMPONENT_LIB)
+target_include_directories(${lvgl} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/main/ui")
+target_compile_definitions(${lvgl} PRIVATE
+    "LV_MEM_CUSTOM_INCLUDE=\"lv_mem_psram.h\""
+    "LV_MEM_CUSTOM_ALLOC=lv_psram_malloc"
+    "LV_MEM_CUSTOM_FREE=lv_psram_free"
+    "LV_MEM_CUSTOM_REALLOC=lv_psram_realloc")
