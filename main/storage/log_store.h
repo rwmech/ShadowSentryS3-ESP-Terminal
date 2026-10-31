@@ -17,6 +17,7 @@ typedef enum {
     ATTACK_PROBE     = 9,   // SYN to a trap port with no login or request
     ATTACK_ARP_SWEEP = 10,  // one MAC asking who-has for many hosts
     ATTACK_ADB       = 11,  // Android Debug Bridge on 5555 (honeypot/adb_trap.c)
+    ATTACK_TRIPWIRE  = 12,  // connection to a tripwire port (honeypot/tripwire.c)
     ATTACK_TYPE_COUNT       // number of types; size every per-type table with it
 } attack_type_t;
 

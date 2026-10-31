@@ -22,7 +22,7 @@ extern "C" {
  *       ATTACK_SCAN event, then nothing until 60 s of quiet, then a summary
  *       ATTACK_SCAN event ("Scan ended: N ports total").
  *     - a SYN to a trap port (FTP, SSH, Telnet, HTTP, RTSP, Telnet 2323, SSH 2222,
- *       ADB 5555): one ATTACK_PROBE per
+ *       ADB 5555, HTTP 8080/8000/9000, the tripwire ports): one ATTACK_PROBE per
  *       source, port and minute, held 1.5 s so a scan that starts meanwhile
  *       folds it in; none while that source is scanning.
  *     - arp_targets distinct who-has targets from one MAC within arp_window_s:

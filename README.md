@@ -27,7 +27,7 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ## This fork: Elecrow ESP Terminal 3.5" edition
 
-This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap, the alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports, and the NVR page is also served on the alternate HTTP ports.
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap, the alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, tripwires on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports, and the NVR page is also served on the alternate HTTP ports.
 
 ### Hardware (board revision V1.0)
 
@@ -53,6 +53,13 @@ Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not u
 | 80, 8080, 8000, 9000 | HTTP, fake NVR (upstream page), one engine task | HTTP | 8080, 8000 and 9000 are fork additions, `HTTP_ALT_PORT1..3` |
 | 554 | RTSP, fake Hikvision (upstream) | RTSP | |
 | 5555 | ADB, fake Android TV box (fork) | ADB | `ADB_PORT` |
+| 445 | SMB tripwire (fork) | Tripwire | `TRIPWIRE_SMB_PORT` |
+| 1433 | MSSQL tripwire (fork) | Tripwire | `TRIPWIRE_MSSQL_PORT` |
+| 3306 | MySQL tripwire, sends a 5.7 handshake (fork) | Tripwire | `TRIPWIRE_MYSQL_PORT` |
+| 3389 | RDP tripwire (fork) | Tripwire | `TRIPWIRE_RDP_PORT` |
+| 5900 | VNC tripwire, sends `RFB 003.008` (fork) | Tripwire | `TRIPWIRE_VNC_PORT` |
+| 6379 | Redis tripwire (fork) | Tripwire | `TRIPWIRE_REDIS_PORT` |
+| 9100 | JetDirect tripwire (fork) | Tripwire | `TRIPWIRE_JETDIRECT_PORT` |
 
 The fork's ports follow a ranking of what reaches a home LAN most often: unauthenticated ADB (infected Android TV boxes and residential-proxy apps hunt for it), then Telnet and SSH bruteforce on the alternate ports. Each port option takes 0 to disable it; `main/honeypot/trap_listen.h` has defaults for a `config.h` written before these options. The alternate ports run on the existing Telnet and SSH tasks through `select()` (no extra stack, one wolfSSH context), so each service serves one session at a time across its two ports, as upstream does on one port. An event from an alternate port ends in "(port N)".
 
@@ -79,10 +86,15 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - Labels, first match wins, from the request's shape and the User-Agent only: non-HTTP payload, oversize request (head over 4 KB, a line over 1 KB, a URL over 512 B), path with .., login POST, dotfile path (a segment starting with "."), unusual method (not GET, POST or HEAD), scanner UA (nmap, masscan, zgrab, Nuclei, Nikto and a few more), HTTP library UA (curl, Wget, python-requests, Go-http-client and a few more), else unclassified. The microSD attack line gets `"category"` (`non_http`, `oversize`, `dotdot_path`, `login_post`, `dotfile_path`, `odd_method`, `scanner_ua`, `library_ua`, `unclassified`).
   - The whole request is kept on the card: a `{"kind":"http"}` line per request with the port, category, request line, Host, User-Agent, the first 512 B of the body and the lengths. The console prints the same.
   - Limits: 4 KB head and 8 KB body read, one request per connection, 5 s idle and 10 s per connection, 2 s send timeout. At most 60 events a minute reach the flash ring and the alerts; past that, requests go to the console and the card only, and one event says how many. Nothing is fetched or executed. Buffers are in PSRAM; the 4 KB task stack is internal (it writes SPIFFS) and its high-water is printed at each new low.
+- Tripwires (`main/honeypot/tripwire.c`, `TRIPWIRE_ENABLE`, default on): ports for services the board does not run and nothing on a home LAN should ask it for, so any connection is the alert (find the host, or pull it off the network). RDP 3389, VNC 5900, SMB 445, Redis 6379, MySQL 3306, MSSQL 1433 and JetDirect 9100 (`TRIPWIRE_<NAME>_PORT`, 0 disables one).
+  - Per connection: accept, send the banner if the service speaks first (VNC `RFB 003.008`; MySQL a 5.7 handshake with no TLS offered, so a client sends its login packet), wait up to 3 s for the client's first bytes, read at most 64, log one Tripwire event and close. No protocol or credential parsing, no second round trip, 5 s per connection, one connection at a time across all seven ports.
+  - The event reads `<service> on <port>: <first bytes in hex>` (`no data` if the client sent nothing), trimmed to the 128-byte payload; the console prints all 64 bytes. The microSD attack line gets `"service"` (`RDP`, `VNC`, `SMB`, `Redis`, `MySQL`, `MSSQL`, `JetDirect`).
+  - Rate limit: one event per source and service per 30 s. Further connections in that window are accepted, printed on the console and counted, and the next event says how many (`RDP on 3389 (+4 held): ...`).
+  - Each tripwire port is also a trap port for the probe detector. One internal 3 KB task stack (it writes SPIFFS); its high-water is printed at each new low.
 - Recon detection (`main/detect/detect.c`), so a scan raises an alert before any trap sees a login:
   - an lwIP IPv4 input hook sees every inbound TCP SYN (plus FIN, NULL and Xmas probes) and UDP datagram to the board, open port or not. It only queues (source, port, protocol); the gateway and replies to the board's own DNS, DHCP, NTP and mDNS are skipped.
   - Port scan: 5 distinct ports from one source within 10 s (both settings) raise one "Port scan" event with the port count, lowest to highest port, protocol and sample ports. Nothing more while it continues; after 60 s of quiet a summary follows ("Scan ended: N ports total", with the trap ports it found).
-  - Probe: a SYN to a trap port (21, 22, 23, 80, 554, 2222, 2323, 5555, 8000, 8080, 9000; a disabled one excluded) raises one "Probe" per source, port and minute. It is held 1.5 s, so a scan that starts meanwhile folds it in; none while that source is scanning.
+  - Probe: a SYN to a trap port (21, 22, 23, 80, 554, 2222, 2323, 5555, 8000, 8080, 9000 and the tripwire ports 445, 1433, 3306, 3389, 5900, 6379, 9100; a disabled one excluded) raises one "Probe" per source, port and minute. It is held 1.5 s, so a scan that starts meanwhile folds it in; none while that source is scanning.
   - ARP sweep: a wrapper on the station interface's input sees ARP who-has requests (every frame is passed on). One MAC asking for 10 distinct hosts within 10 s (settings) raises one "ARP sweep" event with the MAC, vendor, count and range, then a summary after 60 s of quiet. The gateway and the board itself are excluded.
   - The three are new attack types (appended, so the flash ring stays readable) shown everywhere: panel, dashboard type list, filters and charts, microSD `tname`, Telegram.
   - The Logs page shows the detector's counters since boot (scans, probes, sweeps, packets queued and dropped, admin SYNs hidden, ARP tap on or off).

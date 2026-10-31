@@ -151,6 +151,22 @@
 #define HTTP_ALT_PORT2              8000
 #define HTTP_ALT_PORT3              9000
 
+// Tripwires (main/honeypot/tripwire.c): ports for services this box does not
+// run. Any connection is logged as a Tripwire event and alerts: the service,
+// the port and the client's first bytes in hex, then the connection is
+// closed. One task, one connection at a time, 5 s each; one event per source
+// and service per 30 s, more connections counted into the next one.
+// TRIPWIRE_ENABLE 0 turns them all off; 0 disables one port.
+// main/honeypot/tripwire.h has the defaults and checks for a config.h without these.
+#define TRIPWIRE_ENABLE             1
+#define TRIPWIRE_RDP_PORT           3389    // Remote Desktop (client first)
+#define TRIPWIRE_VNC_PORT           5900    // VNC, sends "RFB 003.008"
+#define TRIPWIRE_SMB_PORT           445     // SMB, worm propagation (client first)
+#define TRIPWIRE_REDIS_PORT         6379    // Redis (client first)
+#define TRIPWIRE_MYSQL_PORT         3306    // MySQL, sends a 5.7 handshake
+#define TRIPWIRE_MSSQL_PORT         1433    // Microsoft SQL Server (client first)
+#define TRIPWIRE_JETDIRECT_PORT     9100    // HP JetDirect raw printing (client first)
+
 // ── Telnet fake shell (Cowrie-style) ───────────────────────────────────────────
 //
 // After the Telnet honeypot collects credentials it can "accept" the login and
@@ -307,3 +323,16 @@ _Static_assert(ADB_PORT        == 0 || PORT_FREE_(ADB_PORT),        "ADB_PORT co
 _Static_assert(TELNET_ALT_PORT == 0 || TELNET_ALT_PORT != SSH_ALT_PORT, "TELNET_ALT_PORT and SSH_ALT_PORT must differ");
 _Static_assert(ADB_PORT == 0 || (ADB_PORT != TELNET_ALT_PORT && ADB_PORT != SSH_ALT_PORT),
     "ADB_PORT collides with an alternate port");
+
+// Tripwire ports: not on another trap, admin or HTTP port (tripwire.h also
+// checks that no two tripwire ports are the same)
+#define TRIPWIRE_FREE_(p) ((p) == 0 || (PORT_FREE_(p) && (p) != TELNET_ALT_PORT && \
+                           (p) != SSH_ALT_PORT && (p) != ADB_PORT && (p) != HTTP_ALT_PORT1 && \
+                           (p) != HTTP_ALT_PORT2 && (p) != HTTP_ALT_PORT3))
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_RDP_PORT),       "TRIPWIRE_RDP_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_VNC_PORT),       "TRIPWIRE_VNC_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_SMB_PORT),       "TRIPWIRE_SMB_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_REDIS_PORT),     "TRIPWIRE_REDIS_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MYSQL_PORT),     "TRIPWIRE_MYSQL_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MSSQL_PORT),     "TRIPWIRE_MSSQL_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT collides with another port");

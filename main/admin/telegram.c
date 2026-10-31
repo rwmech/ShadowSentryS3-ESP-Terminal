@@ -42,6 +42,7 @@ static char *s_notice_title, *s_notice_text, *s_notice_msg;   // PSRAM, task onl
 #define EMOJI_SHELL  "\xF0\x9F\x90\x9A"   // 🐚 (U+1F41A — interactive fake shell)
 #define EMOJI_SCAN   "\xF0\x9F\x94\x8D"   // U+1F50D: port scan, probe, ARP sweep
 #define EMOJI_ADB    "\xF0\x9F\x93\xB1"   // U+1F4F1: Android Debug Bridge
+#define EMOJI_TRIP   "\xF0\x9F\x94\x94"   // U+1F514: tripwire port
 
 // Convert a 2-letter ISO country code into its flag emoji (two regional-
 // indicator code points, 8 UTF-8 bytes + NUL). Writes "" for an invalid code.
@@ -62,9 +63,9 @@ static void cc_flag(const char *cc, char *out)
 }
 
 static const char *s_type_label[] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell",
-                                     "Port scan", "Probe", "ARP sweep", "ADB"};
+                                     "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire"};
 static const char *s_type_emoji[] = {EMOJI_RTSP, EMOJI_HTTP, EMOJI_TELNET, EMOJI_SSH, EMOJI_FTP, EMOJI_ARP, EMOJI_WIFI, EMOJI_SHELL,
-                                     EMOJI_SCAN, EMOJI_SCAN, EMOJI_SCAN, EMOJI_ADB};
+                                     EMOJI_SCAN, EMOJI_SCAN, EMOJI_SCAN, EMOJI_ADB, EMOJI_TRIP};
 _Static_assert(sizeof(s_type_label) / sizeof(s_type_label[0]) == ATTACK_TYPE_COUNT, "s_type_label: one per attack_type_t");
 _Static_assert(sizeof(s_type_emoji) / sizeof(s_type_emoji[0]) == ATTACK_TYPE_COUNT, "s_type_emoji: one per attack_type_t");
 
@@ -433,7 +434,7 @@ void telegram_task(void *arg)
                 mac_line,
                 pay_h);
         } else if (entry.type >= ATTACK_SCAN) {
-            // Recon (detect.c) and ADB: no credentials; the payload says what was seen.
+            // Recon (detect.c), ADB and tripwires: no credentials; the payload says what was seen.
             snprintf(msg, sizeof(msg),
                 EMOJI_ALERT " <b>ShadowSentry S3 Alert</b>\n\n"
                 "%s Attack: <b>%s</b>\n"
