@@ -37,6 +37,8 @@ idf_component_register(
         "admin/ws_server.c"
         "admin/telegram.c"
         "admin/discord.c"
+        "admin/notify.c"
+        "admin/whatsapp.c"
         "storage/log_store.c"
         "storage/sd_log.c"
         "settings.c"

@@ -23,6 +23,12 @@ static const char *TAG = "SETTINGS";
 #ifndef DISCORD_WEBHOOK_URL
 #define DISCORD_WEBHOOK_URL ""
 #endif
+#ifndef WHATSAPP_PHONE
+#define WHATSAPP_PHONE ""
+#endif
+#ifndef WHATSAPP_APIKEY
+#define WHATSAPP_APIKEY ""
+#endif
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
@@ -48,6 +54,8 @@ static void defaults(settings_t *s)
     s->touch_click    = true;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
+    strlcpy(s->whatsapp_phone, WHATSAPP_PHONE, sizeof(s->whatsapp_phone));
+    strlcpy(s->whatsapp_apikey, WHATSAPP_APIKEY, sizeof(s->whatsapp_apikey));
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
@@ -99,6 +107,8 @@ void settings_init(void)
         get_bool(h, "click", &s_live.touch_click);
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
+        get_str(h, "wa_phone", s_live.whatsapp_phone, sizeof(s_live.whatsapp_phone));
+        get_str(h, "wa_key", s_live.whatsapp_apikey, sizeof(s_live.whatsapp_apikey));
         nvs_close(h);
     }
     s_saved = s_live;
@@ -196,6 +206,20 @@ static bool discord_url_ok(const char *u)
 
 bool settings_discord_enabled(void) { return discord_url_ok(s_live.discord_webhook); }
 
+// +<country code><number>: an optional '+', then 7 to 15 digits (E.164).
+static bool whatsapp_phone_ok(const char *p)
+{
+    if (*p == '+') p++;
+    size_t n = strlen(p);
+    return n >= 7 && n <= 15 && strspn(p, "0123456789") == n;
+}
+
+bool settings_whatsapp_enabled(void)
+{
+    return whatsapp_phone_ok(s_live.whatsapp_phone) && s_live.whatsapp_apikey[0] &&
+           alnum_ok(s_live.whatsapp_apikey, "");
+}
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -223,6 +247,10 @@ static const char *validate(const settings_t *s)
                                        return "brightness must be 5-100 %";
     if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
         return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
+    if (s->whatsapp_phone[0] && !whatsapp_phone_ok(s->whatsapp_phone))
+        return "WhatsApp phone: + and 7-15 digits, country code first, no spaces";
+    if (!alnum_ok(s->whatsapp_apikey, ""))
+                                       return "WhatsApp apikey: letters and digits only";
     return NULL;
 }
 
@@ -248,6 +276,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "click",      s->touch_click));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
+    SET(nvs_set_str(h, "wa_phone",   s->whatsapp_phone));
+    SET(nvs_set_str(h, "wa_key",     s->whatsapp_apikey));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.

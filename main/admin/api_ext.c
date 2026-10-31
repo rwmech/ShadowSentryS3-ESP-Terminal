@@ -15,6 +15,8 @@
 #include "log_store.h"
 #include "wifi_manager.h"
 #include "discord.h"
+#include "whatsapp.h"
+#include "notify.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -303,6 +305,9 @@ static void get_settings(int sock)
     jb_bool(&j, "discord_webhook_set", s.discord_webhook[0]);  JB_LIT(&j, ",");   // never the URL
     jb_bool(&j, "discord_enabled", settings_discord_enabled()); JB_LIT(&j, ",");
     jb_bool(&j, "discord_log_events", s.discord_log_events);   JB_LIT(&j, ",");
+    JB_LIT(&j, "\"whatsapp_phone\":"); jb_str(&j, s.whatsapp_phone, sizeof(s.whatsapp_phone)); JB_LIT(&j, ",");
+    jb_bool(&j, "whatsapp_apikey_set", s.whatsapp_apikey[0]);  JB_LIT(&j, ",");   // never the key
+    jb_bool(&j, "whatsapp_enabled", settings_whatsapp_enabled()); JB_LIT(&j, ",");
     jb_bool(&j, "reboot_pending", settings_reboot_pending());
     JB_LIT(&j, ",\"running_wifi_ssid\":");
     char ssid[sizeof(live->wifi_ssid)];
@@ -434,6 +439,11 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
     if (dc_clear) s.discord_webhook[0] = '\0';
     if (!err) err = take_bool(root, "discord_log_events", &s.discord_log_events);
+    if (!err) err = take_str(root, "whatsapp_phone", s.whatsapp_phone, sizeof(s.whatsapp_phone), false);
+    if (!err) err = take_str(root, "whatsapp_apikey", s.whatsapp_apikey, sizeof(s.whatsapp_apikey), true);
+    bool wa_clear = false;      // blank means "unchanged", so clearing needs saying
+    if (!err) err = take_bool(root, "whatsapp_apikey_clear", &wa_clear);
+    if (wa_clear) s.whatsapp_apikey[0] = '\0';
     s.brightness = (uint8_t)bright;
     bool pw_changed = false;
     {
@@ -444,6 +454,7 @@ static void post_settings(int sock, const char *req, int req_len)
     wipe_item(root, "wifi_password");
     wipe_item(root, "tg_token");
     wipe_item(root, "discord_webhook");
+    wipe_item(root, "whatsapp_apikey");
     cJSON_Delete(root);
 
     bool reboot = false;
@@ -495,6 +506,35 @@ static void get_discord_status(int sock)
     send_json(sock, &j);
 }
 
+// Same pattern as Discord: the test runs on the WhatsApp task.
+static void post_whatsapp_test(int sock)
+{
+    if (!settings_whatsapp_enabled()) { send_error(sock, "409 Conflict", "WhatsApp phone or apikey not set"); return; }
+    uint32_t n = whatsapp_request_test();
+    if (!n) { send_error(sock, "503 Service Unavailable", "WhatsApp task not running"); return; }
+    jb_t j;
+    jb_init(&j);
+    jb_printf(&j, "{\"queued\":true,\"test\":%lu}", (unsigned long)n);
+    send_json(sock, &j);
+}
+
+static void get_whatsapp_status(int sock)
+{
+    whatsapp_status_t w;
+    whatsapp_get_status(&w);
+    jb_t j;
+    jb_init(&j);
+    JB_LIT(&j, "{");
+    jb_bool(&j, "enabled", settings_whatsapp_enabled());
+    JB_LIT(&j, ",");
+    jb_bool(&j, "test_ok", w.test_ok);
+    jb_printf(&j, ",\"test_req\":%lu,\"test_done\":%lu,\"test_status\":%d,\"last_status\":%d,"
+                  "\"sent\":%lu,\"failed\":%lu,\"dropped\":%lu}",
+              (unsigned long)w.test_req, (unsigned long)w.test_done, w.test_status, w.last_status,
+              (unsigned long)w.sent, (unsigned long)w.failed, (unsigned long)w.dropped);
+    send_json(sock, &j);
+}
+
 static void post_reboot(int sock)
 {
     ESP_LOGW(TAG, "Reboot requested from the dashboard");
@@ -503,6 +543,7 @@ static void post_reboot(int sock)
     shutdown(sock, SHUT_RDWR);
     close(sock);
     vTaskDelay(pdMS_TO_TICKS(500));
+    notify_restart_intent(NOTIFY_RESTART_DASHBOARD);
     esp_restart();
 }
 
@@ -770,7 +811,7 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (post && !strcmp(path, "/api/alarm/clear")) { post_alarm_clear(sock); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
-           R_DC_TEST, R_DC_STATUS } r = R_NONE;
+           R_DC_TEST, R_DC_STATUS, R_WA_TEST, R_WA_STATUS } r = R_NONE;
     if      (get  && !strcmp(path, "/api/settings"))    r = R_SET_GET;
     else if (post && !strcmp(path, "/api/settings"))    r = R_SET_POST;
     else if (post && !strcmp(path, "/api/reboot"))      r = R_REBOOT;
@@ -780,6 +821,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     else if (get  && !strcmp(path, "/api/logs/file"))   r = R_FILE;
     else if (post && !strcmp(path, "/api/discord/test"))   r = R_DC_TEST;
     else if (get  && !strcmp(path, "/api/discord/status")) r = R_DC_STATUS;
+    else if (post && !strcmp(path, "/api/whatsapp/test"))   r = R_WA_TEST;
+    else if (get  && !strcmp(path, "/api/whatsapp/status")) r = R_WA_STATUS;
     if (r == R_NONE) return false;
 
     // A client that stops reading can't hold the single admin task for ever.
@@ -796,6 +839,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     case R_FILE:     get_log_file(sock, query); break;
     case R_DC_TEST:  post_discord_test(sock); break;
     case R_DC_STATUS: get_discord_status(sock); break;
+    case R_WA_TEST:  post_whatsapp_test(sock); break;
+    case R_WA_STATUS: get_whatsapp_status(sock); break;
     default: break;
     }
     return true;

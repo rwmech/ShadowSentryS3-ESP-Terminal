@@ -3,6 +3,7 @@
 #include "config.h"
 #include "log_store.h"
 #include "alarm.h"
+#include "notify.h"
 #include "wifi_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -223,8 +224,9 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
     default:
         *ts_out = (uint32_t)time(NULL);
         return snprintf(buf, len,
-            "{\"kind\":\"boot\",\"ts\":%lu,\"fw\":\"%s\",\"reset\":%d}\n",
-            (unsigned long)*ts_out, SHADOWSENTRY_VERSION, (int)esp_reset_reason());
+            "{\"kind\":\"boot\",\"ts\":%lu,\"fw\":\"%s\",\"reset\":%d,\"reason\":\"%s\"}\n",
+            (unsigned long)*ts_out, SHADOWSENTRY_VERSION, (int)esp_reset_reason(),
+            notify_boot_reason());     // device text from a fixed table: no JSON escaping needed
     }
 }
 
