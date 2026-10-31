@@ -153,6 +153,11 @@ Signal ladder: a device announcing itself on multicast only proves it exists. A 
 
 ## Platform
 
+- Upstream-friendly feature switches. Rob, 2026-10-31: "the product owner may want to take our forked code back into his repo so we should play nice". Make the fork's hardware features optional at build time, so Rdx1S can take the generic parts (settings, SD log, Discord/WhatsApp notify, scan detection) onto a plain ESP32-S3 devkit:
+  - compile-time switches for the panel (LVGL plus LovyanGFX), the camera, the buzzer and the microSD;
+  - the idf_component.yml dependencies only when enabled;
+  - `idf.py build` verified alongside PlatformIO.
+  Consider splitting the fork's work into upstreamable pull requests later.
 - Display and board HAL, for later. Rob, 2026-10-31: "at some point you'll need to HAL the display or offer another display but right now we just have the one. I have another board we can add here later."
   - Plan when the second board arrives: board.h selects the board at build time (one PlatformIO env per board), and the UI talks to a small display/touch/buzzer/backlight interface instead of LovyanGFX and the FT6236 directly. Each board supplies its own driver behind that interface.
   - Not started; wait for the board and its pin map.
