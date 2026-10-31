@@ -32,14 +32,27 @@ extern "C" {
  *   DHCP            67   client broadcasts (receive only; the board's own
  *                        DHCP client is on 68): hostname (12), vendor class
  *                        (60), parameter request list (55) as a fingerprint
- * mDNS (5353) is not bound: the espressif/mdns component owns 5353 through a
- * raw lwIP pcb without SOF_REUSEADDR, so a second bind fails, and a bind that
- * won the race would take .local away from the board. See the README.
+ *   mDNS          5353   no socket: the espressif/mdns component owns 5353
+ *                        through a raw lwIP pcb without SOF_REUSEADDR, so a
+ *                        second bind fails, and one that won the race would
+ *                        take .local away from the board. Instead the frame
+ *                        tap copies queries (QR=0, standard opcode) to
+ *                        224.0.0.251 or to us, up to DISCOVERY_MDNS_COPY bytes,
+ *                        into a DISCOVERY_MDNS_SLOTS ring in PSRAM (dropped
+ *                        and counted when full); the task reads the questions
+ *                        with the same bounded DNS name reader as LLMNR. The
+ *                        mdns component is untouched and still answers. IPv4
+ *                        only.
  *
  * Source MACs: a UDP socket only gives the source IP, so the station netif
  * input wrapper in detect.c (Wi-Fi RX task) hands every frame to
- * discovery_frame_tap(), which queues (IP, MAC) for UDP to these ports. DHCP
- * uses the packet's chaddr. Otherwise the ARP cache is asked.
+ * discovery_frame_tap(), which queues (IP, MAC) for UDP to these ports (mDNS
+ * slots carry their own). DHCP uses the packet's chaddr. Otherwise the ARP
+ * cache is asked.
+ *
+ * Vendors: oui_lookup() (main/storage/oui.h: the microSD database, else the
+ * compact table) on this task, cached; a device with nothing better is
+ * labelled "<vendor> device".
  *
  * Seen devices (PSRAM): up to DISCOVERY_DEV_MAX keyed by MAC (by IP while the
  * MAC is unknown), least recently seen evicted. Each has the IP, first and
@@ -55,15 +68,28 @@ extern "C" {
  *   - an SD line {"kind":"discovery",...} per new device, new protocol, new
  *     label or new query string for a device (DISCOVERY_SD_BURST, then one per
  *     DISCOVERY_SD_REFILL_MS)
- *   - an ATTACK_DISCOVERY event (flash ring, dashboard, panel, Discord event
- *     log) only for a new device, protocol or label, DISCOVERY_EV_BURST then
- *     one per DISCOVERY_EV_REFILL_S; the rest are counted into the next one as
- *     "(+N held)". Discovery is background noise: its alert bit is off by
- *     default (settings.c), so it opens no incident unless switched on.
+ *   - a Discord digest every DISCOVERY_DIGEST_S, only when something new was
+ *     seen: "LAN devices seen (last 30 min)", one line per device with news
+ *     (label, IP or MAC, what it did in plain words from a table in flash:
+ *     "looking for media servers (DLNA)", "asked for WPAD (proxy
+ *     auto-discovery)", "DHCP request, hostname LGwebOSTV"), at most
+ *     DISCOVERY_DIGEST_LINES, cut at word boundaries, then "+N more on the
+ *     Devices tab". Discovery events no longer post line by line.
+ *   - an ATTACK_DISCOVERY event only for a new device, protocol or label,
+ *     DISCOVERY_EV_BURST then one per DISCOVERY_EV_REFILL_S; the rest are
+ *     counted into the next one as "(+N held)". It never goes through
+ *     log_store_append(), so it is not in the 200-entry flash ring, the
+ *     dashboard's attack list and feed, the panel's events or stats.bin (not
+ *     counted there at all; the device table has its own counts). It goes to
+ *     Discord's event log (discord_log_event), the incident logic
+ *     (alarm_note_event) and Telegram, and the last two apply the alert mask:
+ *     discovery is background noise, its bit is off by default (settings.c),
+ *     so it opens no incident unless switched on.
  *   - GET /api/devices (main/admin/api_devices.c) and the dashboard's Devices tab
  *
- * Memory: receive buffer (1500 B), device table, MAC map and the queue in
- * PSRAM; the task stack is internal because log_store_append() writes SPIFFS.
+ * Memory: receive buffer (1500 B), device table, MAC map, the MAC queue and
+ * the mDNS ring in PSRAM. Nothing on the task touches flash (no SPIFFS, no
+ * NVS: only queues, sockets and RAM lookups), so its stack is in PSRAM too.
  *
  * The defaults below let a config.h written before these options still build.
  */
@@ -85,7 +111,15 @@ extern "C" {
 #define DISCOVERY_EV_REFILL_S   30      // ... then one per this many seconds
 #define DISCOVERY_SD_BURST      20      // SD lines at once ...
 #define DISCOVERY_SD_REFILL_MS  3000    // ... then one per this many ms
-#define DISCOVERY_TASK_STACK    3584    // internal; high-water logged on each new low
+#define DISCOVERY_MDNS_SLOTS    8       // mDNS queries waiting for the task
+#define DISCOVERY_MDNS_COPY     512     // bytes of each query kept (the questions come first)
+#define DISCOVERY_ACT_KEEP      3       // plain-words activities per device per digest
+#define DISCOVERY_ACT_LEN       64
+#define DISCOVERY_DIGEST_S      1800    // Discord digest period
+#define DISCOVERY_DIGEST_LINES  20      // devices per digest, the rest "+N more"
+#define DISCOVERY_DIGEST_LINE   90      // characters per line, cut at a word
+#define DISCOVERY_DIGEST_MAX    1800    // characters in all (Discord allows 2000)
+#define DISCOVERY_TASK_STACK    4096    // PSRAM; high-water logged on each new low
 #define DISCOVERY_TASK_PRIO     2
 
 _Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
@@ -100,9 +134,10 @@ void discovery_init(void);
 void discovery_task(void *arg);
 
 // Station netif input wrapper (detect.c), Wi-Fi RX task, every frame: queues
-// (source IP, source MAC) for IPv4 UDP to a discovery port. Constant time,
-// never blocks or logs.
-void discovery_frame_tap(const uint8_t *frame, size_t len);
+// (source IP, source MAC) for IPv4 UDP to a discovery port, and copies mDNS
+// queries to 224.0.0.251 or our_ip (network order) into the ring. Constant
+// time (one bounded copy), never allocates, blocks or logs; a single producer.
+void discovery_frame_tap(const uint8_t *frame, size_t len, uint32_t our_ip);
 
 // The seen-devices table and listener status as one JSON object, newest
 // first, into buf (cap bytes, NUL-terminated). Every string is escaped; the

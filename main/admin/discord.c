@@ -56,6 +56,7 @@ static const char *TAG = "DISCORD";
 #define DC_RECENT           8       // recent events kept for the incident-open embed
 #define DC_REMIND_MIN_S     30
 #define DC_DRAIN_MAX        128     // events handled per loop before checking the rest
+#define DC_DIGEST_QUEUE     2       // discovery digests (char * owned by us once queued)
 
 #define COLOR_RED     0xE53935
 #define COLOR_AMBER   0xFFB300
@@ -91,7 +92,7 @@ typedef struct {
     char     payload[128];
 } dc_recent_t;
 
-static QueueHandle_t     s_evq, s_alq, s_ntq;
+static QueueHandle_t     s_evq, s_alq, s_ntq, s_dgq;
 static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;
 static discord_status_t  s_stat;                // guarded by s_mux
 static bool              s_running;
@@ -166,6 +167,23 @@ static void on_event(const attack_log_t *e)
     if (xQueueSend(s_evq, e, 0) != pdTRUE) count_drop();
 }
 
+void discord_log_event(const attack_log_t *e)
+{
+    if (s_evq && e) on_event(e);
+}
+
+bool discord_post_digest(char *lines)
+{
+    if (!lines) return false;
+    if (!s_dgq || !(settings_get()->discord_log_events && settings_discord_enabled()) ||
+        xQueueSend(s_dgq, &lines, 0) != pdTRUE) {
+        free(lines);
+        return false;
+    }
+    return true;
+}
+
+
 void discord_note_dashboard_ack(void)
 {
     s_dash_ack_tick = xTaskGetTickCount() | 1;
@@ -196,6 +214,7 @@ void discord_init(void)
     if (s_prev.state == ALARM_ACTIVE) s_carry = s_prev;   // survived a reboot
     alarm_add_listener(on_alarm);
     log_store_add_listener(on_event);
+    s_dgq = xQueueCreate(DC_DIGEST_QUEUE, sizeof(char *));
     s_ntq = xQueueCreateWithCaps(DC_NOTICE_QUEUE, sizeof(notify_msg_t), MALLOC_CAP_SPIRAM);
     if (s_ntq) notify_register(&s_backend);
 }
@@ -231,6 +250,19 @@ static void clean(char *dst, size_t cap, const char *src, size_t max)
         dst[o++] = (char)c;
     }
     dst[o] = '\0';
+}
+
+// Shorten s in place to at most max characters, at a word boundary when
+// there is one in the second half, ending in "..." when anything was cut.
+static void shorten(char *s, size_t max)
+{
+    size_t n = strlen(s);
+    if (n <= max || max < 8) { if (n > max) s[max] = '\0'; return; }
+    size_t cut = max - 3, b = cut;
+    while (b > max / 2 && s[b] != ' ' && s[b] != ',' && s[b] != ';' && s[b] != '/' && s[b] != ':') b--;
+    if (b > max / 2) cut = b;
+    while (cut && (s[cut - 1] == ' ' || s[cut - 1] == ',' || s[cut - 1] == ';' || s[cut - 1] == ':')) cut--;
+    memcpy(s + cut, "...", 4);
 }
 
 static void ip_str(uint32_t ip, char out[16])
@@ -697,7 +729,7 @@ static void summarise(const attack_log_t *e, char *out, size_t cap)
 {
     const char *p = e->payload;
     const size_t plen = strnlen(p, sizeof(e->payload));
-    char a[48], b[32];
+    char a[132], b[72];
     size_t o = 0;
     out[0] = '\0';
     switch (e->type) {
@@ -708,12 +740,14 @@ static void summarise(const attack_log_t *e, char *out, size_t cap)
             while (i + n < plen && p[i + n] != ' ' && p[i + n] != '\t' && p[i + n] != ';' &&
                    p[i + n] != '|' && p[i + n] != '&' && n < 32) n++;
             clean(a, sizeof(a), p + i, n);
+            shorten(a, 32);
             app(out, cap, &o, "ran ");
             app(out, cap, &o, a[0] ? a : "?");
             return;
         }
         if (plen == sizeof("shell session opened") - 1 && !memcmp(p, "shell session opened", plen)) {
             clean(a, sizeof(a), e->username, sizeof(e->username));
+            shorten(a, 24);
             app(out, cap, &o, "shell opened as ");
             app(out, cap, &o, a[0] ? a : "?");
             return;
@@ -721,8 +755,10 @@ static void summarise(const attack_log_t *e, char *out, size_t cap)
         break;
     case ATTACK_TELNET: case ATTACK_SSH: case ATTACK_FTP: case ATTACK_RTSP:
         if (e->username[0] || e->password[0]) {
-            clean(a, 25, e->username, sizeof(e->username));
-            clean(b, 25, e->password, sizeof(e->password));
+            clean(a, sizeof(a), e->username, sizeof(e->username));
+            clean(b, sizeof(b), e->password, sizeof(e->password));
+            shorten(a, 24);
+            shorten(b, 24);
             app(out, cap, &o, "login ");
             app(out, cap, &o, a);
             app(out, cap, &o, ":");
@@ -735,13 +771,15 @@ static void summarise(const attack_log_t *e, char *out, size_t cap)
         for (int sp = 0; n < plen && n < sizeof(a) - 1; n++)
             if (p[n] == ' ' && ++sp == 2) break;
         clean(a, sizeof(a), p, n);
+        shorten(a, 47);
         app(out, cap, &o, a);
         return;
     }
     default:
         break;
     }
-    clean(a, 41, p, plen);
+    clean(a, sizeof(a), p, plen);
+    shorten(a, 40);
     app(out, cap, &o, a[0] ? a : "(no detail)");
 }
 
@@ -755,7 +793,9 @@ static void handle_event(const attack_log_t *e, int64_t now)
     strlcpy(r->user, e->username, sizeof(r->user));
     strlcpy(r->payload, e->payload, sizeof(r->payload));
 
-    if (!s_log_was_on) return;
+    // Discovery is kept for an incident's opening embed (above) but posts as
+    // the 30-minute digest (discord_post_digest), not line by line.
+    if (!s_log_was_on || e->type == ATTACK_DISCOVERY) return;
 
     char sum[DC_SUMMARY_LEN];
     summarise(e, sum, sizeof(sum));
@@ -889,6 +929,30 @@ static void check_batch(int64_t now)
     if (due || early) flush_batch(now);
 }
 
+// Title, then the lines in a code block. Device text is cut to printable
+// ASCII with backticks replaced (as clean()), newlines kept; jb_str escapes it
+// and breaks every '@'. The caller kept it under DC_CONTENT_MAX.
+static void post_digest(char *lines)
+{
+    size_t clen = 0;
+    app(s_content, DC_CONTENT_CAP, &clen, "LAN devices seen (last 30 min)\n```\n");
+    for (const char *c = lines; *c && clen + 8 < DC_CONTENT_CAP; c++) {
+        unsigned char ch = (unsigned char)*c;
+        if (ch == '`') ch = '\'';
+        else if (ch != '\n' && (ch < 0x20 || ch > 0x7e)) ch = '?';
+        s_content[clen++] = (char)ch;
+    }
+    s_content[clen] = '\0';
+    app(s_content, DC_CONTENT_CAP, &clen, "```");
+    free(lines);
+    jb_t j;
+    jb_init(&j);
+    jb_lit(&j, JB_HEAD "\"content\":");
+    jb_str(&j, s_content);
+    jb_lit(&j, "}");
+    dc_send(&j);
+}
+
 // ── Task ──────────────────────────────────────────────────────────────────────
 
 void discord_task(void *arg)
@@ -934,6 +998,8 @@ void discord_task(void *arg)
 
         static notify_msg_t nm;      // task only; off the stack
         while (s_ntq && xQueueReceive(s_ntq, &nm, 0) == pdTRUE) post_notice(&nm);
+        char *dg;
+        while (s_dgq && xQueueReceive(s_dgq, &dg, 0) == pdTRUE) post_digest(dg);
 
         discord_status_t st;
         discord_get_status(&st);

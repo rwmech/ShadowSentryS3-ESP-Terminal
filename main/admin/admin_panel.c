@@ -6,6 +6,7 @@
 #include "notify.h"
 #include "api_cam.h"
 #include "api_devices.h"
+#include "api_oui.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -421,6 +422,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_ext_handle(sock, buf, len)) return;   // fork routes (settings, logs, ...)
     if (api_cam_handle(sock, buf, len)) return;   // camera snapshot routes
     if (api_devices_handle(sock, buf, len)) return;   // LAN discovery table
+    if (api_oui_handle(sock, buf, len)) return;       // vendor database upload and status
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);

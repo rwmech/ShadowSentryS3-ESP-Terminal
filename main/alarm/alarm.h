@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "log_store.h"
 
 /*
  * Incident alarm, Core 1
@@ -76,6 +77,11 @@ void alarm_get(alarm_info_t *out);
 // settings' alert_mask or the source is on the ignore list. Logging never
 // depends on it. Cheap and safe from any task.
 bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6]);
+
+// Feed an event to the incident logic without the log store (LAN discovery
+// keeps its events out of the flash ring). Gated by alarm_should_alert() like
+// every other event; copies and queues, never blocks, safe from any task.
+void alarm_note_event(const attack_log_t *e);
 
 // Called from the alarm task on every state or count change. Must be
 // non-blocking (copy and queue). Up to 6 listeners (ALARM_MAX_LISTENERS in

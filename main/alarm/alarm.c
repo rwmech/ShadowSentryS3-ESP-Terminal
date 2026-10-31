@@ -97,6 +97,11 @@ static void on_event(const attack_log_t *e)
     xQueueSend(s_queue, &m, 0);   // full queue = burst already raising the alarm
 }
 
+void alarm_note_event(const attack_log_t *e)
+{
+    if (s_queue && e) on_event(e);
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 static void persist(void)

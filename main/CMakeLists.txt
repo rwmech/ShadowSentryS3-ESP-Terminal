@@ -13,6 +13,7 @@
 #   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
 #   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
+#   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -64,6 +65,8 @@ idf_component_register(
         "detect/ignore.c"
         "detect/discovery.c"
         "admin/api_devices.c"
+        "admin/api_oui.c"
+        "storage/oui.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
