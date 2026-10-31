@@ -2,6 +2,7 @@
 #include "alarm.h"
 #include "settings.h"
 #include "api_ext.h"
+#include "discord.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -407,6 +408,7 @@ static void handle_request(int sock, char *buf, int len)
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ota")) {
         handle_ota(sock, buf, len);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
+        discord_note_dashboard_ack();   // so the Discord embed can say where
         alarm_ack();
         ESP_LOGI(TAG, "Incident acknowledged via admin panel");
         send_204(sock);

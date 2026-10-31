@@ -14,6 +14,7 @@
 #include "ws_server.h"
 #include "log_store.h"
 #include "wifi_manager.h"
+#include "discord.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -299,6 +300,9 @@ static void get_settings(int sock)
     jb_bool(&j, "tg_token_set", secret_set(s.tg_token));    JB_LIT(&j, ",");
     jb_bool(&j, "wifi_overridden", settings_wifi_overridden()); JB_LIT(&j, ",");
     jb_bool(&j, "telegram_enabled", settings_telegram_enabled()); JB_LIT(&j, ",");
+    jb_bool(&j, "discord_webhook_set", s.discord_webhook[0]);  JB_LIT(&j, ",");   // never the URL
+    jb_bool(&j, "discord_enabled", settings_discord_enabled()); JB_LIT(&j, ",");
+    jb_bool(&j, "discord_log_events", s.discord_log_events);   JB_LIT(&j, ",");
     jb_bool(&j, "reboot_pending", settings_reboot_pending());
     JB_LIT(&j, ",\"running_wifi_ssid\":");
     char ssid[sizeof(live->wifi_ssid)];
@@ -425,6 +429,11 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "alarm_sound", &s.alarm_sound);
     if (!err) err = take_bool(root, "boot_chirp", &s.boot_chirp);
     if (!err) err = take_bool(root, "touch_click", &s.touch_click);
+    if (!err) err = take_str(root, "discord_webhook", s.discord_webhook, sizeof(s.discord_webhook), true);
+    bool dc_clear = false;      // blank means "unchanged", so clearing needs saying
+    if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
+    if (dc_clear) s.discord_webhook[0] = '\0';
+    if (!err) err = take_bool(root, "discord_log_events", &s.discord_log_events);
     s.brightness = (uint8_t)bright;
     bool pw_changed = false;
     {
@@ -434,6 +443,7 @@ static void post_settings(int sock, const char *req, int req_len)
     wipe_item(root, "admin_password");
     wipe_item(root, "wifi_password");
     wipe_item(root, "tg_token");
+    wipe_item(root, "discord_webhook");
     cJSON_Delete(root);
 
     bool reboot = false;
@@ -450,6 +460,38 @@ static void post_settings(int sock, const char *req, int req_len)
     jb_init(&j);
     jb_printf(&j, "{\"ok\":true,\"reboot\":%s,\"password_changed\":%s}",
               reboot ? "true" : "false", pw_changed ? "true" : "false");
+    send_json(sock, &j);
+}
+
+// The test runs on the Discord task (an HTTPS post takes seconds and must not
+// hold the admin task); the page polls /api/discord/status for the result.
+static void post_discord_test(int sock)
+{
+    if (!settings_discord_enabled()) { send_error(sock, "409 Conflict", "Discord webhook not set"); return; }
+    uint32_t n = discord_request_test();
+    if (!n) { send_error(sock, "503 Service Unavailable", "Discord task not running"); return; }
+    jb_t j;
+    jb_init(&j);
+    jb_printf(&j, "{\"queued\":true,\"test\":%lu}", (unsigned long)n);
+    send_json(sock, &j);
+}
+
+static void get_discord_status(int sock)
+{
+    discord_status_t d;
+    discord_get_status(&d);
+    jb_t j;
+    jb_init(&j);
+    JB_LIT(&j, "{");
+    jb_bool(&j, "enabled", settings_discord_enabled());
+    JB_LIT(&j, ",");
+    jb_bool(&j, "log_events", settings_get()->discord_log_events);
+    JB_LIT(&j, ",");
+    jb_bool(&j, "test_ok", d.test_ok);
+    jb_printf(&j, ",\"test_req\":%lu,\"test_done\":%lu,\"test_status\":%d,\"last_status\":%d,"
+                  "\"posted\":%lu,\"failed\":%lu,\"dropped\":%lu}",
+              (unsigned long)d.test_req, (unsigned long)d.test_done, d.test_status, d.last_status,
+              (unsigned long)d.posted, (unsigned long)d.failed, (unsigned long)d.dropped);
     send_json(sock, &j);
 }
 
@@ -712,7 +754,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
         return false;
     bool get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
 
-    enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE } r = R_NONE;
+    enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
+           R_DC_TEST, R_DC_STATUS } r = R_NONE;
     if      (get  && !strcmp(path, "/api/settings"))    r = R_SET_GET;
     else if (post && !strcmp(path, "/api/settings"))    r = R_SET_POST;
     else if (post && !strcmp(path, "/api/reboot"))      r = R_REBOOT;
@@ -720,6 +763,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     else if (get  && !strcmp(path, "/api/summary"))     r = R_SUMMARY;
     else if (get  && !strcmp(path, "/api/logs"))        r = R_LOGS;
     else if (get  && !strcmp(path, "/api/logs/file"))   r = R_FILE;
+    else if (post && !strcmp(path, "/api/discord/test"))   r = R_DC_TEST;
+    else if (get  && !strcmp(path, "/api/discord/status")) r = R_DC_STATUS;
     if (r == R_NONE) return false;
 
     // A client that stops reading can't hold the single admin task for ever.
@@ -734,6 +779,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     case R_SUMMARY:  get_summary(sock); break;
     case R_LOGS:     get_logs(sock); break;
     case R_FILE:     get_log_file(sock, query); break;
+    case R_DC_TEST:  post_discord_test(sock); break;
+    case R_DC_STATUS: get_discord_status(sock); break;
     default: break;
     }
     return true;

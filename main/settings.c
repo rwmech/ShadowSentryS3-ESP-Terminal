@@ -20,6 +20,9 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_TZ
 #define DISPLAY_TZ "UTC0"
 #endif
+#ifndef DISCORD_WEBHOOK_URL
+#define DISCORD_WEBHOOK_URL ""
+#endif
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
@@ -43,12 +46,14 @@ static void defaults(settings_t *s)
     s->alarm_sound    = true;
     s->boot_chirp     = true;
     s->touch_click    = true;
+    strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
+    s->discord_log_events = true;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
 {
     size_t n = len;
-    char tmp[80];
+    char tmp[168];                  // longest field: discord_webhook[160]
     if (n > sizeof(tmp)) n = sizeof(tmp);
     if (nvs_get_str(h, key, tmp, &n) == ESP_OK) strlcpy(dst, tmp, len);
 }
@@ -92,6 +97,8 @@ void settings_init(void)
         get_bool(h, "alarm_snd", &s_live.alarm_sound);
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
+        get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
+        get_bool(h, "dc_log", &s_live.discord_log_events);
         nvs_close(h);
     }
     s_saved = s_live;
@@ -174,6 +181,21 @@ static bool alnum_ok(const char *s, const char *extra)
     return true;
 }
 
+// Empty, or https://discord.com/api/webhooks/... (or discordapp.com) followed
+// by URL-safe characters only: the URL goes straight to esp_http_client.
+static bool discord_url_ok(const char *u)
+{
+    static const char *const pfx[] = { "https://discord.com/api/webhooks/",
+                                       "https://discordapp.com/api/webhooks/" };
+    for (size_t i = 0; i < sizeof(pfx) / sizeof(pfx[0]); i++) {
+        size_t n = strlen(pfx[i]);
+        if (strncmp(u, pfx[i], n) == 0 && u[n] && alnum_ok(u + n, "-_/?=&.")) return true;
+    }
+    return false;
+}
+
+bool settings_discord_enabled(void) { return discord_url_ok(s_live.discord_webhook); }
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -199,6 +221,8 @@ static const char *validate(const settings_t *s)
                                        return "quiet time must be 60-86400 s";
     if (s->brightness < 5 || s->brightness > 100)
                                        return "brightness must be 5-100 %";
+    if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
+        return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
     return NULL;
 }
 
@@ -222,6 +246,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "alarm_snd",  s->alarm_sound));
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
+    SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
+    SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.

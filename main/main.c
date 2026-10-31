@@ -15,6 +15,7 @@
 #include "admin_panel.h"
 #include "ws_server.h"
 #include "telegram.h"
+#include "discord.h"
 #include "arp_monitor.h"
 #include "geoip.h"
 #include "wifi_monitor.h"
@@ -92,6 +93,9 @@ static const char *TAG = "MAIN";
 #define PRIO_ARPMON     2
 #define PRIO_GEOIP      3
 #define PRIO_WIFIMON    2
+//  discord: small locals (<1 KB), body/content/key table in PSRAM, plus the
+//           esp_http_client + TLS frames; size and high-water in discord.h
+#define PRIO_DISCORD    3
 
 // ── Helper macro ──────────────────────────────────────────────────────────────
 
@@ -211,11 +215,16 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "  │  Telegram alerts: %s",
              settings_telegram_enabled() ? "enabled" : "NOT CONFIGURED");
+    ESP_LOGI(TAG, "  │  Discord alerts: %s",
+             settings_discord_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");
     ESP_LOGI(TAG, "  └─────────────────────────────────────────");
     ESP_LOGI(TAG, "");
+
+    // Discord queues and listeners before the traps can append (task below).
+    discord_init();
 
     // ── Core 0 — Hacker World ────────────────────────────────────────────────
     // Each honeypot is a blocking accept loop; lower-priority tasks (Core 1)
@@ -231,6 +240,7 @@ void app_main(void)
     telegram_set_boot_ip(ip);
     SPAWN(geoip_task,       "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
     SPAWN(telegram_task,    "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
+    SPAWN(discord_task,     "discord", DISCORD_TASK_STACK, PRIO_DISCORD, 1);
     SPAWN(admin_panel_task, "admin",  STACK_ADMIN,    PRIO_ADMIN,    1);
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);

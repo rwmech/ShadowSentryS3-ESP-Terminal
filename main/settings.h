@@ -15,7 +15,7 @@ extern "C" {
  * the others) and survives OTA updates.
  *
  * Applied immediately: admin password, timezone, alarm timings, sounds,
- * brightness. Applied after a reboot: Wi-Fi, Telegram.
+ * brightness, Discord. Applied after a reboot: Wi-Fi, Telegram.
  *
  * Wi-Fi safety net: if saved Wi-Fi credentials don't get an IP within
  * SETTINGS_WIFI_FALLBACK_S at boot, the saved Wi-Fi keys are erased and the
@@ -37,6 +37,8 @@ typedef struct {
     bool     alarm_sound;           // incident alarm + reminders on the buzzer
     bool     boot_chirp;            // chirp at power-up / reboot
     bool     touch_click;           // click on every screen press
+    char     discord_webhook[160];  // secret: "" = off, else https://discord.com/api/webhooks/...
+    bool     discord_log_events;    // deduplicated event log to Discord (incidents post regardless)
 } settings_t;
 
 // Load defaults, then NVS overrides. Call once, after nvs_flash_init().
@@ -68,6 +70,9 @@ void settings_forget_wifi(void);
 
 // Telegram is configured (non-empty, non-placeholder token and chat id).
 bool settings_telegram_enabled(void);
+
+// Discord is configured (a well-formed webhook URL).
+bool settings_discord_enabled(void);
 
 // Register a callback run after every successful save (e.g. apply brightness).
 void settings_on_change(void (*cb)(void));
