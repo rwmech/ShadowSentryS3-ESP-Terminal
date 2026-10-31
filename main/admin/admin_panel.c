@@ -12,6 +12,7 @@
 #include "wifi_manager.h"
 #include "geoip.h"
 #include "ignore.h"
+#include "describe.h"
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -232,12 +233,14 @@ static void serve_attacks_json(int sock)
     for (int t = 0; t < ATTACK_TYPE_COUNT; t++) JPRINTF("%s%d", t ? "," : "", by_type[t]);
     JPRINTF("],\"entries\":[");
 
-    for (int i = 0; i < n && remaining > 480; i++) {
+    for (int i = 0; i < n && remaining > 680; i++) {
         // Escape all attacker-supplied strings before embedding in JSON
-        char user_j[96],  pass_j[192], pay_j[512];
+        char user_j[96],  pass_j[192], pay_j[512], hl[DESCRIBE_MAX], hl_j[2 * DESCRIBE_MAX];
         json_escape_str(entries[i].username, user_j, sizeof(user_j));
         json_escape_str(entries[i].password, pass_j, sizeof(pass_j));
         json_escape_str(entries[i].payload,  pay_j,  sizeof(pay_j));
+        describe_event(&entries[i], hl, sizeof(hl));        // computed when served
+        json_escape_str(hl, hl_j, sizeof(hl_j));
 
         // MAC + vendor: both from local sources (ARP / built-in OUI table),
         // plain ASCII with no JSON metacharacters — safe to embed directly.
@@ -262,14 +265,15 @@ static void serve_attacks_json(int sock)
                 "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
                 "\"mac\":\"%s\",\"vendor\":\"%s\","
                 "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
-                "\"asn\":\"%s\",\"geotag\":\"%s\"}",
+                "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\"}",
                 (unsigned long)entries[i].timestamp,
                 (unsigned long)entries[i].src_ip,
                 (int)entries[i].type,
                 ignore_match(entries[i].src_ip, entries[i].src_mac) ? "true" : "false",
                 user_j, pass_j, pay_j,
                 mac_j, vendor_j,
-                gi.cc, ctry_j, org_j2, gi.asn, gi.tag);
+                gi.cc, ctry_j, org_j2, gi.asn, gi.tag,
+                hl_j, describe_tier_key(describe_tier(&entries[i])));
     }
 
     JPRINTF("]}");

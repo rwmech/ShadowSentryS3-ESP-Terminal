@@ -54,6 +54,7 @@ idf_component_register(
         "alarm/alarm.c"
         "alarm/buzzer.c"
         "alarm/melody.c"
+        "alarm/describe.c"
         "ui/display.cpp"
         "ui/ui.c"
         "camera/cam.c"

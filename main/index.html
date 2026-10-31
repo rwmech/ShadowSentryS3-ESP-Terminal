@@ -166,6 +166,8 @@ main{flex:1;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
 .feed-item:last-child{border-bottom:none}
 .feed-icon{font-size:1rem;flex-shrink:0;width:24px;text-align:center}
 .feed-info{flex:1;min-width:0}
+.fi-hl{font-size:.8rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.td-raw{color:var(--muted);font-size:.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fi-ip{font-size:.78rem;color:var(--blue);font-family:monospace}
 .fi-cred{font-size:.7rem;color:var(--purple);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .feed-time{font-size:.65rem;color:var(--muted);white-space:nowrap}
@@ -403,6 +405,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 #lg-table.no-cred .c-cred{display:none}
 #lg-table .td-det{width:100%;min-width:300px}
 .tsub{font-size:13px;color:var(--muted)}
+/* headlines (panel-polish): the raw details under a headline, in the readable sizes */
+.td-raw{font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+.fi-hl{font-size:16px}
 .rep{display:inline-block;margin-right:8px;padding:0 8px;border-radius:10px;font-size:13px;font-weight:700;
   background:rgba(129,140,248,.15);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
 @media(max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
@@ -999,7 +1004,7 @@ function updateFeed(entries){
     const vchip=e.vendor?`<span class="vendor-chip">${esc(e.vendor)}</span>`:'';
     const fl=flagOf(e.cc);
     div.innerHTML=`<span class="feed-icon">${ICON[e.type]||'?'}</span>`+
-      `<div class="feed-info"><div class="fi-ip">${fl?fl+' ':''}${ip4(e.ip)}${vchip}</div><div class="fi-cred">${cred}</div></div>`+
+      `<div class="feed-info">${e.headline?`<div class="fi-hl">${esc(e.headline)}</div>`:''}<div class="fi-ip">${fl?fl+' ':''}${ip4(e.ip)}${vchip}</div><div class="fi-cred">${cred}</div></div>`+
       `${BADGE[e.type]||''}${e.ign?IGN:''}<span class="feed-time">${fmt(e.ts).split(' ')[1]||''}</span>`;
     feed.insertBefore(div,feed.firstChild);
   });
@@ -1018,7 +1023,7 @@ function updateTable(entries){
     <td>${BADGE[e.type]||e.type}${e.ign?IGN:''}</td>
     <td class="td-cred">${e.user?esc(e.user):'—'}</td>
     <td class="td-cred">${e.pass?esc(e.pass):'—'}</td>
-    <td class="td-payload" title="${esc(e.payload||'')}">${esc(e.payload||'')}</td>
+    <td class="td-payload" title="${esc(e.payload||'')}">${e.headline?esc(e.headline)+`<div class="td-raw">${esc(e.payload||'')}</div>`:esc(e.payload||'')}</td>
   </tr>`).join('');
 }
 
@@ -1418,8 +1423,8 @@ function renderDay(){
 const S=v=>v==null?'':String(v);
 // One log line as table cells, all plain strings.
 function logView(o){
-  const kind=S(o.kind)||'?',v={kind,ts:+o.ts||0,type:'',ip:'',mac:'',vendor:'',user:'',pass:'',det:''};
-  if(kind==='attack'){v.type=TNAME[o.type]||S(o.tname)||'?';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);v.user=S(o.user);v.pass=S(o.pass);v.det=(o.ignored===true?'(ignored) ':'')+S(o.payload);}
+  const kind=S(o.kind)||'?',v={kind,ts:+o.ts||0,type:'',ip:'',mac:'',vendor:'',user:'',pass:'',det:'',hl:''};
+  if(kind==='attack'){v.type=TNAME[o.type]||S(o.tname)||'?';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);v.user=S(o.user);v.pass=S(o.pass);v.det=(o.ignored===true?'(ignored) ':'')+S(o.payload);v.hl=S(o.headline);}
   else if(kind==='alarm'){v.type=TNAME[o.type]||'';v.ip=S(o.ip);v.det='incident #'+S(o.id)+' '+S(o.event)+', '+S(o.count)+' event(s)';}
   else if(kind==='http'){v.type='HTTP '+S(o.port);v.ip=S(o.ip);v.det=[S(o.category),S(o.request),o.host?'Host '+S(o.host):'',o.ua?'UA '+S(o.ua):'',o.body?'body '+S(o.body):''].filter(Boolean).join(', ');}
   else if(kind==='boot'){v.det='firmware '+S(o.fw)+', reset: '+(o.reason?S(o.reason):(RESET[o.reset]||S(o.reset)));}
@@ -1449,7 +1454,10 @@ function devCell(vendor,mac){
 function logRow(v){
   const tr=el('tr'),tc=td(fmt(v.t0),'td-ts nw'),dc=td('','td-payload td-det');
   if(v.n>1){const a=fmt(v.t0),b=fmt(v.t1);tc.append(el('div','tsub','to '+(a.slice(0,10)===b.slice(0,10)?b.slice(11):b)));dc.append(el('span','rep','x'+v.n));}
-  dc.append(document.createTextNode(v.det));
+  // A headline (newer firmware) leads; the raw details stay underneath.
+  if(v.hl){dc.append(document.createTextNode(v.hl));dc.append(el('div','td-raw',v.det));}
+  else dc.append(document.createTextNode(v.det));
+  dc.title=v.det;
   tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
   return tr;
 }

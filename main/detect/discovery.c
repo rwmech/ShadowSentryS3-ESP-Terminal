@@ -1040,3 +1040,34 @@ size_t discovery_devices_json(char *buf, size_t cap)
     o += (size_t)snprintf(buf + o, cap - o, "],\"count\":%d,\"truncated\":%s}", count, cut ? "true" : "false");
     return o < cap ? o : cap - 1;
 }
+
+// For the front panel: how many devices are in the table, and the newest one
+// (by first seen) with its label (or MAC vendor, or IP) and first-seen uptime.
+int discovery_summary(char *label, size_t len, uint32_t *first_up_s)
+{
+    if (label && len) label[0] = '\0';
+    if (first_up_s) *first_up_s = 0;
+    if (!S) return 0;
+    int n = 0;
+    const disc_dev_t *newest = NULL;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    for (int i = 0; i < DISCOVERY_DEV_MAX; i++) {
+        const disc_dev_t *d = &S->dev[i];
+        if (!d->used) continue;
+        n++;
+        if (!newest || d->first_up > newest->first_up) newest = d;
+    }
+    if (newest) {
+        if (first_up_s) *first_up_s = newest->first_up;
+        if (label && len) {
+            if (newest->label[0]) {
+                strlcpy(label, newest->label, len);
+            } else if (newest->ip) {
+                ip4_addr_t a = { .addr = newest->ip };
+                ip4addr_ntoa_r(&a, label, (int)len);
+            }
+        }
+    }
+    xSemaphoreGive(s_mux);
+    return n;
+}
