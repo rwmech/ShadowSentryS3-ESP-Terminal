@@ -44,7 +44,7 @@ def main():
     })
     print(f"ota_upload: sending {len(image)} bytes to {url}")
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=600) as r:
             print("ota_upload:", r.status, r.read().decode().strip())
     except urllib.error.HTTPError as e:
         sys.exit(f"ota_upload: {e.code} {e.read().decode().strip()}")
