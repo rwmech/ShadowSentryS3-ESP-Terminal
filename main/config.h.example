@@ -77,6 +77,16 @@
 #define TELEGRAM_BOT_TOKEN          "YOUR_BOT_TOKEN"
 #define TELEGRAM_CHAT_ID            "YOUR_CHAT_ID"
 
+// ── Discord ──────────────────────────────────────────────────────────────────
+//
+// Channel webhook for incident alerts and the deduplicated event log
+// (Discord: channel settings, Integrations, Webhooks, New Webhook, Copy URL).
+// Must start with https://discord.com/api/webhooks/ (or discordapp.com).
+// The URL is a secret: anyone holding it can post to the channel. "" disables
+// Discord; the dashboard's Settings page can set or clear it at run time.
+
+#define DISCORD_WEBHOOK_URL         ""
+
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
 // Dashboard is accessible at http://<device-ip>:ADMIN_PORT

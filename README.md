@@ -59,6 +59,11 @@ Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S m
   - Heartbeat: the shield in the header gives one soft pulse (a slight glow and scale, under 1 s) each time the 5 s status poll gets an answer. After two missed polls in a row it stops and fades to grey until the device answers again. The ACTIVE pill is unchanged.
   - Logs: summary cards, 24 h, daily and by-type charts, top sources and top credentials, card status, and a day picker that loads a day file (the last 256 KB, or the whole file) into a filterable table, newest first, with a download link.
   - Settings: admin password, Wi-Fi, Telegram, timezone (POSIX TZ, with presets), alarm timings, brightness and the three sounds, plus Save, Reboot and Test buzzer. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
+- Discord alerts, to a channel webhook (`main/admin/discord.c`):
+  - Incidents: an embed when one opens (red: incident number, source IP, MAC and vendor, attack type, the first event's username and payload, the device's IP and name), a reminder every alarm reminder interval while it is unacknowledged (orange: events so far, how long it has been open), one when it is acknowledged (amber, saying whether from the panel or the dashboard) and one when it closes (green: event count and duration). Count-only updates never post.
+  - Event log (the Discord twin of the microSD log), on by default: events are folded by source IP, attack type and a short summary (shell: the command's first word, so 110 runs of `ls` post once as `ran ls x110`; credential traps: user:pass; HTTP: method and path; otherwise the first 40 characters), and posted every 15 s as lines in a code block. A line that has posted waits 5 minutes before its next post, which shows only the new count (`+40 more`); a line idle for 10 minutes is forgotten. At most 32 lines per post, the rest follow in the next one.
+  - Set it up: in Discord, channel settings, Integrations, Webhooks, New Webhook, Copy Webhook URL. Paste the URL into Settings, Discord (or set `DISCORD_WEBHOOK_URL` in `main/config.h` as the default), Save, then Send test. It applies at once, no reboot. "Clear webhook" turns Discord off; "Post the event log" turns the log off while incident alerts stay on.
+  - The URL is a secret: it is never logged or returned by the API, only reported as set. Every post has `allowed_mentions` empty, attacker text is cut to printable ASCII with backticks replaced, so it can't ping anyone or break out of its code formatting. Posts are paced for Discord's webhook limit and honour HTTP 429 `retry_after`.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
 - Memory: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
 
@@ -69,12 +74,14 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | Method | Path | |
 |---|---|---|
 | `GET` | `/api/settings` | settings; secrets only as `*_set` flags |
-| `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone; `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
+| `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone (`"discord_webhook_clear":true` clears the webhook); `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
 | `POST` | `/api/reboot` | 204, restart after 500 ms |
 | `POST` | `/api/buzzer/test` | the alarm siren, even with the sound off; 204 at once, the siren plays after |
 | `GET` | `/api/summary` | card status and summary metrics |
 | `GET` | `/api/logs` | day files, newest first |
 | `GET` | `/api/logs/file?f=NAME[&tail=1][&dl=1]` | one day file as NDJSON; `tail=1` sends the last 256 KB |
+| `POST` | `/api/discord/test` | queue a test embed; `{"queued":true,"test":N}`, 409 with no webhook |
+| `GET` | `/api/discord/status` | `test_done`, `test_ok`, `test_status` (HTTP status, -1 no connection), post and drop counters |
 | `POST` | `/api/ack` | acknowledge the incident |
 | `POST` | `/api/alarm/clear` | re-arm: end an acknowledged incident, 204; 409 `{"error":"acknowledge first"}` while unacknowledged; logs untouched |
 | `POST` | `/api/ota` | raw app image |

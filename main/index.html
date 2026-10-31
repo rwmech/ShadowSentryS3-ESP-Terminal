@@ -544,6 +544,13 @@ footer{
       <label for="st-tok">Bot token</label><input type="password" id="st-tok" maxlength="63" autocomplete="new-password">
       <label for="st-chat">Chat id</label><input id="st-chat" maxlength="23">
       <div class="hint" id="st-tg-hint"></div>
+      <h4>Discord (applies at once)</h4>
+      <label for="st-dch">Webhook URL</label><input type="password" id="st-dch" maxlength="159" autocomplete="off" spellcheck="false">
+      <label for="st-dcclr">Clear webhook (turn Discord off)</label><input type="checkbox" id="st-dcclr" onchange="$('st-dch').disabled=this.checked">
+      <label for="st-dclog">Post the event log</label><input type="checkbox" id="st-dclog">
+      <div class="hint" id="st-dc-hint"></div>
+      <div></div>
+      <div class="ctl"><button class="btn" type="button" id="st-dctest" onclick="testDiscord()">Send test</button><span id="st-dcres" class="muted"></span></div>
       <h4>Time</h4>
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
@@ -1025,7 +1032,11 @@ async function loadSettings(){
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
     $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
-    ['st-pw','st-pw2','st-wpw','st-tok'].forEach(i=>$(i).value='');
+    ['st-pw','st-pw2','st-wpw','st-tok','st-dch'].forEach(i=>$(i).value='');
+    $('st-dcclr').checked=false;$('st-dch').disabled=false;$('st-dclog').checked=!!s.discord_log_events;
+    $('st-dch').placeholder=s.discord_webhook_set?'set; blank = unchanged':'not set';
+    $('st-dc-hint').textContent='Discord is '+(s.discord_enabled?'on':'off')+
+      '. Incidents post when opened, acknowledged and closed, with a reminder while unacknowledged. The event log posts deduplicated lines every 15 s. Send test uses the saved webhook: save first.';
     $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
     $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
     $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
@@ -1050,6 +1061,9 @@ async function saveSettings(ev){
   else if($('st-wpw').value)body.wifi_password=$('st-wpw').value;
   else if($('st-wpw').placeholder==='')return showMsg('err','Enter the Wi-Fi password, or tick "Open network".');
   if($('st-tok').value.trim())body.tg_token=$('st-tok').value.trim();
+  body.discord_log_events=$('st-dclog').checked;
+  if($('st-dcclr').checked)body.discord_webhook_clear=true;
+  else if($('st-dch').value.trim())body.discord_webhook=$('st-dch').value.trim();
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
     let d={};try{d=await r.json();}catch{}
@@ -1061,7 +1075,29 @@ async function saveSettings(ev){
     showMsg('ok',m);
   }catch{showMsg('err','Save failed: device unreachable.');}
 }
-async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
+async function testDiscord(){
+  const res=$('st-dcres'),b=$('st-dctest');
+  res.textContent='Sending...';b.disabled=true;
+  try{
+    const r=await fetch('/api/discord/test',POSTH);let d={};try{d=await r.json();}catch{}
+    if(!r.ok){res.textContent=String(d.error||('Failed ('+r.status+')'));b.disabled=false;return;}
+    const want=d.test,t0=Date.now();
+    const poll=async()=>{
+      try{
+        const s=await(await fetch('/api/discord/status',{cache:'no-store'})).json();
+        if(s.test_done>=want){
+          res.textContent=s.test_ok?'Posted (HTTP '+s.test_status+').':
+            (s.test_status<0?'Failed: no connection to Discord.':'Failed: HTTP '+s.test_status+'.');
+          b.disabled=false;return;
+        }
+      }catch{}
+      if(Date.now()-t0<60000)setTimeout(poll,1500);else{res.textContent='No result after 60 s.';b.disabled=false;}
+    };
+    setTimeout(poll,1500);
+  }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
+}
+async function testBuzzer(){
+try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
 async function rebootDev(){
   if(!confirm('Reboot the device now?'))return;
   try{await fetch('/api/reboot',POSTH);}catch{}
