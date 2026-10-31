@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 
 static const char *TAG = "BUZZER";
@@ -14,8 +15,28 @@ static const char *TAG = "BUZZER";
 #define BUZ_CHANNEL  LEDC_CHANNEL_1
 #define BUZ_DUTY_ON  512            // 50 % of 10-bit: loudest for a passive piezo
 
+// Siren: a sweep up and down across the piezo's 2.7 kHz resonance, the duty
+// held at 50 % throughout. 2300 to 3100 Hz in 50 Hz steps of 25 ms: 16 steps
+// up and 16 down make an 800 ms cycle, 4 cycles make 3.2 s.
+#define SIREN_LO_HZ      2300
+#define SIREN_HI_HZ      3100
+#define SIREN_STEP_HZ    50
+#define SIREN_STEP_MS    25
+#define SIREN_CYCLES     4
+
+// The siren plays on its own task, so the alarm task (whose queue takes every
+// event from the traps) and the admin task never block for 3 s.
+#define BUZ_TASK_STACK   3072
+#define BUZ_TASK_PRIO    3          // below the alarm task (4), above the UI (2)
+#define BUZ_QUEUE_DEPTH  8
+
+typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP } buz_cmd_t;
+
 static bool              s_ok = false;
-static SemaphoreHandle_t s_lock;    // alarm task and UI task share the buzzer
+static SemaphoreHandle_t s_lock;    // buzzer, melody and UI tasks share the buzzer
+static QueueHandle_t     s_cmds;    // NULL: no buzzer task, play on the caller
+
+static void buzzer_task(void *arg);
 
 void buzzer_init(void)
 {
@@ -44,6 +65,14 @@ void buzzer_init(void)
         return;
     }
     s_ok = true;
+
+    s_cmds = xQueueCreate(BUZ_QUEUE_DEPTH, sizeof(uint8_t));
+    if (!s_cmds || xTaskCreatePinnedToCore(buzzer_task, "buzzer", BUZ_TASK_STACK, NULL,
+                                           BUZ_TASK_PRIO, NULL, 1) != pdPASS) {
+        ESP_LOGW(TAG, "No heap for the buzzer task, the siren plays on the caller");
+        if (s_cmds) vQueueDelete(s_cmds);
+        s_cmds = NULL;
+    }
 }
 
 static void tone(int hz, int on_ms, int off_ms)
@@ -57,29 +86,77 @@ static void tone(int hz, int on_ms, int off_ms)
     if (off_ms) vTaskDelay(pdMS_TO_TICKS(off_ms));
 }
 
-void buzzer_alarm(void)
+// A STOP at the head of the queue ends the siren early. A SIREN or TEST
+// queued behind the one playing waits its turn, so the order holds.
+static bool stop_requested(void)
 {
-    if (!s_ok || !settings_get()->alarm_sound) return;
+    uint8_t c;
+    if (!s_cmds || xQueuePeek(s_cmds, &c, 0) != pdTRUE || c != CMD_STOP) return false;
+    xQueueReceive(s_cmds, &c, 0);
+    return true;
+}
+
+// Takes s_lock for the whole siren; the timer goes back to BOARD_BUZZER_HZ
+// before the lock is released.
+static void siren_play(void)
+{
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < 3; i++) tone(BOARD_BUZZER_HZ, 150, 100);
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, SIREN_LO_HZ);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);   // duty is a count: holds 50 % across frequencies
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+    bool stop = false;
+    const int half = (SIREN_HI_HZ - SIREN_LO_HZ) / SIREN_STEP_HZ;   // 16 steps
+    for (int c = 0; c < SIREN_CYCLES && !stop; c++) {
+        // i 0..16 climbs 2300..3100, i 17..31 falls 3050..2350.
+        for (int i = 0; i < 2 * half; i++) {
+            int up = i <= half ? i : 2 * half - i;
+            ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, SIREN_LO_HZ + up * SIREN_STEP_HZ);
+            vTaskDelay(pdMS_TO_TICKS(SIREN_STEP_MS));
+            if ((stop = stop_requested())) break;
+        }
+    }
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
     xSemaphoreGive(s_lock);
 }
 
-void buzzer_test(void)
+static void buzzer_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        uint8_t c;
+        if (xQueueReceive(s_cmds, &c, portMAX_DELAY) != pdTRUE) continue;
+        // The alarm sound setting is read when the siren starts, not when queued.
+        if (c == CMD_TEST || (c == CMD_SIREN && settings_get()->alarm_sound)) {
+            siren_play();
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                ESP_LOGI(TAG, "First siren done, stack high-water %u B",
+                         (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            }
+        }
+        // A STOP with nothing playing has nothing to stop.
+    }
+}
+
+static void request(buz_cmd_t cmd)
 {
     if (!s_ok) return;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < 3; i++) tone(BOARD_BUZZER_HZ, 150, 100);
-    xSemaphoreGive(s_lock);
+    if (s_cmds) {
+        uint8_t c = (uint8_t)cmd;
+        if (xQueueSend(s_cmds, &c, 0) != pdTRUE) ESP_LOGW(TAG, "Buzzer queue full, request dropped");
+        return;
+    }
+    // No buzzer task: play here, blocking the caller for the siren.
+    if (cmd == CMD_TEST || (cmd == CMD_SIREN && settings_get()->alarm_sound)) siren_play();
 }
 
-void buzzer_remind(void)
-{
-    if (!s_ok || !settings_get()->alarm_sound) return;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    tone(BOARD_BUZZER_HZ, 200, 0);
-    xSemaphoreGive(s_lock);
-}
+void buzzer_alarm(void)  { request(CMD_SIREN); }
+void buzzer_remind(void) { request(CMD_SIREN); }
+void buzzer_test(void)   { request(CMD_TEST); }
+void buzzer_stop(void)   { if (s_cmds) request(CMD_STOP); }
 
 // Caller holds s_lock. A rest (hz 0), or a note LEDC refuses, waits out its
 // slot so the rhythm holds. The timer goes back to BOARD_BUZZER_HZ before the

@@ -8,22 +8,26 @@
  * Every event appended to the log store is an attack on the internal network
  * (nothing legitimate touches a honeypot), so any event can open an incident.
  *
- *   IDLE   → ACTIVE  first event: buzzer_alarm(), panel + web show the incident
- *   ACTIVE → ACTIVE  more events: count/last-seen updated, no extra beeps;
- *                    buzzer_remind() every ALARM_REMIND_S until acknowledged,
- *                    even after the attack itself has stopped
- *   ACTIVE → ACKED   alarm_ack() from the front panel or POST /api/ack
+ *   IDLE   → ACTIVE  first event: buzzer_alarm() (the siren), panel + web
+ *                    show the incident
+ *   ACTIVE → ACTIVE  more events: count/last-seen updated, no extra sirens;
+ *                    buzzer_remind() (the siren again) every ALARM_REMIND_S
+ *                    until acknowledged, even after the attack has stopped
+ *   ACTIVE → ACKED   alarm_ack() from the front panel or POST /api/ack;
+ *                    a siren still playing is cut short
  *   ACKED  → ACKED   same source keeps going: silent
  *   ACKED  → ACTIVE  a different source, or the same source after
  *                    ALARM_QUIET_S without events: new incident, new alarm
- *   ACKED  → IDLE    ALARM_QUIET_S without events
+ *   ACKED  → IDLE    ALARM_QUIET_S without events, or alarm_clear() (re-arm,
+ *                    from the panel or POST /api/alarm/clear): the next event
+ *                    opens a new incident at once. The logs are not touched.
  *
  * An unacknowledged incident is persisted to NVS, so a reboot does not clear
- * it: the board gives one reminder beep at boot and the reminders carry on.
+ * it: the board sounds one reminder siren at boot and the reminders carry on.
  */
 
 #ifndef ALARM_REMIND_S
-#define ALARM_REMIND_S   300     // reminder beep interval while unacknowledged
+#define ALARM_REMIND_S   60      // reminder siren interval while unacknowledged
 #endif
 #ifndef ALARM_QUIET_S
 #define ALARM_QUIET_S    600     // silence that closes an acknowledged incident
@@ -51,6 +55,11 @@ void alarm_init(void);
 
 // Acknowledge the current incident. Safe from any task; non-blocking.
 void alarm_ack(void);
+
+// Re-arm: end an acknowledged incident (ACKED → IDLE) so the next event
+// alarms again. Ignored unless the incident is acknowledged. Safe from any
+// task; non-blocking.
+void alarm_clear(void);
 
 // Snapshot of the current incident. Safe from any task.
 void alarm_get(alarm_info_t *out);

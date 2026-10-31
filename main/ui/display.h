@@ -14,6 +14,11 @@ extern "C" {
  */
 bool display_init(void);
 
+// true: backlight full on regardless of the brightness setting (incident
+// strobe). false: back to settings_get()->brightness. Any task, after
+// display_init(); a no-op if the backlight PWM is not running.
+void display_set_backlight_override(bool full);
+
 #ifdef __cplusplus
 }
 #endif

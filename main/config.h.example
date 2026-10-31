@@ -199,12 +199,13 @@
 // DISPLAY_TZ is a POSIX TZ string for the panel clock and event times, e.g.
 // "EST5EDT,M3.2.0,M11.1.0", "CET-1CEST,M3.5.0,M10.5.0/3", "UTC0".
 //
-// Any event opens an incident: a short alarm on the buzzer, then a reminder
-// beep every ALARM_REMIND_S until it is acknowledged on the panel (hold the
-// button) or the dashboard. An acknowledged incident closes after
-// ALARM_QUIET_S without events; a new source re-alarms immediately.
+// Any event opens an incident: a 3 s siren on the buzzer, then the siren
+// again every ALARM_REMIND_S (60..3600) until it is acknowledged on the panel
+// (hold the button) or the dashboard. An acknowledged incident closes after
+// ALARM_QUIET_S without events, or at once on Re-arm; a new source re-alarms
+// immediately.
 #define DISPLAY_TZ                  "UTC0"
-#define ALARM_REMIND_S              300
+#define ALARM_REMIND_S              60
 #define ALARM_QUIET_S               600
 
 // ── Compile-time validation ───────────────────────────────────────────────────

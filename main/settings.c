@@ -12,7 +12,7 @@ static const char *TAG = "SETTINGS";
 #define NS "settings"
 
 #ifndef ALARM_REMIND_S
-#define ALARM_REMIND_S 300
+#define ALARM_REMIND_S 60
 #endif
 #ifndef ALARM_QUIET_S
 #define ALARM_QUIET_S 600

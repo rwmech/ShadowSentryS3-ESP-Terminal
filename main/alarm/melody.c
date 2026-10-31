@@ -9,8 +9,11 @@
 #define FS6  1480       // 1479.98
 #define B6   1976       // 1975.53
 
-#define Q     100       // staccato quarter
-#define HOLD  400       // final tonic
+// Grieg's march tempo: one note every 260 ms (210 ms sounding plus the
+// MELODY_GAP_MS articulation gap, so it stays staccato). 11 x 260 + 700 =
+// 3560 ms in all.
+#define Q     210       // staccato quarter, sounding part
+#define HOLD  700       // final tonic
 
 // B minor. The creep B C# D E F# D F#, the answer E# C# E#, then E# rises to
 // F# (dominant) and F# leaps up a fourth to B (tonic), as Grieg's own phrase
