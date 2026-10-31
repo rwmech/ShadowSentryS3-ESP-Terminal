@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "config.h"
+#include "log_store.h"        // ATTACK_DISCOVERY, ATTACK_TYPE_COUNT
 #include "nvs.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -20,12 +21,39 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_TZ
 #define DISPLAY_TZ "UTC0"
 #endif
+#ifndef DISCORD_WEBHOOK_URL
+#define DISCORD_WEBHOOK_URL ""
+#endif
+// Detection defaults (main\detect\detect.c reads them live).
+#define DET_SCAN_PORTS     5
+#define DET_SCAN_WINDOW_S  10
+#define DET_ARP_TARGETS    10
+#define DET_ARP_WINDOW_S   10
+// Alert switches. Every type opens an incident by default, except LAN
+// discovery, which is background noise (logged, no incident). Bits past the
+// known types stay set, so a type added later alerts unless listed here.
+#define ALERT_DEFAULT_OFF   (1u << ATTACK_DISCOVERY)
+#define ALERT_MASK_DEFAULT  (0xFFFFFFFFu & ~ALERT_DEFAULT_OFF)
+// A saved mask records how many types its firmware knew (NVS "alert_known").
+// Bits from there up were set by the rule above, not by a choice, so on load
+// they take this firmware's default. A mask saved before the key existed
+// knew the 13 types before ATTACK_DISCOVERY.
+#define ALERT_KNOWN_LEGACY  ATTACK_DISCOVERY
+_Static_assert(ATTACK_TYPE_COUNT <= 32, "alert_mask has a bit per type");
+#ifndef WHATSAPP_PHONE
+#define WHATSAPP_PHONE ""
+#endif
+#ifndef WHATSAPP_APIKEY
+#define WHATSAPP_APIKEY ""
+#endif
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
 static SemaphoreHandle_t s_mutex;
 static bool              s_wifi_overridden = false;
-static void            (*s_on_change[3])(void);
+static bool              s_wa_at_boot;   // WhatsApp configured at boot: its task runs only then
+static void            (*s_on_change[4])(void);
+static bool wa_ok(const settings_t *s);
 static int               s_on_change_count = 0;
 
 static void defaults(settings_t *s)
@@ -43,12 +71,24 @@ static void defaults(settings_t *s)
     s->alarm_sound    = true;
     s->boot_chirp     = true;
     s->touch_click    = true;
+    strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
+    s->discord_log_events = true;
+    // Detection: every type alerts except discovery (ALERT_MASK_DEFAULT),
+    // thresholds, admin ports open.
+    s->alert_mask     = ALERT_MASK_DEFAULT;
+    s->scan_ports     = DET_SCAN_PORTS;
+    s->scan_window_s  = DET_SCAN_WINDOW_S;
+    s->arp_targets    = DET_ARP_TARGETS;
+    s->arp_window_s   = DET_ARP_WINDOW_S;
+    s->admin_allow_n  = 0;
+    strlcpy(s->whatsapp_phone, WHATSAPP_PHONE, sizeof(s->whatsapp_phone));
+    strlcpy(s->whatsapp_apikey, WHATSAPP_APIKEY, sizeof(s->whatsapp_apikey));
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
 {
     size_t n = len;
-    char tmp[80];
+    char tmp[168];                  // longest field: discord_webhook[160]
     if (n > sizeof(tmp)) n = sizeof(tmp);
     if (nvs_get_str(h, key, tmp, &n) == ESP_OK) strlcpy(dst, tmp, len);
 }
@@ -69,6 +109,18 @@ static void get_bool(nvs_handle_t h, const char *key, bool *dst)
 {
     uint8_t v;
     if (nvs_get_u8(h, key, &v) == ESP_OK) *dst = v != 0;
+}
+
+// The admin allowlist: a blob of 0..SETTINGS_ADMIN_ALLOW_MAX IPv4s. Anything
+// else in NVS (wrong size, a zero address) is ignored: admin ports stay open.
+static void get_allow(nvs_handle_t h, settings_t *s)
+{
+    uint32_t ips[SETTINGS_ADMIN_ALLOW_MAX];
+    size_t n = sizeof(ips);
+    if (nvs_get_blob(h, "admin_allow", ips, &n) != ESP_OK || n % 4) return;
+    for (size_t i = 0; i < n / 4; i++) if (!ips[i]) return;
+    memcpy(s->admin_allow, ips, n);
+    s->admin_allow_n = (uint8_t)(n / 4);
 }
 
 void settings_init(void)
@@ -92,9 +144,26 @@ void settings_init(void)
         get_bool(h, "alarm_snd", &s_live.alarm_sound);
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
+        get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
+        get_bool(h, "dc_log", &s_live.discord_log_events);
+        get_u32(h, "alert_mask", &s_live.alert_mask);
+        uint8_t known = ALERT_KNOWN_LEGACY;
+        get_u8(h, "alert_known", &known);
+        if (known < 32) {               // types newer than the saved mask: default
+            uint32_t newer = ~((1u << known) - 1u);
+            s_live.alert_mask = (s_live.alert_mask & ~newer) | (ALERT_MASK_DEFAULT & newer);
+        }
+        get_u32(h, "scan_ports", &s_live.scan_ports);
+        get_u32(h, "scan_win_s", &s_live.scan_window_s);
+        get_u32(h, "arp_targets", &s_live.arp_targets);
+        get_u32(h, "arp_win_s", &s_live.arp_window_s);
+        get_allow(h, &s_live);
+        get_str(h, "wa_phone", s_live.whatsapp_phone, sizeof(s_live.whatsapp_phone));
+        get_str(h, "wa_key", s_live.whatsapp_apikey, sizeof(s_live.whatsapp_apikey));
         nvs_close(h);
     }
     s_saved = s_live;
+    s_wa_at_boot = wa_ok(&s_live);
     setenv("TZ", s_live.tz, 1);
     tzset();
     ESP_LOGI(TAG, "Loaded (Wi-Fi %s, Telegram %s)",
@@ -124,14 +193,15 @@ bool settings_reboot_pending(void)
     bool p = strcmp(s_saved.wifi_ssid, s_live.wifi_ssid) ||
              strcmp(s_saved.wifi_password, s_live.wifi_password) ||
              strcmp(s_saved.tg_token, s_live.tg_token) ||
-             strcmp(s_saved.tg_chat_id, s_live.tg_chat_id);
+             strcmp(s_saved.tg_chat_id, s_live.tg_chat_id) ||
+             (wa_ok(&s_saved) && !s_wa_at_boot);     // WhatsApp's task starts only at boot
     xSemaphoreGive(s_mutex);
     return p;
 }
 
 void settings_on_change(void (*cb)(void))
 {
-    if (cb && s_on_change_count < 3) s_on_change[s_on_change_count++] = cb;
+    if (cb && s_on_change_count < 4) s_on_change[s_on_change_count++] = cb;
 }
 
 bool settings_wifi_overridden(void) { return s_wifi_overridden; }
@@ -174,6 +244,40 @@ static bool alnum_ok(const char *s, const char *extra)
     return true;
 }
 
+// Empty, or https://discord.com/api/webhooks/... (or discordapp.com) followed
+// by URL-safe characters only: the URL goes straight to esp_http_client.
+static bool discord_url_ok(const char *u)
+{
+    static const char *const pfx[] = { "https://discord.com/api/webhooks/",
+                                       "https://discordapp.com/api/webhooks/" };
+    for (size_t i = 0; i < sizeof(pfx) / sizeof(pfx[0]); i++) {
+        size_t n = strlen(pfx[i]);
+        if (strncmp(u, pfx[i], n) == 0 && u[n] && alnum_ok(u + n, "-_/?=&.")) return true;
+    }
+    return false;
+}
+
+bool settings_discord_enabled(void) { return discord_url_ok(s_live.discord_webhook); }
+
+// +<country code><number>: an optional '+', then 7 to 15 digits (E.164).
+static bool whatsapp_phone_ok(const char *p)
+{
+    if (*p == '+') p++;
+    size_t n = strlen(p);
+    return n >= 7 && n <= 15 && strspn(p, "0123456789") == n;
+}
+
+static bool wa_ok(const settings_t *s)
+{
+    return whatsapp_phone_ok(s->whatsapp_phone) && s->whatsapp_apikey[0] &&
+           alnum_ok(s->whatsapp_apikey, "");
+}
+
+bool settings_whatsapp_enabled(void)
+{
+    return wa_ok(&s_live);
+}
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -199,6 +303,27 @@ static const char *validate(const settings_t *s)
                                        return "quiet time must be 60-86400 s";
     if (s->brightness < 5 || s->brightness > 100)
                                        return "brightness must be 5-100 %";
+    if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
+        return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
+    if (s->scan_ports < 3 || s->scan_ports > 32)
+                                       return "port scan threshold must be 3-32 ports";
+    if (s->scan_window_s < 2 || s->scan_window_s > 300)
+                                       return "port scan window must be 2-300 s";
+    if (s->arp_targets < 3 || s->arp_targets > 32)
+                                       return "ARP sweep threshold must be 3-32 hosts";
+    if (s->arp_window_s < 2 || s->arp_window_s > 300)
+                                       return "ARP sweep window must be 2-300 s";
+    if (s->admin_allow_n > SETTINGS_ADMIN_ALLOW_MAX)
+                                       return "admin allowlist holds at most 8 addresses";
+    for (int i = 0; i < s->admin_allow_n; i++) {
+        uint8_t b0 = (uint8_t)(s->admin_allow[i] & 0xff);            // network order
+        if (!s->admin_allow[i] || s->admin_allow[i] == 0xFFFFFFFFu || b0 == 127 || b0 >= 224)
+                                       return "admin allowlist: unicast IPv4 addresses only";
+    }
+    if (s->whatsapp_phone[0] && !whatsapp_phone_ok(s->whatsapp_phone))
+        return "WhatsApp phone: + and 7-15 digits, country code first, no spaces";
+    if (!alnum_ok(s->whatsapp_apikey, ""))
+                                       return "WhatsApp apikey: letters and digits only";
     return NULL;
 }
 
@@ -222,6 +347,18 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "alarm_snd",  s->alarm_sound));
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
+    SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
+    SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
+    SET(nvs_set_u32(h, "alert_mask", s->alert_mask));
+    SET(nvs_set_u8(h,  "alert_known", ATTACK_TYPE_COUNT));
+    SET(nvs_set_u32(h, "scan_ports", s->scan_ports));
+    SET(nvs_set_u32(h, "scan_win_s", s->scan_window_s));
+    SET(nvs_set_u32(h, "arp_targets", s->arp_targets));
+    SET(nvs_set_u32(h, "arp_win_s",  s->arp_window_s));
+    if (s->admin_allow_n) SET(nvs_set_blob(h, "admin_allow", s->admin_allow, s->admin_allow_n * 4u));
+    else nvs_erase_key(h, "admin_allow");
+    SET(nvs_set_str(h, "wa_phone",   s->whatsapp_phone));
+    SET(nvs_set_str(h, "wa_key",     s->whatsapp_apikey));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.
@@ -244,7 +381,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     bool reboot = strcmp(s->wifi_ssid, s_live.wifi_ssid) ||
                   strcmp(s->wifi_password, s_live.wifi_password) ||
                   strcmp(s->tg_token, s_live.tg_token) ||
-                  strcmp(s->tg_chat_id, s_live.tg_chat_id);
+                  strcmp(s->tg_chat_id, s_live.tg_chat_id) ||
+                  (wa_ok(s) && !s_wa_at_boot);       // WhatsApp's task starts only at boot
     // Wi-Fi and Telegram keep their running values until the reboot.
     settings_t next = *s;
     strlcpy(next.wifi_ssid, s_live.wifi_ssid, sizeof(next.wifi_ssid));
@@ -260,5 +398,27 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     tzset();
     for (int i = 0; i < s_on_change_count; i++) s_on_change[i]();
     ESP_LOGI(TAG, "Saved%s", reboot ? " (reboot to apply Wi-Fi/Telegram)" : "");
+    return ESP_OK;
+}
+
+esp_err_t settings_clear_admin_allow(void)
+{
+    nvs_handle_t h;
+    esp_err_t r = nvs_open(NS, NVS_READWRITE, &h);
+    if (r != ESP_OK) return r;
+    r = nvs_erase_key(h, "admin_allow");
+    if (r == ESP_ERR_NVS_NOT_FOUND) r = ESP_OK;
+    if (r == ESP_OK) r = nvs_commit(h);
+    nvs_close(h);
+    if (r != ESP_OK) return r;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_live.admin_allow_n  = 0;
+    s_saved.admin_allow_n = 0;
+    memset(s_live.admin_allow, 0, sizeof(s_live.admin_allow));
+    memset(s_saved.admin_allow, 0, sizeof(s_saved.admin_allow));
+    xSemaphoreGive(s_mutex);
+    for (int i = 0; i < s_on_change_count; i++) s_on_change[i]();
+    ESP_LOGW(TAG, "Admin allowlist cleared: admin ports open to all");
     return ESP_OK;
 }

@@ -4,6 +4,8 @@
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
@@ -76,8 +78,11 @@ void buzzer_init(void)
     s_ok = true;
 
     s_cmds = xQueueCreate(BUZ_QUEUE_DEPTH, sizeof(uint8_t));
-    if (!s_cmds || xTaskCreatePinnedToCore(buzzer_task, "buzzer", BUZ_TASK_STACK, NULL,
-                                           BUZ_TASK_PRIO, NULL, 1) != pdPASS) {
+    // Stack in PSRAM: the task only drives LEDC and reads the live settings,
+    // never flash or NVS.
+    if (!s_cmds || xTaskCreatePinnedToCoreWithCaps(buzzer_task, "buzzer", BUZ_TASK_STACK, NULL,
+                                                   BUZ_TASK_PRIO, NULL, 1,
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG, "No heap for the buzzer task, the siren plays on the caller");
         if (s_cmds) vQueueDelete(s_cmds);
         s_cmds = NULL;

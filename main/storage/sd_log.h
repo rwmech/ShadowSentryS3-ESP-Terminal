@@ -41,6 +41,25 @@ void sd_log_bus_ready(void);
 
 void sd_log_status(sd_status_t *out);
 
+// Write a whole file on the card from the writer task, so callers never touch
+// FAT. path must start with SD_MOUNT_POINT "/" and fit 63 chars; its directory
+// is created if missing. Ownership of data (any heap_caps_malloc'd buffer)
+// passes to sd_log in every case: it is free()d after the write, or at once if
+// the request is refused (no card, queue full, bad path). Never blocks.
+// Returns true if queued.
+bool sd_log_write_file(const char *path, void *data, size_t len);
+
+// Append {"kind":"snap","ts","action","file","size"} to the day log (camera
+// snapshot of a panel press). Never blocks. Returns true if queued.
+bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size);
+
+// Append one preformatted JSON line (ending in a newline) to today's log. The
+// writer task owns line from here and frees it; allocate it from PSRAM
+// (heap_caps_malloc(MALLOC_CAP_SPIRAM)). Freed at once, and false, if there is
+// no card or the queue is full. Never blocks. Used by the HTTP engine for its
+// {"kind":"http"} request lines.
+bool sd_log_line(char *line, size_t len);
+
 // Save the summary metrics now (queued to the writer task). Call before a
 // deliberate restart, then give it ~300 ms.
 void sd_log_flush(void);
@@ -55,6 +74,9 @@ void sd_log_flush(void);
 #define STATS_SRC_MAX   64
 #define STATS_CRED_MAX  32
 #define STATS_DAYS      30
+// by_type[] has room for types added later without a stats.bin format change;
+// sd_log.c asserts ATTACK_TYPE_COUNT fits. Only the first ATTACK_TYPE_COUNT are used.
+#define STATS_TYPE_SLOTS 16
 
 typedef struct {
     uint32_t ip;               // network order
@@ -74,7 +96,7 @@ typedef struct {
 typedef struct {
     uint32_t magic, version;
     uint32_t total;
-    uint32_t by_type[8];
+    uint32_t by_type[STATS_TYPE_SLOTS];   // index attack_type_t (v1 had 8)
     uint32_t first_ts, last_ts;
     uint32_t hour_key[24];     // unix hour held in each slot
     uint32_t hour_count[24];

@@ -2,6 +2,7 @@
 #include "alarm.h"
 #include "buzzer.h"
 #include "log_store.h"
+#include "ignore.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -16,7 +17,7 @@ static const char *TAG = "ALARM";
 #define ALARM_QUEUE_DEPTH    32
 #define ALARM_TASK_STACK     4096
 #define ALARM_TASK_PRIO      4
-#define ALARM_MAX_LISTENERS  4
+#define ALARM_MAX_LISTENERS  6     // UI, WebSocket, SD log, Discord, plus 2 spare
 #define NVS_NS               "alarm"
 #define NVS_KEY              "incident"
 
@@ -35,6 +36,7 @@ static SemaphoreHandle_t s_mutex;
 static alarm_info_t      s_info;            // guarded by s_mutex
 static int64_t           s_last_event_s;    // monotonic, alarm task only
 static int64_t           s_last_remind_s;   // monotonic, alarm task only
+static bool              s_rearmed;         // alarm task only: the last close was a re-arm
 
 static void (*s_listeners[ALARM_MAX_LISTENERS])(const alarm_info_t *info);
 static int s_listener_count = 0;
@@ -43,8 +45,17 @@ static int64_t mono_s(void) { return esp_timer_get_time() / 1000000LL; }
 
 void alarm_add_listener(void (*cb)(const alarm_info_t *info))
 {
-    if (!cb || s_listener_count >= ALARM_MAX_LISTENERS) return;
+    if (!cb) return;
+    if (s_listener_count >= ALARM_MAX_LISTENERS) {
+        ESP_LOGE(TAG, "Alarm listener table full (%d), listener dropped", ALARM_MAX_LISTENERS);
+        return;
+    }
     s_listeners[s_listener_count++] = cb;
+}
+
+bool alarm_closed_by_rearm(void)
+{
+    return s_rearmed;
 }
 
 void alarm_get(alarm_info_t *out)
@@ -68,10 +79,18 @@ void alarm_clear(void)
     xQueueSend(s_queue, &m, 0);
 }
 
+bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6])
+{
+    if (type < 32 && !(settings_get()->alert_mask & (1u << type))) return false;
+    return !ignore_match(src_ip, src_mac);
+}
+
 // log_store listener: runs on the appending honeypot task (as small as 3 KB of
-// stack), so it only copies five fields into the queue.
+// stack), so it only copies five fields into the queue. Types switched off and
+// ignored sources never reach the queue: logged, no incident.
 static void on_event(const attack_log_t *e)
 {
+    if (!alarm_should_alert((uint8_t)e->type, e->src_ip, e->src_mac)) return;
     alarm_msg_t m = { .kind = MSG_EVENT, .ip = e->src_ip,
                       .type = (uint8_t)e->type, .ts = e->timestamp };
     memcpy(m.mac, e->src_mac, sizeof(m.mac));
@@ -174,6 +193,7 @@ static void alarm_task(void *arg)
                 xSemaphoreGive(s_mutex);
                 persist();
                 ESP_LOGI(TAG, "Incident #%lu closed, re-armed", (unsigned long)s_info.id);
+                s_rearmed = true;
                 notify();
                 dirty = false;
             }
@@ -217,6 +237,7 @@ static void alarm_task(void *arg)
             persist();
             ESP_LOGI(TAG, "Incident #%lu closed after %lu s quiet",
                      (unsigned long)s_info.id, (unsigned long)settings_get()->alarm_quiet_s);
+            s_rearmed = false;
             notify();
         }
     }

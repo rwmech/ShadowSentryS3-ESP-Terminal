@@ -1,5 +1,6 @@
 #include "telnet_trap.h"
 #include "fake_shell.h"
+#include "trap_listen.h"
 #include "log_store.h"
 #include "telegram.h"
 #include "wifi_manager.h"
@@ -85,7 +86,7 @@ static int read_line(int sock, char *out, size_t outlen)
     return (int)pos;
 }
 
-static void handle_client(int sock, struct sockaddr_in *addr)
+static void handle_client(int sock, struct sockaddr_in *addr, uint16_t port)
 {
     struct timeval tv = {.tv_sec = TELNET_RECV_TIMEOUT_S, .tv_usec = 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -115,7 +116,10 @@ static void handle_client(int sock, struct sockaddr_in *addr)
         };
         strlcpy(entry.username, user, sizeof(entry.username));
         strlcpy(entry.password, pass, sizeof(entry.password));
-        snprintf(entry.payload, sizeof(entry.payload), "Telnet %s:%s", user, pass);
+        if (port != TELNET_PORT)
+            snprintf(entry.payload, sizeof(entry.payload), "Telnet %s:%s (port %u)", user, pass, (unsigned)port);
+        else
+            snprintf(entry.payload, sizeof(entry.payload), "Telnet %s:%s", user, pass);
         wifi_manager_lookup_mac(addr->sin_addr.s_addr, entry.src_mac);
         log_store_append(&entry);
         telegram_notify(&entry);
@@ -131,6 +135,7 @@ static void handle_client(int sock, struct sockaddr_in *addr)
                 .read_byte = tnet_read_byte,
                 .write     = tnet_write,
                 .echo      = false,          // telnet client echoes locally
+                .port      = port != TELNET_PORT ? port : 0,
             };
             fake_shell_run(&io, addr, user[0] ? user : "root");
             return;
@@ -142,31 +147,24 @@ static void handle_client(int sock, struct sockaddr_in *addr)
 
 void telnet_trap_task(void *arg)
 {
-    int srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    configASSERT(srv >= 0);
+    // Standard and alternate port, served one session at a time (trap_listen.h).
+    const uint16_t ports[2] = { TELNET_PORT, TELNET_ALT_PORT };
+    int srv[2] = { trap_listen(TELNET_PORT, TELNET_BACKLOG),
+                   trap_listen(TELNET_ALT_PORT, TELNET_BACKLOG) };
+    configASSERT(srv[0] >= 0);
 
-    int opt = 1;
-    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr = {
-        .sin_family      = AF_INET,
-        .sin_port        = htons(TELNET_PORT),
-        .sin_addr.s_addr = INADDR_ANY,
-    };
-    configASSERT(bind(srv, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-    configASSERT(listen(srv, TELNET_BACKLOG) == 0);
-
-    ESP_LOGI(TAG, "Honeypot listening on port %d (backlog=%d, timeout=%ds, max_attempts=%d)",
-             TELNET_PORT, TELNET_BACKLOG, TELNET_RECV_TIMEOUT_S, TELNET_MAX_ATTEMPTS);
+    ESP_LOGI(TAG, "Honeypot listening on port %d, alt %d (backlog=%d, timeout=%ds, max_attempts=%d)",
+             TELNET_PORT, srv[1] >= 0 ? TELNET_ALT_PORT : 0,
+             TELNET_BACKLOG, TELNET_RECV_TIMEOUT_S, TELNET_MAX_ATTEMPTS);
 
     while (1) {
         struct sockaddr_in client;
-        socklen_t clen = sizeof(client);
-        int csock = accept(srv, (struct sockaddr *)&client, &clen);
+        uint16_t port;
+        int csock = trap_accept_any(srv, ports, 2, &client, &port);
         if (csock < 0) continue;
 
-        ESP_LOGI(TAG, "Connect from %s", inet_ntoa(client.sin_addr));
-        handle_client(csock, &client);
+        ESP_LOGI(TAG, "Connect from %s to port %u", inet_ntoa(client.sin_addr), (unsigned)port);
+        handle_client(csock, &client, port);
         close(csock);
     }
 }

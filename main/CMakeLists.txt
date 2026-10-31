@@ -8,6 +8,11 @@
 #   honeypot/rtsp_trap.c    — port 554, fake Hikvision camera (Core 0)
 #   honeypot/http_trap.c    — port 80,  fake NVR login page  (Core 0)
 #   honeypot/telnet_trap.c  — port 23,  fake Ubuntu banner   (Core 0)
+#   honeypot/adb_trap.c     - port 5555, fake Android TV box (Core 0)
+#   honeypot/trap_listen.c  - 2323 and 2222 on the Telnet and SSH tasks
+#   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
+#   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
+#   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -28,14 +33,21 @@ idf_component_register(
         "wifi_monitor.c"
         "honeypot/rtsp_trap.c"
         "honeypot/http_trap.c"
+        "honeypot/http_engine.c"
         "honeypot/telnet_trap.c"
         "honeypot/fake_shell.c"
         "honeypot/ssh_trap.c"
         "honeypot/ftp_trap.c"
+        "honeypot/trap_listen.c"
+        "honeypot/adb_trap.c"
+        "honeypot/tripwire.c"
         "admin/admin_panel.c"
         "admin/api_ext.c"
         "admin/ws_server.c"
         "admin/telegram.c"
+        "admin/discord.c"
+        "admin/notify.c"
+        "admin/whatsapp.c"
         "storage/log_store.c"
         "storage/sd_log.c"
         "settings.c"
@@ -44,6 +56,12 @@ idf_component_register(
         "alarm/melody.c"
         "ui/display.cpp"
         "ui/ui.c"
+        "camera/cam.c"
+        "admin/api_cam.c"
+        "detect/detect.c"
+        "detect/ignore.c"
+        "detect/discovery.c"
+        "admin/api_devices.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
@@ -53,6 +71,8 @@ idf_component_register(
         "board"        # board.h, CrowPanel 3.5" pin map
         "alarm"        # alarm.h, buzzer.h
         "ui"           # display.h, ui.h
+        "camera"       # cam.h, OV2640 panel-press snapshots
+        "detect"       # detect.h, ignore.h, discovery.h (recon detection, ignore list, LAN discovery)
 
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}

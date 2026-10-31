@@ -2,11 +2,16 @@
 #include "alarm.h"
 #include "settings.h"
 #include "api_ext.h"
+#include "discord.h"
+#include "notify.h"
+#include "api_cam.h"
+#include "api_devices.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
 #include "wifi_manager.h"
 #include "geoip.h"
+#include "ignore.h"
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -189,10 +194,10 @@ static void serve_attacks_json(int sock)
 
     // Compute per-type counts and unique-IP count from the current window
     int      unique   = 0;
-    int      by_type[8] = {0};   // RTSP,HTTP,Telnet,SSH,FTP,ARP,WiFi,Shell
+    int      by_type[ATTACK_TYPE_COUNT] = {0};   // index attack_type_t
 
     for (int i = 0; i < n; i++) {
-        if ((int)entries[i].type < 8)
+        if ((unsigned)entries[i].type < ATTACK_TYPE_COUNT)
             by_type[(int)entries[i].type]++;
 
         bool dup = false;
@@ -210,14 +215,15 @@ static void serve_attacks_json(int sock)
 
 #define JPRINTF(...)  do { \
     int _n = snprintf(json + pos, (size_t)remaining, __VA_ARGS__); \
+    /* snprintf returns the untruncated length: clamp, so a long entry can't */ \
+    /* push pos past the buffer and the next call write out of bounds.     */ \
+    if (_n >= remaining) _n = remaining > 0 ? remaining - 1 : 0; \
     if (_n > 0) { pos += _n; remaining -= _n; } \
 } while(0)
 
-    JPRINTF("{\"total\":%lu,\"unique_ips\":%d,"
-            "\"by_type\":[%d,%d,%d,%d,%d,%d,%d,%d],\"entries\":[",
-            (unsigned long)total, unique,
-            by_type[0], by_type[1], by_type[2], by_type[3],
-            by_type[4], by_type[5], by_type[6], by_type[7]);
+    JPRINTF("{\"total\":%lu,\"unique_ips\":%d,\"by_type\":[", (unsigned long)total, unique);
+    for (int t = 0; t < ATTACK_TYPE_COUNT; t++) JPRINTF("%s%d", t ? "," : "", by_type[t]);
+    JPRINTF("],\"entries\":[");
 
     for (int i = 0; i < n && remaining > 480; i++) {
         // Escape all attacker-supplied strings before embedding in JSON
@@ -244,7 +250,8 @@ static void serve_attacks_json(int sock)
         }
 
         if (i > 0) JPRINTF(",");
-        JPRINTF("{\"ts\":%lu,\"ip\":%lu,\"type\":%d,"
+        // "ign": the source is on the ignore list now (logged, never alarms).
+        JPRINTF("{\"ts\":%lu,\"ip\":%lu,\"type\":%d,\"ign\":%s,"
                 "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
                 "\"mac\":\"%s\",\"vendor\":\"%s\","
                 "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
@@ -252,6 +259,7 @@ static void serve_attacks_json(int sock)
                 (unsigned long)entries[i].timestamp,
                 (unsigned long)entries[i].src_ip,
                 (int)entries[i].type,
+                ignore_match(entries[i].src_ip, entries[i].src_mac) ? "true" : "false",
                 user_j, pass_j, pay_j,
                 mac_j, vendor_j,
                 gi.cc, ctry_j, org_j2, gi.asn, gi.tag);
@@ -354,6 +362,7 @@ static void handle_ota(int sock, const char *req, int req_len)
     shutdown(sock, SHUT_RDWR);
     close(sock);
     vTaskDelay(pdMS_TO_TICKS(500));
+    notify_restart_intent(NOTIFY_RESTART_OTA);     // the next boot's online message says so
     esp_restart();
 }
 
@@ -399,6 +408,8 @@ static void handle_request(int sock, char *buf, int len)
         return;
     }
     if (api_ext_handle(sock, buf, len)) return;   // fork routes (settings, logs, ...)
+    if (api_cam_handle(sock, buf, len)) return;   // camera snapshot routes
+    if (api_devices_handle(sock, buf, len)) return;   // LAN discovery table
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);
@@ -407,6 +418,7 @@ static void handle_request(int sock, char *buf, int len)
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ota")) {
         handle_ota(sock, buf, len);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
+        discord_note_dashboard_ack();   // so the Discord embed can say where
         alarm_ack();
         ESP_LOGI(TAG, "Incident acknowledged via admin panel");
         send_204(sock);

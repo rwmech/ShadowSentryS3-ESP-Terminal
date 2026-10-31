@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
@@ -9,12 +10,19 @@
 #include "log_store.h"
 #include "rtsp_trap.h"
 #include "http_trap.h"
+#include "http_engine.h"
 #include "telnet_trap.h"
 #include "ssh_trap.h"
 #include "ftp_trap.h"
+#include "adb_trap.h"
+#include "tripwire.h"
+#include "trap_listen.h"
 #include "admin_panel.h"
 #include "ws_server.h"
 #include "telegram.h"
+#include "discord.h"
+#include "whatsapp.h"
+#include "notify.h"
 #include "arp_monitor.h"
 #include "geoip.h"
 #include "wifi_monitor.h"
@@ -23,6 +31,9 @@
 #include "buzzer.h"
 #include "settings.h"
 #include "sd_log.h"
+#include "cam.h"
+#include "detect.h"
+#include "discovery.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -82,6 +93,23 @@ static const char *TAG = "MAIN";
 //  wifimon: promiscuous setup + MAC format buffers + attack_log_t(240)
 //           + overhead (~1200)  → 3072 gives ~1.5 KB headroom
 #define STACK_WIFIMON   3072
+//  adb    : session buffers (body, tx, cmd, out, streams) are in PSRAM; the
+//           stack holds attack_log_t(240) + vsnprintf in adb_event, the SPIFFS
+//           append under log_store_append, and the SHA-256 finish
+//           → 6144 (high-water printed at the end of each session)
+#define STACK_ADB       6144
+//  httpeng: all buffers in PSRAM; the stack holds attack_log_t(240), a few
+//           small locals, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → HTTP_ENG_TASK_STACK 4096 (high-water printed on each new low)
+//  tripwire: rx, hex and event buffers static; the stack holds the listen
+//           tables, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → TRIPWIRE_TASK_STACK 3072 (high-water printed on each new low)
+//  disco  : receive buffer, device table and parse state in PSRAM; the stack
+//           holds small locals, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → DISCOVERY_TASK_STACK 3584 (high-water printed on each new low)
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
 // Telegram is 3 — non-critical, may wait behind WiFi driver work on Core 1.
@@ -92,6 +120,12 @@ static const char *TAG = "MAIN";
 #define PRIO_ARPMON     2
 #define PRIO_GEOIP      3
 #define PRIO_WIFIMON    2
+//  discord: small locals (<1 KB), body/content/key table in PSRAM, plus the
+//           esp_http_client + TLS frames; size and high-water in discord.h
+#define PRIO_DISCORD    3
+//  whatsapp: small locals, URL and text in PSRAM, plus the esp_http_client +
+//            TLS frames; size and high-water in whatsapp.h
+#define PRIO_WHATSAPP   3
 
 // ── Helper macro ──────────────────────────────────────────────────────────────
 
@@ -110,6 +144,20 @@ static const char *TAG = "MAIN";
              "(stack=%u, free heap=%lu)",                               \
              (name), (core), (stack),                                   \
              (unsigned long)esp_get_free_heap_size());                  \
+} while(0)
+
+// The same, with the stack in PSRAM, to save internal RAM. Only for tasks that
+// never write or read flash, NVS or SPIFFS (those disable the cache, and a
+// task with a PSRAM stack must not run then): checked per task, see CLAUDE.md.
+#define SPAWN_PSRAM(func, name, stack, prio, core)  do {                \
+    BaseType_t _r = xTaskCreatePinnedToCoreWithCaps(                    \
+        (func), (name), (stack), NULL, (prio), NULL, (core),            \
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);                           \
+    if (_r != pdPASS) {                                                 \
+        ESP_LOGE(TAG, "FATAL: failed to create task '%s' in PSRAM "    \
+                 "(stack=%u)", (name), (stack));                        \
+        configASSERT(0);                                                \
+    }                                                                   \
 } while(0)
 
 // Boot sound (about 3.6 s, skipped if the boot sound setting is off): plays
@@ -158,13 +206,21 @@ void app_main(void)
     // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
     settings_init();
 
+    // ── Recon detection and the ignore list (before anything logs events) ───
+    detect_init();
+#if DISCOVERY_ENABLE
+    discovery_init();               // state and the MAC queue the frame tap feeds
+#endif
+
     // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
     alarm_init();                   // also brings up the buzzer
     if (xTaskCreate(startup_melody_task, "melody", 3072, NULL, 1, NULL) != pdPASS) {
         ESP_LOGW(TAG, "No heap for the startup melody task, skipping it");
     }
+    notify_init();                  // reset reason (the SD boot line uses it), incident listener
     sd_log_init();
     ui_start();
+    cam_snap_init();                // waits on its own task for the touch I2C bus
 
     // ── WiFi ─────────────────────────────────────────────────────────────────
     const char *ssid = settings_get()->wifi_ssid;
@@ -179,6 +235,7 @@ void app_main(void)
         if (!wifi_manager_wait_for_ip_ms(SETTINGS_WIFI_FALLBACK_S * 1000)) {
             ESP_LOGE(TAG, "No IP on saved Wi-Fi \"%s\", reverting to config.h network", ssid);
             settings_forget_wifi();
+            notify_restart_intent(NOTIFY_RESTART_WIFI_FALLBACK);
             esp_restart();
         }
     } else {
@@ -200,9 +257,16 @@ void app_main(void)
     ESP_LOGI(TAG, "  ┌─ Core 0  Hacker World ──────────────────");
     ESP_LOGI(TAG, "  │  RTSP    port %-5d  (Fake Hikvision camera)",  RTSP_PORT);
     ESP_LOGI(TAG, "  │  HTTP    port %-5d  (Fake NVR login page)",    HTTP_PORT);
+#if HTTP_ENGINE_ENABLE
+    ESP_LOGI(TAG, "  │  HTTP    ports %d %d %d  (same page, 0 = off)",
+             HTTP_ALT_PORT1, HTTP_ALT_PORT2, HTTP_ALT_PORT3);
+#endif
     ESP_LOGI(TAG, "  │  Telnet  port %-5d  (Fake Ubuntu 20.04)",      TELNET_PORT);
     ESP_LOGI(TAG, "  │  SSH     port %-5d  (Fake OpenSSH 8.9p1)",     SSH_PORT);
     ESP_LOGI(TAG, "  │  FTP     port %-5d  (Fake vsFTPd 3.0.5)",      FTP_PORT);
+    ESP_LOGI(TAG, "  │  Telnet  port %-5d  (alt, same shell, 0 = off)", TELNET_ALT_PORT);
+    ESP_LOGI(TAG, "  │  SSH     port %-5d  (alt, same server, 0 = off)", SSH_ALT_PORT);
+    ESP_LOGI(TAG, "  │  ADB     port %-5d  (Fake Android TV box, 0 = off)", ADB_PORT);
     ESP_LOGI(TAG, "  ├─ Core 1  Admin World ───────────────────");
     ESP_LOGI(TAG, "  │  Panel   http://%s:%d", ip, ADMIN_PORT);
 #if MDNS_ENABLE
@@ -211,32 +275,68 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "  │  Telegram alerts: %s",
              settings_telegram_enabled() ? "enabled" : "NOT CONFIGURED");
+    ESP_LOGI(TAG, "  │  Discord alerts: %s",
+             settings_discord_enabled() ? "enabled" : "NOT CONFIGURED");
+    ESP_LOGI(TAG, "  │  WhatsApp alerts: %s",
+             settings_whatsapp_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");
+#if DISCOVERY_ENABLE
+    ESP_LOGI(TAG, "  │  LAN discovery listeners: log only, never answer");
+#endif
     ESP_LOGI(TAG, "  └─────────────────────────────────────────");
     ESP_LOGI(TAG, "");
+
+    // Discord queues and listeners before the traps can append (task below).
+    discord_init();
+    // Notification backends register with notify.c (boot message below).
+    telegram_init();
+    whatsapp_init();
 
     // ── Core 0 — Hacker World ────────────────────────────────────────────────
     // Each honeypot is a blocking accept loop; lower-priority tasks (Core 1)
     // cannot starve because the honeypots sleep inside accept() most of the time.
     SPAWN(rtsp_trap_task,   "rtsp",   STACK_RTSP,     PRIO_HONEYPOT, 0);
+#if HTTP_ENGINE_ENABLE
+    SPAWN(http_engine_task, "http",   HTTP_ENG_TASK_STACK, PRIO_HONEYPOT, 0);
+#else
     SPAWN(http_trap_task,   "http",   STACK_HTTP,     PRIO_HONEYPOT, 0);
+#endif
     SPAWN(telnet_trap_task, "telnet", STACK_TELNET,   PRIO_HONEYPOT, 0);
     SPAWN(ssh_trap_task,    "ssh",    STACK_SSH,      PRIO_HONEYPOT, 0);
     SPAWN(ftp_trap_task,    "ftp",    STACK_FTP,      PRIO_HONEYPOT, 0);
+#if ADB_PORT
+    SPAWN(adb_trap_task,    "adb",    STACK_ADB,      PRIO_HONEYPOT, 0);
+#endif
+#if TRIPWIRE_ENABLE
+    SPAWN(tripwire_task,    "tripwire", TRIPWIRE_TASK_STACK, PRIO_HONEYPOT, 0);
+#endif
 
     // ── Core 1 — Admin World ─────────────────────────────────────────────────
-    // Pass IP to telegram before spawning so the task can send the boot alert.
-    telegram_set_boot_ip(ip);
-    SPAWN(geoip_task,       "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
-    SPAWN(telegram_task,    "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
+    // GeoIP, Telegram and Discord only do HTTP(S) and RAM work: stacks in PSRAM.
+    SPAWN_PSRAM(geoip_task,    "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
+    SPAWN_PSRAM(telegram_task, "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
+    SPAWN_PSRAM(discord_task,  "discord", DISCORD_TASK_STACK, PRIO_DISCORD, 1);
+    if (settings_whatsapp_enabled()) {
+        SPAWN(whatsapp_task, "whatsapp", WHATSAPP_TASK_STACK, PRIO_WHATSAPP, 1);
+    } else {
+        // Not configured: no task, so its 6 KB internal stack stays free.
+        // Enabling it in Settings marks a reboot pending.
+        ESP_LOGI(TAG, "WhatsApp not configured: task not started");
+    }
     SPAWN(admin_panel_task, "admin",  STACK_ADMIN,    PRIO_ADMIN,    1);
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);
+#if DISCOVERY_ENABLE
+    SPAWN(discovery_task,   "disco",  DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
+#endif
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();
+
+    // One "online" message per boot to every enabled backend, with the reset reason.
+    notify_boot(ip);
 
     ESP_LOGI(TAG, "All tasks spawned — free heap: %lu B  (internal: %lu B)",
              (unsigned long)esp_get_free_heap_size(),

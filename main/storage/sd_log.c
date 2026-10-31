@@ -3,7 +3,11 @@
 #include "config.h"
 #include "log_store.h"
 #include "alarm.h"
+#include "notify.h"
 #include "wifi_manager.h"
+#include "ignore.h"
+#include "http_engine.h"
+#include "tripwire.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -19,6 +23,7 @@
 #include "esp_heap_caps.h"
 #include "lwip/ip4_addr.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -31,13 +36,36 @@ static const char *TAG = "SDLOG";
 #define SD_BUS_WAIT_MS   15000     // give up waiting for the display after this
 #define BUS_READY_BIT    BIT0
 
-typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH } sdm_kind_t;
+typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH, SDM_FILE, SDM_SNAP, SDM_LINE } sdm_kind_t;
+
+typedef struct {                    // SDM_FILE: the writer owns data and frees it
+    char   path[64];
+    void  *data;
+    size_t len;
+} sdm_file_t;
+
+typedef struct {                    // SDM_SNAP: one "snap" line in the day log
+    uint32_t ts;
+    uint32_t size;
+    char     action[16];
+    char     file[64];
+} sdm_snap_t;
+
+typedef struct {                    // SDM_LINE: a whole JSON line; the writer frees it
+    char    *text;
+    size_t   len;
+    uint32_t ts;
+} sdm_line_t;
 
 typedef struct {
     sdm_kind_t kind;
+    bool       ignored;        // SDM_ATTACK: source on the ignore list when it was logged
     union {
         attack_log_t e;
         alarm_info_t a;
+        sdm_file_t   f;
+        sdm_snap_t   s;
+        sdm_line_t   l;
     };
 } sdm_t;
 
@@ -51,17 +79,34 @@ static bool               s_stats_dirty;
 
 #define STATS_PATH     SD_MOUNT_POINT "/stats.bin"
 #define STATS_MAGIC    0x53535354u      // "TSSS"
-#define STATS_VERSION  1
+#define STATS_VERSION  2              // 2: by_type[STATS_TYPE_SLOTS], was [8]
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
 };
+_Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
+_Static_assert(ATTACK_TYPE_COUNT <= STATS_TYPE_SLOTS, "stats.bin by_type[] too small: bump STATS_VERSION");
+
+// stats.bin version 1: the same fields with by_type[8]. Read once and migrated.
+typedef struct {
+    uint32_t magic, version;
+    uint32_t total;
+    uint32_t by_type[8];
+    uint32_t first_ts, last_ts;
+    uint32_t hour_key[24];
+    uint32_t hour_count[24];
+    uint32_t day_key[STATS_DAYS];
+    uint32_t day_count[STATS_DAYS];
+    stat_src_t  src[STATS_SRC_MAX];
+    stat_cred_t cred[STATS_CRED_MAX];
+} sd_stats_v1_t;
 
 // ── Listeners (other tasks: copy and queue only) ──────────────────────────────
 
 static void on_attack(const attack_log_t *e)
 {
-    sdm_t m = { .kind = SDM_ATTACK };
+    sdm_t m = { .kind = SDM_ATTACK, .ignored = ignore_match(e->src_ip, e->src_mac) };
     m.e = *e;
     if (xQueueSend(s_q, &m, 0) != pdTRUE) s_status.dropped++;
 }
@@ -89,6 +134,49 @@ void sd_log_flush(void)
     sdm_t m = { .kind = SDM_FLUSH };
     // Front of the queue, so it isn't stuck behind a backlog of line writes.
     if (s_q) xQueueSendToFront(s_q, &m, pdMS_TO_TICKS(100));
+}
+
+bool sd_log_write_file(const char *path, void *data, size_t len)
+{
+    sdm_t m = { .kind = SDM_FILE };
+    bool ok = s_q && s_status.mounted && data && len &&
+              strncmp(path, SD_MOUNT_POINT "/", sizeof(SD_MOUNT_POINT)) == 0 &&
+              strlcpy(m.f.path, path, sizeof(m.f.path)) < sizeof(m.f.path);
+    if (ok) {
+        m.f.data = data;
+        m.f.len  = len;
+        ok = xQueueSend(s_q, &m, 0) == pdTRUE;
+        if (!ok) s_status.dropped++;
+    }
+    if (!ok) free(data);
+    return ok;
+}
+
+bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size)
+{
+    if (!s_q || !s_status.mounted) return false;
+    sdm_t m = { .kind = SDM_SNAP };
+    m.s.ts   = ts;
+    m.s.size = (uint32_t)size;
+    strlcpy(m.s.action, action ? action : "", sizeof(m.s.action));
+    strlcpy(m.s.file, file ? file : "", sizeof(m.s.file));
+    if (xQueueSend(s_q, &m, 0) != pdTRUE) { s_status.dropped++; return false; }
+    return true;
+}
+
+bool sd_log_line(char *line, size_t len)
+{
+    sdm_t m = { .kind = SDM_LINE };
+    bool ok = s_q && s_status.mounted && line && len && line[len - 1] == '\n';
+    if (ok) {
+        m.l.text = line;
+        m.l.len  = len;
+        m.l.ts   = (uint32_t)time(NULL);
+        ok = xQueueSend(s_q, &m, 0) == pdTRUE;
+        if (!ok) s_status.dropped++;
+    }
+    if (!ok) free(line);
+    return ok;
 }
 
 void sd_log_status(sd_status_t *out)
@@ -140,19 +228,24 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
     switch (m->kind) {
     case SDM_ATTACK: {
         const attack_log_t *e = &m->e;
-        char user_j[96], pass_j[192], pay_j[400];
+        char user_j[96], pass_j[192], pay_j[400], cat_j[48] = "";
         jesc(e->username, user_j, sizeof(user_j));
         jesc(e->password, pass_j, sizeof(pass_j));
         jesc(e->payload,  pay_j,  sizeof(pay_j));
         fmt_ip(e->src_ip, ip, sizeof(ip));
         wifi_manager_format_mac(e->src_mac, mac, sizeof(mac));
         uint8_t t = (uint8_t)e->type;
+        const char *cat = t == ATTACK_HTTP ? http_engine_category_key(e->payload) : NULL;
+        if (cat) snprintf(cat_j, sizeof(cat_j), ",\"category\":\"%s\"", cat);   // fixed keys
+        const char *svc = t == ATTACK_TRIPWIRE ? tripwire_service_key(e->payload) : NULL;
+        if (svc) snprintf(cat_j, sizeof(cat_j), ",\"service\":\"%s\"", svc);    // fixed names
         *ts_out = clock_valid(e->timestamp) ? e->timestamp : (uint32_t)time(NULL);
         return snprintf(buf, len,
             "{\"kind\":\"attack\",\"ts\":%lu,\"ip\":\"%s\",\"type\":%u,\"tname\":\"%s\","
-            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"}\n",
-            (unsigned long)*ts_out, ip, t, t < 8 ? TYPE_NAME[t] : "?",
-            user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac));
+            "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s%s}\n",
+            (unsigned long)*ts_out, ip, t, t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?",
+            user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac), cat_j,
+            m->ignored ? ",\"ignored\":true" : "");
     }
     case SDM_ALARM: {
         const alarm_info_t *a = &m->a;
@@ -165,12 +258,23 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
             (unsigned long)*ts_out, a->state <= 2 ? STATE[a->state] : "?",
             (unsigned long)a->id, ip, (unsigned)a->type, (unsigned long)a->count);
     }
+    case SDM_SNAP: {
+        const sdm_snap_t *s = &m->s;
+        char act_j[40], file_j[136];
+        jesc(s->action, act_j, sizeof(act_j));
+        jesc(s->file, file_j, sizeof(file_j));
+        *ts_out = clock_valid(s->ts) ? s->ts : (uint32_t)time(NULL);
+        return snprintf(buf, len,
+            "{\"kind\":\"snap\",\"ts\":%lu,\"action\":\"%s\",\"file\":\"%s\",\"size\":%lu}\n",
+            (unsigned long)*ts_out, act_j, file_j, (unsigned long)s->size);
+    }
     case SDM_BOOT:
     default:
         *ts_out = (uint32_t)time(NULL);
         return snprintf(buf, len,
-            "{\"kind\":\"boot\",\"ts\":%lu,\"fw\":\"%s\",\"reset\":%d}\n",
-            (unsigned long)*ts_out, SHADOWSENTRY_VERSION, (int)esp_reset_reason());
+            "{\"kind\":\"boot\",\"ts\":%lu,\"fw\":\"%s\",\"reset\":%d,\"reason\":\"%s\"}\n",
+            (unsigned long)*ts_out, SHADOWSENTRY_VERSION, (int)esp_reset_reason(),
+            notify_boot_reason());     // device text from a fixed table: no JSON escaping needed
     }
 }
 
@@ -246,7 +350,7 @@ static void stats_add(const attack_log_t *e, uint32_t ts)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_stats->total++;
-    if ((unsigned)e->type < 8) s_stats->by_type[e->type]++;
+    if ((unsigned)e->type < ATTACK_TYPE_COUNT) s_stats->by_type[e->type]++;
     if (clock_valid(ts)) {
         if (!s_stats->first_ts) s_stats->first_ts = ts;
         s_stats->last_ts = ts;
@@ -276,9 +380,34 @@ static void stats_load(void)
     FILE *f = fopen(STATS_PATH, "rb");
     if (!f) f = fopen(STATS_PATH ".tmp", "rb");
     if (!f) return;
-    sd_stats_t *tmp = heap_caps_malloc(sizeof(*tmp), MALLOC_CAP_SPIRAM);
-    if (tmp && fread(tmp, sizeof(*tmp), 1, f) == 1 &&
-        tmp->magic == STATS_MAGIC && tmp->version == STATS_VERSION) {
+    sd_stats_t *tmp = heap_caps_calloc(1, sizeof(*tmp), MALLOC_CAP_SPIRAM);
+    uint32_t hdr[2] = { 0, 0 };
+    bool ok = false;
+    if (tmp && fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == STATS_MAGIC && fseek(f, 0, SEEK_SET) == 0) {
+        if (hdr[1] == STATS_VERSION) {
+            ok = fread(tmp, sizeof(*tmp), 1, f) == 1;
+        } else if (hdr[1] == 1) {           // older firmware: by_type[8], migrate
+            sd_stats_v1_t *v1 = heap_caps_malloc(sizeof(*v1), MALLOC_CAP_SPIRAM);
+            if (v1 && fread(v1, sizeof(*v1), 1, f) == 1) {
+                tmp->magic    = STATS_MAGIC;
+                tmp->version  = STATS_VERSION;
+                tmp->total    = v1->total;
+                memcpy(tmp->by_type, v1->by_type, sizeof(v1->by_type));
+                tmp->first_ts = v1->first_ts;
+                tmp->last_ts  = v1->last_ts;
+                memcpy(tmp->hour_key, v1->hour_key, sizeof(tmp->hour_key));
+                memcpy(tmp->hour_count, v1->hour_count, sizeof(tmp->hour_count));
+                memcpy(tmp->day_key, v1->day_key, sizeof(tmp->day_key));
+                memcpy(tmp->day_count, v1->day_count, sizeof(tmp->day_count));
+                memcpy(tmp->src, v1->src, sizeof(tmp->src));
+                memcpy(tmp->cred, v1->cred, sizeof(tmp->cred));
+                ok = true;
+                ESP_LOGI(TAG, "Summary metrics: stats.bin v1 migrated to v%d", STATS_VERSION);
+            }
+            heap_caps_free(v1);
+        }
+    }
+    if (ok) {
         // The card is not trusted to hold what we wrote: terminate the strings.
         for (int i = 0; i < STATS_CRED_MAX; i++) {
             tmp->cred[i].user[sizeof(tmp->cred[i].user) - 1] = '\0';
@@ -371,6 +500,32 @@ static bool mount(bool display_has_bus)
 
 // ── Writer task ───────────────────────────────────────────────────────────────
 
+// SDM_FILE: write a whole file (parent directory created if missing), then free
+// the caller's buffer. Write-then-rename, so a power cut never leaves a torn file
+// under the final name.
+static void write_file(sdm_file_t *f)
+{
+    char dir[sizeof(f->path)], tmp[sizeof(f->path) + 4];
+    f->path[sizeof(f->path) - 1] = '\0';
+    strlcpy(dir, f->path, sizeof(dir));
+    char *slash = strrchr(dir, '/');
+    if (slash && slash != dir) { *slash = '\0'; mkdir(dir, 0775); }
+    snprintf(tmp, sizeof(tmp), "%s.tmp", f->path);
+
+    FILE *fp = fopen(tmp, "wb");
+    bool ok = fp && fwrite(f->data, 1, f->len, fp) == f->len;
+    if (fp) ok = (fclose(fp) == 0) && ok;
+    if (ok) { remove(f->path); ok = rename(tmp, f->path) == 0; }
+    else remove(tmp);
+    free(f->data);
+    f->data = NULL;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!ok) s_status.write_errors++;
+    xSemaphoreGive(s_mutex);
+    if (!ok) ESP_LOGW(TAG, "write to %s failed", f->path);
+}
+
 static void sd_task(void *arg)
 {
     (void)arg;
@@ -381,6 +536,8 @@ static void sd_task(void *arg)
         sdm_t m;
         for (;;) {
             xQueueReceive(s_q, &m, portMAX_DELAY);
+            if (m.kind == SDM_FILE) free(m.f.data);
+            if (m.kind == SDM_LINE) free(m.l.text);
             if (m.kind == SDM_ATTACK)
                 stats_add(&m.e, clock_valid(m.e.timestamp) ? m.e.timestamp : (uint32_t)time(NULL));
         }
@@ -407,16 +564,29 @@ static void sd_task(void *arg)
             if (s_stats_dirty) stats_save();
             continue;
         }
+        if (m.kind == SDM_FILE) {
+            write_file(&m.f);
+            continue;
+        }
 
         uint32_t ts = 0;
-        int n = format_line(&m, line, sizeof(line), &ts);
-        if (m.kind == SDM_ATTACK) stats_add(&m.e, ts);
-        if (n <= 0) continue;
-        if (n >= (int)sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
+        const char *out = line;
+        int n;
+        if (m.kind == SDM_LINE) {
+            out = m.l.text;
+            n   = (int)m.l.len;
+            ts  = m.l.ts;
+        } else {
+            n = format_line(&m, line, sizeof(line), &ts);
+            if (m.kind == SDM_ATTACK) stats_add(&m.e, ts);
+            if (n <= 0) continue;
+            if (n >= (int)sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
+        }
         day_path(ts, path, sizeof(path));
 
         FILE *f = fopen(path, "a");
-        bool ok = f && fwrite(line, 1, (size_t)n, f) == (size_t)n;
+        bool ok = f && fwrite(out, 1, (size_t)n, f) == (size_t)n;
+        if (m.kind == SDM_LINE) free(m.l.text);
         if (f) ok = (fclose(f) == 0) && ok;   // close per line: power loss costs one line
 
         xSemaphoreTake(s_mutex, portMAX_DELAY);

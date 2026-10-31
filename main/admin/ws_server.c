@@ -3,8 +3,10 @@
 #include "log_store.h"
 #include "geoip.h"
 #include "wifi_manager.h"
+#include "ignore.h"
 #include "config.h"
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "lwip/inet.h"
 #include <string.h>
@@ -59,12 +61,13 @@ static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
     }
 
     snprintf(buf, len,
-        "{\"ts\":%lu,\"ip\":%lu,\"type\":%d,"
+        "{\"ts\":%lu,\"ip\":%lu,\"type\":%d,\"ign\":%s,"
         "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
         "\"mac\":\"%s\",\"vendor\":\"%s\","
         "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
         "\"asn\":\"%s\",\"geotag\":\"%s\"}",
         (unsigned long)e->timestamp, (unsigned long)e->src_ip, (int)e->type,
+        ignore_match(e->src_ip, e->src_mac) ? "true" : "false",
         user_j, pass_j, pay_j, mac_j, vendor,
         gi.cc, ctry_j, org_j, gi.asn, gi.tag);
 }
@@ -191,10 +194,16 @@ void ws_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port      = ADMIN_WS_PORT;
-    cfg.ctrl_port        = ADMIN_WS_PORT + 1;        // own control port (distinct)
+    // The control socket is UDP on localhost. ADMIN_WS_PORT + 1 (9999) took
+    // UDP 9999 from the Kasa discovery listener; this is the only httpd, so the
+    // IDF default port is free.
+    cfg.ctrl_port        = ESP_HTTPD_DEF_CTRL_PORT;
     cfg.max_open_sockets = ADMIN_WS_MAX_CLIENTS + 1;
     cfg.lru_purge_enable = true;
     cfg.stack_size       = 8192;                     // broadcast_work formats JSON here
+    // The push only formats JSON and sends on sockets (no flash or NVS), so the
+    // server task's stack goes to PSRAM.
+    cfg.task_caps        = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed — live push disabled");

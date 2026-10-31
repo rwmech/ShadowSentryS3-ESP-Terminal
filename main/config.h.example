@@ -77,6 +77,30 @@
 #define TELEGRAM_BOT_TOKEN          "YOUR_BOT_TOKEN"
 #define TELEGRAM_CHAT_ID            "YOUR_CHAT_ID"
 
+// ── Discord ──────────────────────────────────────────────────────────────────
+//
+// Channel webhook for incident alerts and the deduplicated event log
+// (Discord: channel settings, Integrations, Webhooks, New Webhook, Copy URL).
+// Must start with https://discord.com/api/webhooks/ (or discordapp.com).
+// The URL is a secret: anyone holding it can post to the channel. "" disables
+// Discord; the dashboard's Settings page can set or clear it at run time.
+
+#define DISCORD_WEBHOOK_URL         ""
+
+// ── WhatsApp (CallMeBot) ─────────────────────────────────────────────────────
+//
+// Boot and incident alerts (opened, acknowledged, closed) to your own WhatsApp
+// number through CallMeBot's free personal API. Get the apikey by following the
+// activation steps on https://www.callmebot.com/blog/free-api-whatsapp-messages/
+//
+// WHATSAPP_PHONE is the number that activated the key, in international format
+// with the country code first, e.g. "+34123123123" (no spaces).
+// WHATSAPP_APIKEY is a secret. "" for either disables WhatsApp; the dashboard's
+// Settings page can set or clear both at run time.
+
+#define WHATSAPP_PHONE              ""
+#define WHATSAPP_APIKEY             ""
+
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
 // Dashboard is accessible at http://<device-ip>:ADMIN_PORT
@@ -107,6 +131,52 @@
 #define TELNET_PORT                 23      // Telnet bruteforce (default creds)
 #define SSH_PORT                    22      // SSH scanner version fingerprinting
 #define FTP_PORT                    21      // FTP bruteforce (USER/PASS plaintext)
+
+// ── Extra trap ports (fork) ───────────────────────────────────────────────────
+//
+// Alternate Telnet and SSH ports, served by the same Telnet and SSH tasks (one
+// session at a time across both ports), and the ADB trap. 0 disables a port.
+// main/honeypot/trap_listen.h has the same defaults for a config.h without them.
+#define TELNET_ALT_PORT             2323    // Mirai-family Telnet bruteforce
+#define SSH_ALT_PORT                2222    // SSH bruteforce on the common alt port
+#define ADB_PORT                    5555    // Android Debug Bridge (TV boxes, Kimwolf, BADBOX)
+
+// HTTP engine (main/honeypot/http_engine.c): one task serves HTTP_PORT and the
+// alternate HTTP ports, up to 4 connections at once, every port with upstream's
+// NVR page. Each request is logged with a label from its shape and User-Agent.
+// 0 = upstream's single-port http_trap_task. main/honeypot/http_engine.h has the
+// defaults and collision checks for a config.h without these.
+#define HTTP_ENGINE_ENABLE          1
+#define HTTP_ALT_PORT1              8080    // DShield top 10; 0 disables a port
+#define HTTP_ALT_PORT2              8000
+#define HTTP_ALT_PORT3              9000
+
+// Tripwires (main/honeypot/tripwire.c): ports for services this box does not
+// run. Any connection is logged as a Tripwire event and alerts: the service,
+// the port and the client's first bytes in hex, then the connection is
+// closed. One task, one connection at a time, 5 s each; one event per source
+// and service per 30 s, more connections counted into the next one.
+// TRIPWIRE_ENABLE 0 turns them all off; 0 disables one port.
+// main/honeypot/tripwire.h has the defaults and checks for a config.h without these.
+#define TRIPWIRE_ENABLE             1
+#define TRIPWIRE_RDP_PORT           3389    // Remote Desktop (client first)
+#define TRIPWIRE_VNC_PORT           5900    // VNC, sends "RFB 003.008"
+#define TRIPWIRE_SMB_PORT           445     // SMB, worm propagation (client first)
+#define TRIPWIRE_REDIS_PORT         6379    // Redis (client first)
+#define TRIPWIRE_MYSQL_PORT         3306    // MySQL, sends a 5.7 handshake
+#define TRIPWIRE_MSSQL_PORT         1433    // Microsoft SQL Server (client first)
+#define TRIPWIRE_JETDIRECT_PORT     9100    // HP JetDirect raw printing (client first)
+
+// LAN discovery listeners (main/detect/discovery.c): log only, these sockets
+// never send. SSDP 1900, WS-Discovery 3702, LLMNR 5355, NBNS 137, Kasa UDP
+// 9999 and 20002, LIFX 56700, PlayStation 987 and 9302, and DHCP 67 (client
+// broadcasts: hostname, vendor class, parameter list) feed a seen-devices
+// table: GET /api/devices and the dashboard's Devices tab. A new device,
+// protocol or label is logged as a Discovery event, which opens no incident
+// unless switched on under "Alert on". mDNS 5353 is not bound (the mdns
+// component owns it). main/detect/discovery.h has the defaults.
+#define DISCOVERY_ENABLE            1
+#define DISCOVERY_DHCP              1       // 0: leave UDP 67 alone
 
 // ── Telnet fake shell (Cowrie-style) ───────────────────────────────────────────
 //
@@ -229,6 +299,11 @@ _Static_assert(ADMIN_WS_PORT != ADMIN_PORT,
 _Static_assert(sizeof(MDNS_HOSTNAME) >= 2 && sizeof(MDNS_HOSTNAME) <= 32,
     "MDNS_HOSTNAME must be 1–31 characters");
 
+_Static_assert(sizeof(WHATSAPP_PHONE) <= 17,
+    "WHATSAPP_PHONE must be at most 16 characters (+ and up to 15 digits)");
+_Static_assert(sizeof(WHATSAPP_APIKEY) <= 33,
+    "WHATSAPP_APIKEY must be at most 32 characters");
+
 _Static_assert(LOG_RING_SIZE >= 10 && LOG_RING_SIZE <= 500,
     "LOG_RING_SIZE must be 10–500  (500 entries ≈ 117 KB RAM)");
 
@@ -248,3 +323,31 @@ _Static_assert(FTP_PORT    != HTTP_PORT,   "FTP_PORT and HTTP_PORT must differ")
 _Static_assert(FTP_PORT    != TELNET_PORT, "FTP_PORT and TELNET_PORT must differ");
 _Static_assert(FTP_PORT    != SSH_PORT,    "FTP_PORT and SSH_PORT must differ");
 _Static_assert(ADMIN_PORT  != FTP_PORT,    "ADMIN_PORT collides with FTP_PORT");
+
+// Fork ports: 0 = disabled, never collides
+#define PORT_FREE_(p) ((p) != RTSP_PORT && (p) != HTTP_PORT && (p) != TELNET_PORT && \
+                       (p) != SSH_PORT && (p) != FTP_PORT && (p) != ADMIN_PORT && \
+                       (p) != ADMIN_WS_PORT && (p) != ADMIN_WS_PORT + 1)
+_Static_assert(TELNET_ALT_PORT == 0 || PORT_FREE_(TELNET_ALT_PORT), "TELNET_ALT_PORT collides with another port");
+_Static_assert(SSH_ALT_PORT    == 0 || PORT_FREE_(SSH_ALT_PORT),    "SSH_ALT_PORT collides with another port");
+_Static_assert(ADB_PORT        == 0 || PORT_FREE_(ADB_PORT),        "ADB_PORT collides with another port");
+_Static_assert(TELNET_ALT_PORT == 0 || TELNET_ALT_PORT != SSH_ALT_PORT, "TELNET_ALT_PORT and SSH_ALT_PORT must differ");
+_Static_assert(ADB_PORT == 0 || (ADB_PORT != TELNET_ALT_PORT && ADB_PORT != SSH_ALT_PORT),
+    "ADB_PORT collides with an alternate port");
+
+// Tripwire ports: not on another trap, admin or HTTP port (tripwire.h also
+// checks that no two tripwire ports are the same)
+#define TRIPWIRE_FREE_(p) ((p) == 0 || (PORT_FREE_(p) && (p) != TELNET_ALT_PORT && \
+                           (p) != SSH_ALT_PORT && (p) != ADB_PORT && (p) != HTTP_ALT_PORT1 && \
+                           (p) != HTTP_ALT_PORT2 && (p) != HTTP_ALT_PORT3))
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_RDP_PORT),       "TRIPWIRE_RDP_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_VNC_PORT),       "TRIPWIRE_VNC_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_SMB_PORT),       "TRIPWIRE_SMB_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_REDIS_PORT),     "TRIPWIRE_REDIS_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MYSQL_PORT),     "TRIPWIRE_MYSQL_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MSSQL_PORT),     "TRIPWIRE_MSSQL_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT collides with another port");
+
+// Discovery: on or off (its ports are UDP and fixed by the protocols)
+_Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
+_Static_assert(DISCOVERY_DHCP == 0 || DISCOVERY_DHCP == 1, "DISCOVERY_DHCP must be 0 or 1");

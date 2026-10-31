@@ -4,7 +4,9 @@
 #include "buzzer.h"
 #include "log_store.h"
 #include "sd_log.h"
+#include "cam.h"
 #include "wifi_manager.h"
+#include "ignore.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -70,10 +72,14 @@ static QueueHandle_t s_q;
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
 };
 static const char *TYPE_HEX[] = {   // same palette as the web dashboard
     "a78bfa", "fbbf24", "f87171", "38bdf8", "34d399", "f472b6", "fb923c", "a3e635",
+    "22d3ee", "94a3b8", "e879f9", "3ddc84", "ef4444", "818cf8",
 };
+_Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
+_Static_assert(sizeof(TYPE_HEX) / sizeof(TYPE_HEX[0]) == ATTACK_TYPE_COUNT, "TYPE_HEX: one per attack_type_t");
 
 // Bright palette: the ILI9488 has no gamma tuning, and dark greys on near
 // black read as dim, so text is white or light grey and accents are saturated.
@@ -220,8 +226,8 @@ static void fmt_age(uint32_t first, char *buf, size_t len)
     else               snprintf(buf, len, "open %luh %02lum", d / 3600, d % 3600 / 60);
 }
 
-static const char *type_name(uint8_t t) { return t < 8 ? TYPE_NAME[t] : "?"; }
-static const char *type_hex(uint8_t t)  { return t < 8 ? TYPE_HEX[t]  : "ffffff"; }
+static const char *type_name(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?"; }
+static const char *type_hex(uint8_t t)  { return t < ATTACK_TYPE_COUNT ? TYPE_HEX[t]  : "ffffff"; }
 
 // ── Sources ───────────────────────────────────────────────────────────────────
 
@@ -461,15 +467,19 @@ static void rearm_done(void)
     alarm_clear();
 }
 
-// ACKNOWLEDGE press start.
+// ACKNOWLEDGE press start. The photo is taken here, while the person is
+// still at the glass; the hold that follows decides whether the action
+// fires. cam_snap() only queues, so it is safe on the UI task.
 static void ack_press_start_cb(lv_event_t *ev)
 {
+    cam_snap("ack");
     hold_begin((hold_t *)lv_event_get_user_data(ev));
 }
 
-// RE-ARM press start.
+// RE-ARM press start: photo first, as for ACKNOWLEDGE.
 static void rearm_press_start_cb(lv_event_t *ev)
 {
+    cam_snap("clear");
     hold_begin((hold_t *)lv_event_get_user_data(ev));
 }
 
@@ -554,6 +564,109 @@ static void flash_cb(lv_timer_t *t)
         s_flash_r_on = r;
         lv_obj_set_style_bg_color(s_flash_r, r ? COL_FLASH_R : COL_BG, 0);
     }
+}
+
+// ── Ignore source (detect-core) ───────────────────────────────────────────────
+//
+// IGNORE SOURCE sits in the incident card's bottom-right slot (CARD_SLOT2_W x
+// CARD_BTN_H), beside ACKNOWLEDGE / RE-ARM. A tap opens a confirmation; Ignore
+// adds the source to the ignore list and, if the open incident is still from
+// it, acknowledges and re-arms it so the siren and the side bars stop. The
+// panel only adds: removal is on the dashboard.
+
+static lv_obj_t *s_c_ignore;
+static struct { uint32_t ip; uint8_t mac[6]; uint32_t id; } s_ign;   // the source the dialog is about
+static const char *IGN_BTNS[] = { "Ignore", "Cancel", "" };
+
+static bool mac_zero(const uint8_t m[6])
+{
+    for (int i = 0; i < 6; i++) if (m[i]) return false;
+    return true;
+}
+
+static void ignore_mb_cb(lv_event_t *ev)
+{
+    lv_obj_t *mb = lv_event_get_current_target(ev);
+    const char *b = lv_msgbox_get_active_btn_text(mb);
+    bool yes = b && !strcmp(b, "Ignore");
+    lv_msgbox_close_async(mb);
+    if (!yes) return;
+
+    char note[IGNORE_NOTE_MAX];
+    snprintf(note, sizeof(note), "panel, incident #%lu", (unsigned long)s_ign.id);
+    esp_err_t r = ignore_add(s_ign.ip, mac_zero(s_ign.mac) ? NULL : s_ign.mac, note);
+    if (r != ESP_OK) {
+        lv_obj_t *e = lv_msgbox_create(NULL, "Not ignored",
+            r == ESP_ERR_NO_MEM ? "The ignore list is full (32). Remove entries on the dashboard Settings page."
+                                : "Could not save the ignore list.", NULL, true);
+        lv_obj_set_width(e, 400);
+        lv_obj_center(e);
+        return;
+    }
+    ESP_LOGW(TAG, "Source of incident #%lu ignored from the panel", (unsigned long)s_ign.id);
+    alarm_info_t a;
+    alarm_get(&a);
+    bool same = (s_ign.ip && a.src_ip == s_ign.ip) ||
+                (!mac_zero(s_ign.mac) && !memcmp(a.src_mac, s_ign.mac, 6));
+    if (a.state != ALARM_IDLE && same) {
+        alarm_ack();        // queued in order: ACTIVE -> ACKED -> IDLE
+        alarm_clear();
+    }
+}
+
+static void ignore_cb(lv_event_t *ev)
+{
+    (void)ev;
+    if (s_alarm.state == ALARM_IDLE) return;
+    s_ign.ip = s_alarm.src_ip;
+    memcpy(s_ign.mac, s_alarm.src_mac, 6);
+    s_ign.id = s_alarm.id;
+
+    char ip[16], mac[WIFI_MAC_STR_LEN], who[96];
+    static char body[320];
+    fmt_ip(s_ign.ip, ip, sizeof(ip));
+    wifi_manager_format_mac(s_ign.mac, mac, sizeof(mac));
+    const char *v = wifi_manager_mac_vendor(s_ign.mac);
+    if (!s_ign.ip)         snprintf(who, sizeof(who), "MAC %s%s%s%s", mac, v[0] ? " (" : "", v, v[0] ? ")" : "");
+    else if (v[0])         snprintf(who, sizeof(who), "%s (%s, %s)", ip, v, mac);
+    else                   snprintf(who, sizeof(who), "%s (%s)", ip, mac);
+    snprintf(body, sizeof(body), "Ignore %s?\n\nEvents from it will still be logged but will not alarm. "
+             "Undo from the dashboard Settings page.", who);
+
+    lv_obj_t *mb = lv_msgbox_create(NULL, "Ignore source", body, IGN_BTNS, false);
+    lv_obj_set_width(mb, 440);
+    lv_obj_set_style_text_font(mb, &lv_font_montserrat_20, 0);
+    lv_obj_t *btns = lv_msgbox_get_btns(mb);
+    lv_obj_set_size(btns, 400, 56);
+    lv_obj_center(mb);
+    lv_obj_add_event_cb(mb, ignore_mb_cb, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+static void ignore_show(bool on)
+{
+    // Nothing to ignore without a source address.
+    on = on && (s_alarm.src_ip || !mac_zero(s_alarm.src_mac));
+    if (on) lv_obj_clear_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_ignore(void)
+{
+    s_c_ignore = lv_btn_create(s_card);
+    lv_obj_set_size(s_c_ignore, CARD_SLOT2_W, CARD_BTN_H);
+    lv_obj_align(s_c_ignore, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_c_ignore, COL_SUB, 0);
+    lv_obj_set_style_shadow_width(s_c_ignore, 0, 0);
+    lv_obj_set_style_radius(s_c_ignore, 8, 0);
+    lv_obj_set_style_pad_all(s_c_ignore, 0, 0);
+    lv_obj_t *lbl = lv_label_create(s_c_ignore);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl, COL_DARK, 0);
+    lv_label_set_text(lbl, "IGNORE\nSOURCE");
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(lbl);
+    lv_obj_add_event_cb(s_c_ignore, ignore_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void flash_set(bool on)
@@ -739,6 +852,7 @@ static void apply_alarm(const alarm_info_t *a)
     if (reseed) feed_reseed();
     refresh_age();
     flash_set(a->state == ALARM_ACTIVE);
+    ignore_show(a->state == ALARM_ACTIVE || a->state == ALARM_ACKED);
     // A new view repaints the whole screen once (a few hundred ms over SPI, only
     // on a state change), so no area keeps pixels from the old one.
     static bool logged;
@@ -938,6 +1052,7 @@ static void build_ui(void)
     s_flash = lv_timer_create(flash_cb, FLASH_TICK_MS, NULL);
     lv_timer_pause(s_flash);
 
+    build_ignore();
     lv_timer_create(clock_cb, 1000, NULL);
     lv_timer_create(figures_cb, 2000, NULL);
 }

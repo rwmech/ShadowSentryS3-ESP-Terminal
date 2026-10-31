@@ -17,5 +17,9 @@ dependencies:
   lovyan03/LovyanGFX:
     git: https://github.com/lovyan03/LovyanGFX.git
     version: "1.2.36"
+  # OV2640 on J5: snapshot of whoever presses ACK or CLEAR (main/camera/cam.c).
+  # 2.1.x has an SCCB built on the new i2c_master driver (sccb-ng.c), which can
+  # attach to the bus touch already owns; the legacy SCCB would boot-loop IDF 5.4.
+  espressif/esp32-camera: "2.1.8"
   idf:
     version: ">=5.0"

@@ -57,11 +57,13 @@
 // Drops the entry silently if the queue is full.
 void telegram_notify(const attack_log_t *entry);
 
-// Store the device IP so telegram_task() can send a boot-online notification.
-// Call this before spawning telegram_task(), after WiFi IP is acquired.
-void telegram_set_boot_ip(const char *ip_str);
+// Create the notice queue and register Telegram with the notification layer
+// (notify.h), which sends the boot-online message. Call once at boot, after
+// notify_init() and before notify_boot().
+void telegram_init(void);
 
 // FreeRTOS task entry point. Pass NULL as arg.
 // Pin to Core 1 with xTaskCreatePinnedToCore().
-// Sends a boot-online message, then blocks on the attack queue indefinitely.
+// Sends notify.c messages (boot-online) and attack alerts, only while
+// Telegram is configured (settings_telegram_enabled()).
 void telegram_task(void *arg);
