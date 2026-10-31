@@ -560,7 +560,7 @@ footer{
         <label class="muted" style="font-size:.72rem"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option><option>snap</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <a class="btn" id="lg-dl" href="#" download>Download</a>
       </div>
@@ -1057,6 +1057,7 @@ function logRow(o){
   if(kind==='attack'){type=TNAME[o.type]||o.tname||'?';ip=o.ip;mac=o.mac;user=o.user;pass=o.pass;det=o.payload;}
   else if(kind==='alarm'){type=TNAME[o.type]||'';ip=o.ip;det='incident #'+o.id+' '+o.event+', '+o.count+' event(s)';}
   else if(kind==='boot'){det='firmware '+o.fw+', reset: '+(RESET[o.reset]||o.reset);}
+  else if(kind==='snap'){det=(o.action||'press')+' photo'+(o.file?': '+o.file+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
   const tr=el('tr'),mc=td(mac&&mac!=='unknown'?mac:'','td-mac'),dc=td(det==null?'':det,'td-payload');
   if(kind==='attack'&&o.vendor)mc.append(el('span','vendor-chip',o.vendor));
   dc.title=String(det==null?'':det);

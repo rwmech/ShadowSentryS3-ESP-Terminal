@@ -3,6 +3,7 @@
 #include "alarm.h"
 #include "log_store.h"
 #include "sd_log.h"
+#include "cam.h"
 #include "wifi_manager.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
@@ -264,12 +265,22 @@ static void ack_cb(lv_event_t *ev)
     alarm_ack();
 }
 
+// Photo at the start of the press, while the person is still at the glass;
+// the hold that follows decides whether the action fires. cam_snap() only
+// queues, so it is safe here on the UI task.
+static void ack_pressed_cb(lv_event_t *ev)
+{
+    (void)ev;
+    cam_snap("ack");
+}
+
 // Re-arm needs REARM_HOLD_MS of continuous press; LVGL's long press (400 ms)
 // is too easy to hit by accident.
 static void rearm_cb(lv_event_t *ev)
 {
     lv_event_code_t c = lv_event_get_code(ev);
     if (c == LV_EVENT_PRESSED) {
+        cam_snap("clear");          // photo at the press start, see ack_pressed_cb
         s_rearm_t0    = lv_tick_get();
         s_rearm_fired = false;
         lv_label_set_text(s_c_rearm_lbl, "KEEP HOLDING...");
@@ -494,6 +505,7 @@ static void build_ui(void)
     s_c_ack = card_button(s_card, COL_RED, &s_c_ack_lbl);
     lv_label_set_text(s_c_ack_lbl, TXT_ACK);
     lv_obj_add_event_cb(s_c_ack, ack_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(s_c_ack, ack_pressed_cb, LV_EVENT_PRESSED, NULL);
     s_c_rearm = card_button(s_card, COL_GREEN, &s_c_rearm_lbl);
     lv_label_set_text(s_c_rearm_lbl, TXT_REARM);
     lv_obj_add_event_cb(s_c_rearm, rearm_cb, LV_EVENT_ALL, NULL);
@@ -559,6 +571,7 @@ static void build_ui(void)
     lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_add_event_cb(btn, ack_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(btn, ack_pressed_cb, LV_EVENT_PRESSED, NULL);
     s_ov_btn_lbl = label(btn, &lv_font_montserrat_20, COL_ACK_TXT);
     lv_label_set_text(s_ov_btn_lbl, TXT_OV_ACK);
     lv_obj_center(s_ov_btn_lbl);
