@@ -182,6 +182,7 @@ main{flex:1;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
 .fb-probe {background:rgba(148,163,184,.12);color:#94a3b8;  border:1px solid rgba(148,163,184,.28)}
 .fb-sweep {background:rgba(232,121,249,.12);color:#e879f9;  border:1px solid rgba(232,121,249,.28)}
 .fb-adb   {background:rgba(61,220,132,.12); color:#3ddc84;  border:1px solid rgba(61,220,132,.28)}
+.fb-trip  {background:rgba(239,68,68,.12);  color:#ef4444;  border:1px solid rgba(239,68,68,.28)}
 .ign-chip{font-size:.6rem;padding:1px 6px;margin-left:6px;border-radius:8px;color:var(--muted);border:1px dashed var(--muted)}
 .alerts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px 18px}
 .alerts label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:.75rem}
@@ -407,6 +408,7 @@ footer{
           <circle id="arc-probe"  cx="70" cy="70" r="54" fill="none" stroke="#94a3b8" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-sweep"  cx="70" cy="70" r="54" fill="none" stroke="#e879f9" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-adb"    cx="70" cy="70" r="54" fill="none" stroke="#3ddc84" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-trip"   cx="70" cy="70" r="54" fill="none" stroke="#ef4444" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
         </svg>
         <div class="donut-center">
           <div class="dc-val" id="dc-total">0</div>
@@ -485,6 +487,12 @@ footer{
           <span class="lname">ADB</span>
           <div class="lbar"><div class="lbar-fill" id="lb-adb" style="background:#3ddc84;width:0%"></div></div>
           <span class="lval" id="lv-adb">0</span>
+        </div>
+        <div class="legend-item" data-ftype="12" onclick="setFilter(12)">
+          <div class="legend-dot" style="background:#ef4444"></div>
+          <span class="lname">Tripwire</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-trip" style="background:#ef4444;width:0%"></div></div>
+          <span class="lval" id="lv-trip">0</span>
         </div>
       </div>
     </div>
@@ -726,15 +734,15 @@ function fmt(ts){
   return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 const BADGE=['<span class="feed-badge fb-rtsp">RTSP</span>','<span class="feed-badge fb-http">HTTP</span>','<span class="feed-badge fb-telnet">TELNET</span>','<span class="feed-badge fb-ssh">SSH</span>','<span class="feed-badge fb-ftp">FTP</span>','<span class="feed-badge fb-arp">ARP</span>','<span class="feed-badge fb-wifi">WIFI</span>','<span class="feed-badge fb-shell">SHELL</span>',
-  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>'];
-const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;'];
+  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>','<span class="feed-badge fb-trip">TRIPWIRE</span>'];
+const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;','&#128276;'];
 const CIRC=2*Math.PI*54;
 // One entry per attack_type_t (main/storage/log_store.h), in order.
-const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB'];
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire'];
 const TCOUNT=TNAME.length;
-const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555];
+const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies'];
 const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured',
-  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open'];
+  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL or JetDirect: any connection is the alert'];
 const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
@@ -810,7 +818,7 @@ function setVal(id,val){
 }
 
 // donut chart, one arc per attack type (index = attack_type_t)
-const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb'];
+const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb','trip'];
 function updateDonut(vals){
   vals=vals||[];const sum=vals.reduce((a,b)=>a+(b||0),0),tot=sum||1,gap=4,n=DKEYS.length;
   let off=0;

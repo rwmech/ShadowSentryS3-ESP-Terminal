@@ -7,6 +7,7 @@
 #include "wifi_manager.h"
 #include "ignore.h"
 #include "http_engine.h"
+#include "tripwire.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -82,7 +83,7 @@ static bool               s_stats_dirty;
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
-    "Port scan", "Probe", "ARP sweep", "ADB",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire",
 };
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
 _Static_assert(ATTACK_TYPE_COUNT <= STATS_TYPE_SLOTS, "stats.bin by_type[] too small: bump STATS_VERSION");
@@ -236,6 +237,8 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
         uint8_t t = (uint8_t)e->type;
         const char *cat = t == ATTACK_HTTP ? http_engine_category_key(e->payload) : NULL;
         if (cat) snprintf(cat_j, sizeof(cat_j), ",\"category\":\"%s\"", cat);   // fixed keys
+        const char *svc = t == ATTACK_TRIPWIRE ? tripwire_service_key(e->payload) : NULL;
+        if (svc) snprintf(cat_j, sizeof(cat_j), ",\"service\":\"%s\"", svc);    // fixed names
         *ts_out = clock_valid(e->timestamp) ? e->timestamp : (uint32_t)time(NULL);
         return snprintf(buf, len,
             "{\"kind\":\"attack\",\"ts\":%lu,\"ip\":\"%s\",\"type\":%u,\"tname\":\"%s\","

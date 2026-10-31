@@ -15,6 +15,7 @@
 #include "ssh_trap.h"
 #include "ftp_trap.h"
 #include "adb_trap.h"
+#include "tripwire.h"
 #include "trap_listen.h"
 #include "admin_panel.h"
 #include "ws_server.h"
@@ -100,6 +101,10 @@ static const char *TAG = "MAIN";
 //           small locals, ESP_LOG formatting and the SPIFFS append under
 //           log_store_append (so it must stay internal)
 //           → HTTP_ENG_TASK_STACK 4096 (high-water printed on each new low)
+//  tripwire: rx, hex and event buffers static; the stack holds the listen
+//           tables, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → TRIPWIRE_TASK_STACK 3072 (high-water printed on each new low)
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
 // Telegram is 3 — non-critical, may wait behind WiFi driver work on Core 1.
@@ -292,6 +297,9 @@ void app_main(void)
     SPAWN(ftp_trap_task,    "ftp",    STACK_FTP,      PRIO_HONEYPOT, 0);
 #if ADB_PORT
     SPAWN(adb_trap_task,    "adb",    STACK_ADB,      PRIO_HONEYPOT, 0);
+#endif
+#if TRIPWIRE_ENABLE
+    SPAWN(tripwire_task,    "tripwire", TRIPWIRE_TASK_STACK, PRIO_HONEYPOT, 0);
 #endif
 
     // ── Core 1 — Admin World ─────────────────────────────────────────────────
