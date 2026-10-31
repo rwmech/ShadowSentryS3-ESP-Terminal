@@ -47,6 +47,8 @@ idf_component_register(
         "ui/ui.c"
         "camera/cam.c"
         "admin/api_cam.c"
+        "detect/detect.c"
+        "detect/ignore.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
@@ -57,6 +59,7 @@ idf_component_register(
         "alarm"        # alarm.h, buzzer.h
         "ui"           # display.h, ui.h
         "camera"       # cam.h, OV2640 panel-press snapshots
+        "detect"       # detect.h, ignore.h (recon detection, ignore list)
 
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}

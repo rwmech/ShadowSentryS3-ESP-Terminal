@@ -15,6 +15,8 @@
 #include "log_store.h"
 #include "wifi_manager.h"
 #include "discord.h"
+#include "ignore.h"
+#include "detect.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -275,6 +277,65 @@ static bool query_param(const char *query, const char *key, char *out, size_t ou
     return false;
 }
 
+// ── Addresses (detect-core) ───────────────────────────────────────────────────
+
+// The client's IPv4 (network order), 0 if unknown.
+static uint32_t peer_ip(int sock)
+{
+    struct sockaddr_in a;
+    socklen_t l = sizeof(a);
+    if (getpeername(sock, (struct sockaddr *)&a, &l) == 0 && a.sin_family == AF_INET)
+        return a.sin_addr.s_addr;
+    return 0;
+}
+
+// Strict dotted quad, four decimal octets 0-255, no leading junk or tail.
+static bool parse_ipv4(const char *t, uint32_t *out)
+{
+    uint8_t b[4];
+    for (int i = 0; i < 4; i++) {
+        if (*t < '0' || *t > '9') return false;
+        unsigned v = 0, digits = 0;
+        while (*t >= '0' && *t <= '9') {
+            v = v * 10 + (unsigned)(*t++ - '0');
+            if (++digits > 3 || v > 255) return false;
+        }
+        b[i] = (uint8_t)v;
+        if (i < 3 && *t++ != '.') return false;
+    }
+    if (*t) return false;
+    memcpy(out, b, 4);                          // b[0] first: network order
+    return true;
+}
+
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// aa:bb:cc:dd:ee:ff or aa-bb-cc-dd-ee-ff, exactly.
+static bool parse_mac(const char *t, uint8_t mac[6])
+{
+    if (strlen(t) != 17) return false;
+    for (int i = 0; i < 6; i++) {
+        int h = hexval(t[i * 3]), l = hexval(t[i * 3 + 1]);
+        if (h < 0 || l < 0) return false;
+        if (i < 5 && t[i * 3 + 2] != ':' && t[i * 3 + 2] != '-') return false;
+        mac[i] = (uint8_t)(h << 4 | l);
+    }
+    return true;
+}
+
+static void jb_ip(jb_t *j, uint32_t ip)
+{
+    char b[16] = "";
+    if (ip) { ip4_addr_t a = { .addr = ip }; ip4addr_ntoa_r(&a, b, sizeof(b)); }
+    jb_printf(j, "\"%s\"", b);
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 // "Set" means configured: the config.h placeholders start with 'Y' ("YOUR_...").
@@ -282,6 +343,7 @@ static bool secret_set(const char *s) { return s[0] && s[0] != 'Y'; }
 
 static void get_settings(int sock)
 {
+    uint32_t client = peer_ip(sock);
     settings_t s;
     settings_copy_saved(&s);
     const settings_t *live = settings_get();
@@ -308,6 +370,17 @@ static void get_settings(int sock)
     char ssid[sizeof(live->wifi_ssid)];
     strlcpy(ssid, live->wifi_ssid, sizeof(ssid));
     jb_str(&j, ssid, sizeof(ssid));
+    // Detection: alert switches (bit per attack_type_t), thresholds, admin allowlist.
+    jb_printf(&j, ",\"type_count\":%d,\"alert_mask\":%lu,\"scan_ports\":%lu,\"scan_window_s\":%lu,"
+              "\"arp_targets\":%lu,\"arp_window_s\":%lu,\"admin_allow\":[",
+              ATTACK_TYPE_COUNT, (unsigned long)s.alert_mask, (unsigned long)s.scan_ports,
+              (unsigned long)s.scan_window_s, (unsigned long)s.arp_targets, (unsigned long)s.arp_window_s);
+    for (int i = 0; i < s.admin_allow_n && i < SETTINGS_ADMIN_ALLOW_MAX; i++) {
+        if (i) JB_LIT(&j, ",");
+        jb_ip(&j, s.admin_allow[i]);
+    }
+    JB_LIT(&j, "],\"client_ip\":");
+    jb_ip(&j, client);
     JB_LIT(&j, "}");
     memset(&s, 0, sizeof(s));
     send_json(sock, &j);
@@ -357,6 +430,38 @@ static const char *take_bool(const cJSON *root, const char *key, bool *dst)
         return s_err;
     }
     *dst = cJSON_IsTrue(it);
+    return NULL;
+}
+
+// "admin_allow": an array of up to 8 IPv4 strings. A non-empty list must hold
+// the requesting client's own address, so a save can never lock Rob out.
+static const char *take_allow(const cJSON *root, settings_t *s, uint32_t client)
+{
+    const cJSON *al = cJSON_GetObjectItemCaseSensitive(root, "admin_allow");
+    if (!al || cJSON_IsNull(al)) return NULL;
+    if (!cJSON_IsArray(al)) return "admin_allow must be an array of IPv4 addresses";
+    if (cJSON_GetArraySize(al) > SETTINGS_ADMIN_ALLOW_MAX) return "admin allowlist holds at most 8 addresses";
+    uint32_t ips[SETTINGS_ADMIN_ALLOW_MAX];
+    int n = 0;
+    bool mine = false;
+    const cJSON *it;
+    cJSON_ArrayForEach(it, al) {
+        if (!cJSON_IsString(it) || !it->valuestring || !parse_ipv4(it->valuestring, &ips[n]) || !ips[n]) {
+            snprintf(s_err, sizeof(s_err), "admin allowlist entry %d is not an IPv4 address", n + 1);
+            return s_err;
+        }
+        if (ips[n] == client) mine = true;
+        n++;
+    }
+    if (n && !mine) {
+        char ip[16] = "?";
+        if (client) { ip4_addr_t a = { .addr = client }; ip4addr_ntoa_r(&a, ip, sizeof(ip)); }
+        snprintf(s_err, sizeof(s_err), "the admin allowlist must include your own address, %s", ip);
+        return s_err;
+    }
+    memset(s->admin_allow, 0, sizeof(s->admin_allow));
+    memcpy(s->admin_allow, ips, (size_t)n * sizeof(ips[0]));
+    s->admin_allow_n = (uint8_t)n;
     return NULL;
 }
 
@@ -434,6 +539,14 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
     if (dc_clear) s.discord_webhook[0] = '\0';
     if (!err) err = take_bool(root, "discord_log_events", &s.discord_log_events);
+    if (!err) err = take_u32(root, "alert_mask", &s.alert_mask, 0xFFFFFFFFu);
+    if (!err) err = take_u32(root, "scan_ports", &s.scan_ports, 86400);
+    if (!err) err = take_u32(root, "scan_window_s", &s.scan_window_s, 86400);
+    if (!err) err = take_u32(root, "arp_targets", &s.arp_targets, 86400);
+    if (!err) err = take_u32(root, "arp_window_s", &s.arp_window_s, 86400);
+    if (!err) err = take_allow(root, &s, peer_ip(sock));
+    // Types this firmware does not know yet stay on.
+    s.alert_mask |= ~((1u << ATTACK_TYPE_COUNT) - 1u);
     s.brightness = (uint8_t)bright;
     bool pw_changed = false;
     {
@@ -545,8 +658,15 @@ static void get_summary(int sock)
 
     jb_printf(&j, "\"total\":%lu,\"first_ts\":%lu,\"last_ts\":%lu,\"by_type\":[",
               (unsigned long)m->total, (unsigned long)m->first_ts, (unsigned long)m->last_ts);
-    for (int i = 0; i < 8; i++) jb_printf(&j, "%s%lu", i ? "," : "", (unsigned long)m->by_type[i]);
+    for (int i = 0; i < ATTACK_TYPE_COUNT; i++) jb_printf(&j, "%s%lu", i ? "," : "", (unsigned long)m->by_type[i]);
     JB_LIT(&j, "],");
+    detect_stats_t ds;
+    detect_get_stats(&ds);
+    jb_printf(&j, "\"detect\":{\"queued\":%lu,\"dropped\":%lu,\"admin_dropped\":%lu,\"arp_requests\":%lu,"
+              "\"scans\":%lu,\"probes\":%lu,\"sweeps\":%lu,\"arp_tap\":%s},",
+              (unsigned long)ds.queued, (unsigned long)ds.dropped, (unsigned long)ds.admin_dropped,
+              (unsigned long)ds.arp_requests, (unsigned long)ds.scans, (unsigned long)ds.probes,
+              (unsigned long)ds.sweeps, ds.arp_tap ? "true" : "false");
 
     // 24 hourly counts, oldest first, ending with the current hour.
     uint32_t last24 = 0;
@@ -598,7 +718,7 @@ static void get_summary(int sock)
         jb_str(&j, wifi_manager_mac_vendor(s->mac), 64);
         jb_printf(&j, ",\"count\":%lu,\"first_ts\":%lu,\"last_ts\":%lu,\"last_type\":%u}",
                   (unsigned long)s->count, (unsigned long)s->first_ts, (unsigned long)s->last_ts,
-                  s->last_type < 8 ? (unsigned)s->last_type : 255u);
+                  s->last_type < ATTACK_TYPE_COUNT ? (unsigned)s->last_type : 255u);
     }
     JB_LIT(&j, "],");
 
@@ -745,6 +865,111 @@ static void get_log_file(int sock, const char *query)
     fclose(f);
 }
 
+// ── Ignore list: GET /api/ignore, POST /api/ignore (detect-core) ──────────────
+//
+// POST {"action":"add","ip":"192.168.0.50","mac":"aa:bb:cc:dd:ee:ff","note":"NAS"}
+//   ip and mac are optional, one is required; "" means none.
+// POST {"action":"remove","index":3,"ip":"...","mac":"..."}
+//   ip and mac must still match entry 3 as listed, so a panel add in between
+//   can't make the dashboard remove the wrong entry (409 if it moved).
+
+static void get_ignore(int sock)
+{
+    ignore_entry_t *l = (ignore_entry_t *)s_chunk;          // 32 x 56 B fits CHUNK
+    _Static_assert(IGNORE_MAX * sizeof(ignore_entry_t) <= CHUNK, "ignore list must fit s_chunk");
+    int n = ignore_list(l, IGNORE_MAX);
+    jb_t j;
+    jb_init(&j);
+    jb_printf(&j, "{\"max\":%d,\"entries\":[", IGNORE_MAX);
+    for (int i = 0; i < n; i++) {
+        static const uint8_t zero[6] = { 0 };
+        bool has_mac = memcmp(l[i].mac, zero, 6) != 0;
+        char mac[WIFI_MAC_STR_LEN] = "";
+        if (has_mac) wifi_manager_format_mac(l[i].mac, mac, sizeof(mac));
+        jb_printf(&j, "%s{\"index\":%d,\"ip\":", i ? "," : "", i);
+        jb_ip(&j, l[i].ip);
+        JB_LIT(&j, ",\"mac\":");
+        jb_str(&j, mac, sizeof(mac));
+        JB_LIT(&j, ",\"vendor\":");
+        jb_str(&j, has_mac ? wifi_manager_mac_vendor(l[i].mac) : "", 64);
+        JB_LIT(&j, ",\"note\":");
+        jb_str(&j, l[i].note, sizeof(l[i].note));
+        jb_printf(&j, ",\"ts\":%lu}", (unsigned long)l[i].added_ts);
+    }
+    JB_LIT(&j, "]}");
+    send_json(sock, &j);
+}
+
+// Optional "ip" / "mac" strings: absent or "" = none. Returns an error or NULL.
+static const char *take_addr(const cJSON *root, uint32_t *ip, uint8_t mac[6])
+{
+    *ip = 0;
+    memset(mac, 0, 6);
+    const cJSON *a = cJSON_GetObjectItemCaseSensitive(root, "ip");
+    const cJSON *m = cJSON_GetObjectItemCaseSensitive(root, "mac");
+    if (a && !cJSON_IsNull(a)) {
+        if (!cJSON_IsString(a) || !a->valuestring) return "ip must be a string";
+        if (a->valuestring[0] && (!parse_ipv4(a->valuestring, ip) || !*ip)) return "ip must be an IPv4 address like 192.168.0.50";
+    }
+    if (m && !cJSON_IsNull(m)) {
+        if (!cJSON_IsString(m) || !m->valuestring) return "mac must be a string";
+        if (m->valuestring[0] && !parse_mac(m->valuestring, mac)) return "mac must look like aa:bb:cc:dd:ee:ff";
+    }
+    return NULL;
+}
+
+static void post_ignore(int sock, const char *req, int req_len)
+{
+    size_t blen = 0;
+    const char *why = NULL;
+    const char *status = read_body(sock, req, req_len, &blen, &why);
+    if (status) { send_error(sock, status, why); return; }
+    if (!json_depth_ok(s_body, blen, 2)) { send_error(sock, "400 Bad Request", "JSON nested too deeply"); return; }
+    cJSON *root = cJSON_ParseWithLength(s_body, blen);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        send_error(sock, "400 Bad Request", "body must be a JSON object");
+        return;
+    }
+    const cJSON *act = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *action = cJSON_IsString(act) && act->valuestring ? act->valuestring : "";
+    uint32_t ip;
+    uint8_t mac[6];
+    static const uint8_t zero[6] = { 0 };
+    const char *err = take_addr(root, &ip, mac);
+    const char *st = "400 Bad Request";
+    esp_err_t r = ESP_OK;
+
+    if (err) {
+        /* reported below */
+    } else if (!strcmp(action, "add")) {
+        const cJSON *nt = cJSON_GetObjectItemCaseSensitive(root, "note");
+        const char *note = cJSON_IsString(nt) && nt->valuestring ? nt->valuestring : "";
+        if (!ip && !memcmp(mac, zero, 6)) err = "give an IP, a MAC or both";
+        else if (strlen(note) >= IGNORE_NOTE_MAX) err = "note is too long (max 39)";
+        else {
+            r = ignore_add(ip, memcmp(mac, zero, 6) ? mac : NULL, note);
+            if (r == ESP_ERR_NO_MEM) { st = "409 Conflict"; err = "the ignore list is full (32)"; }
+            else if (r != ESP_OK)    { st = "500 Internal Server Error"; err = "could not save the ignore list"; }
+        }
+    } else if (!strcmp(action, "remove")) {
+        const cJSON *ix = cJSON_GetObjectItemCaseSensitive(root, "index");
+        ignore_entry_t *l = (ignore_entry_t *)s_chunk;
+        int n = ignore_list(l, IGNORE_MAX);
+        double d = cJSON_IsNumber(ix) ? ix->valuedouble : -1;
+        int i = (d >= 0 && d < IGNORE_MAX) ? (int)d : -1;      // range first: no UB cast
+        if (i < 0 || d != (double)i || i >= n) err = "index out of range";
+        else if (l[i].ip != ip || memcmp(l[i].mac, mac, 6)) { st = "409 Conflict"; err = "the list changed, reload it"; }
+        else if (ignore_remove(i) != ESP_OK) { st = "500 Internal Server Error"; err = "could not save the ignore list"; }
+    } else {
+        err = "action must be add or remove";
+    }
+    cJSON_Delete(root);
+    if (err) { send_error(sock, st, err); return; }
+    ESP_LOGI(TAG, "Ignore list %s from the dashboard", action);
+    get_ignore(sock);
+}
+
 // ── POST /api/alarm/clear: re-arm ─────────────────────────────────────────────
 //
 // Ends an acknowledged incident so the next event alarms again. Logs and
@@ -770,7 +995,7 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (post && !strcmp(path, "/api/alarm/clear")) { post_alarm_clear(sock); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
-           R_DC_TEST, R_DC_STATUS } r = R_NONE;
+           R_DC_TEST, R_DC_STATUS, R_IGN_GET, R_IGN_POST } r = R_NONE;
     if      (get  && !strcmp(path, "/api/settings"))    r = R_SET_GET;
     else if (post && !strcmp(path, "/api/settings"))    r = R_SET_POST;
     else if (post && !strcmp(path, "/api/reboot"))      r = R_REBOOT;
@@ -780,6 +1005,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     else if (get  && !strcmp(path, "/api/logs/file"))   r = R_FILE;
     else if (post && !strcmp(path, "/api/discord/test"))   r = R_DC_TEST;
     else if (get  && !strcmp(path, "/api/discord/status")) r = R_DC_STATUS;
+    else if (get  && !strcmp(path, "/api/ignore"))      r = R_IGN_GET;
+    else if (post && !strcmp(path, "/api/ignore"))      r = R_IGN_POST;
     if (r == R_NONE) return false;
 
     // A client that stops reading can't hold the single admin task for ever.
@@ -796,6 +1023,8 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     case R_FILE:     get_log_file(sock, query); break;
     case R_DC_TEST:  post_discord_test(sock); break;
     case R_DC_STATUS: get_discord_status(sock); break;
+    case R_IGN_GET:  get_ignore(sock); break;
+    case R_IGN_POST: post_ignore(sock, req, req_len); break;
     default: break;
     }
     return true;

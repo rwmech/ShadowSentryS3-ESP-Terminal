@@ -25,6 +25,7 @@
 #include "settings.h"
 #include "sd_log.h"
 #include "cam.h"
+#include "detect.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -162,6 +163,9 @@ void app_main(void)
 
     // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
     settings_init();
+
+    // ── Recon detection and the ignore list (before anything logs events) ───
+    detect_init();
 
     // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
     alarm_init();                   // also brings up the buzzer

@@ -31,6 +31,15 @@ Everything Rob has asked for, or that came out of testing and research, that is 
   - The panel can only add; removal is dashboard-only, so the panel can never undo what only the backend should, and the backend can always undo the panel.
   - It is built so the later "Alert on" page reuses it.
 
+## Built since this list started (now in the README "This fork" section)
+
+- alarm-ux, Discord (incident posts plus the deduplicated event log), camera (photo on ACK and RE-ARM; on the board but the sensor is not working yet), the shield heartbeat, panel-polish (2 s hold fill, melody from the score, cleaner layout, 3 px running light, police side bars).
+- detect-core, in merge 2026-10-31:
+  - port-scan, probe and ARP-sweep detection;
+  - Alert-on switches and thresholds;
+  - the ignore list with the panel IGNORE SOURCE button and its confirmation (ignored sources are logged and flagged, never alerted);
+  - admin-port stealth with an allowlist (console recovery: `admin-allow clear`).
+
 ## Proposed build order
 
 The TA's recommendation, by value against effort. Rob picks.

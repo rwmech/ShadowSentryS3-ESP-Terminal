@@ -12,6 +12,11 @@ typedef enum {
     ATTACK_ARP    = 5,   // ARP-spoof / MITM detection (not a port honeypot)
     ATTACK_WIFI   = 6,   // 802.11 radio-layer attack (deauth/disassoc flood)
     ATTACK_SHELL  = 7,   // interactive fake-shell session (Telnet post-login)
+    // Append only: the value is stored in the flash ring and on the microSD.
+    ATTACK_SCAN      = 8,   // port scan: many distinct ports from one source (detect/detect.c)
+    ATTACK_PROBE     = 9,   // SYN to a trap port with no login or request
+    ATTACK_ARP_SWEEP = 10,  // one MAC asking who-has for many hosts
+    ATTACK_TYPE_COUNT       // number of types; size every per-type table with it
 } attack_type_t;
 
 typedef struct {

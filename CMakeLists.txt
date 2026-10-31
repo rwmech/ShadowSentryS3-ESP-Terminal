@@ -31,3 +31,12 @@ endif()
 
 # ── Project ───────────────────────────────────────────────────────────────────
 project(shadow_sentry_s3)
+
+# ── lwIP IPv4 input hook (main/detect) ────────────────────────────────────────
+# IDF 5.4 has no Kconfig switch for LWIP_HOOK_IP4_INPUT. Its lwipopts.h makes
+# lwip_default_hooks.h the hook file, and that includes ESP_IDF_LWIP_HOOK_FILENAME
+# when defined: define it for the lwip target only, as IDF's
+# examples/network/vlan_support does. The hook itself is in main/detect/detect.c.
+idf_component_get_property(lwip lwip COMPONENT_LIB)
+target_include_directories(${lwip} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/main/detect")
+target_compile_definitions(${lwip} PRIVATE "ESP_IDF_LWIP_HOOK_FILENAME=\"ss_lwip_hooks.h\"")
