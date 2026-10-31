@@ -6,6 +6,7 @@
 #include "ignore.h"
 #include "config.h"
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "lwip/inet.h"
 #include <string.h>
@@ -197,6 +198,9 @@ void ws_server_start(void)
     cfg.max_open_sockets = ADMIN_WS_MAX_CLIENTS + 1;
     cfg.lru_purge_enable = true;
     cfg.stack_size       = 8192;                     // broadcast_work formats JSON here
+    // The push only formats JSON and sends on sockets (no flash or NVS), so the
+    // server task's stack goes to PSRAM.
+    cfg.task_caps        = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed — live push disabled");

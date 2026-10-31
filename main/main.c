@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
@@ -128,6 +129,20 @@ static const char *TAG = "MAIN";
              "(stack=%u, free heap=%lu)",                               \
              (name), (core), (stack),                                   \
              (unsigned long)esp_get_free_heap_size());                  \
+} while(0)
+
+// The same, with the stack in PSRAM, to save internal RAM. Only for tasks that
+// never write or read flash, NVS or SPIFFS (those disable the cache, and a
+// task with a PSRAM stack must not run then): checked per task, see CLAUDE.md.
+#define SPAWN_PSRAM(func, name, stack, prio, core)  do {                \
+    BaseType_t _r = xTaskCreatePinnedToCoreWithCaps(                    \
+        (func), (name), (stack), NULL, (prio), NULL, (core),            \
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);                           \
+    if (_r != pdPASS) {                                                 \
+        ESP_LOGE(TAG, "FATAL: failed to create task '%s' in PSRAM "    \
+                 "(stack=%u)", (name), (stack));                        \
+        configASSERT(0);                                                \
+    }                                                                   \
 } while(0)
 
 // Boot sound (about 3.6 s, skipped if the boot sound setting is off): plays
@@ -267,9 +282,10 @@ void app_main(void)
 #endif
 
     // ── Core 1 — Admin World ─────────────────────────────────────────────────
-    SPAWN(geoip_task,       "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
-    SPAWN(telegram_task,    "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
-    SPAWN(discord_task,     "discord", DISCORD_TASK_STACK, PRIO_DISCORD, 1);
+    // GeoIP, Telegram and Discord only do HTTP(S) and RAM work: stacks in PSRAM.
+    SPAWN_PSRAM(geoip_task,    "geoip",  STACK_GEOIP,    PRIO_GEOIP,    1);
+    SPAWN_PSRAM(telegram_task, "tg",     STACK_TELEGRAM, PRIO_TELEGRAM, 1);
+    SPAWN_PSRAM(discord_task,  "discord", DISCORD_TASK_STACK, PRIO_DISCORD, 1);
     if (settings_whatsapp_enabled()) {
         SPAWN(whatsapp_task, "whatsapp", WHATSAPP_TASK_STACK, PRIO_WHATSAPP, 1);
     } else {
