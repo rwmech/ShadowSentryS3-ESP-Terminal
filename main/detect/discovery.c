@@ -9,6 +9,8 @@
 #include "log_store.h"
 #include "sd_log.h"
 #include "telegram.h"
+#include "discord.h"
+#include "alarm.h"
 #include "wifi_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -43,9 +45,9 @@ static const char *TAG = "DISCO";
 
 // ── Protocols and listeners ───────────────────────────────────────────────────
 
-enum { DP_SSDP_SEARCH, DP_SSDP_NOTIFY, DP_WSD, DP_LLMNR, DP_NBNS, DP_KASA, DP_LIFX, DP_PS, DP_DHCP, DP_COUNT };
+enum { DP_SSDP_SEARCH, DP_SSDP_NOTIFY, DP_WSD, DP_LLMNR, DP_NBNS, DP_KASA, DP_LIFX, DP_PS, DP_DHCP, DP_MDNS, DP_COUNT };
 static const char *const DP_KEY[DP_COUNT] = {
-    "ssdp-search", "ssdp-notify", "wsd", "llmnr", "nbns", "kasa", "lifx", "playstation", "dhcp",
+    "ssdp-search", "ssdp-notify", "wsd", "llmnr", "nbns", "kasa", "lifx", "playstation", "dhcp", "mdns",
 };
 _Static_assert(DP_COUNT <= 16, "protos is a uint16_t bitmap");
 
@@ -134,6 +136,22 @@ static int      s_err[L_N];             // errno of the last failure, 0 = open
 static char     s_stage[L_N];           // 'b' bind, 'j' join, 's' socket
 static uint32_t s_pkts[L_N];
 static volatile uint32_t s_macq_drop;
+
+// mDNS query ring: single producer (the frame tap, Wi-Fi RX task), single
+// consumer (the discovery task). The producer fills slot head % N and then
+// publishes head; the consumer copies slot tail % N out and then publishes
+// tail. Full: the query is dropped and counted.
+typedef struct {
+    uint32_t ip;                        // source, network order
+    uint8_t  mac[6];
+    uint8_t  mcast;                     // sent to 224.0.0.251 (else unicast to us)
+    uint8_t  _pad;
+    uint16_t len;                       // bytes of UDP payload kept
+    uint8_t  data[DISCOVERY_MDNS_COPY];
+} mdns_slot_t;
+static mdns_slot_t      *s_mring;       // DISCOVERY_MDNS_SLOTS, PSRAM
+static uint32_t          s_mhead, s_mtail;
+static volatile uint32_t s_mdns_q, s_mdns_drop;
 static uint32_t s_ev_held, s_sd_drop, s_stack_low = UINT32_MAX;
 
 typedef struct { int32_t tokens; int64_t last_ms; } bucket_t;
@@ -159,7 +177,32 @@ static bool take(bucket_t *b, int32_t burst, int64_t refill_ms)
 
 // ── Frame tap (Wi-Fi RX task) ─────────────────────────────────────────────────
 
-void discovery_frame_tap(const uint8_t *f, size_t len)
+// mDNS: a query (QR=0, standard opcode) to 224.0.0.251:5353 or to us. Bounded
+// copy of the UDP payload into the ring, no allocation; full ring = dropped.
+static void mdns_copy(const uint8_t *f, size_t len, const uint8_t *ip, unsigned hl, uint32_t our_ip)
+{
+    static const uint8_t GROUP[4] = { 224, 0, 0, 251 };
+    bool mcast = !memcmp(ip + 16, GROUP, 4);
+    if (!mcast && (!our_ip || memcmp(ip + 16, &our_ip, 4))) return;
+    size_t tot = rd16(ip + 2), ulen = rd16(ip + hl + 4);
+    if (tot < hl + 8 || 14 + tot > len || ulen < 8 + 12 || ulen > tot - hl) return;
+    const uint8_t *dns = ip + hl + 8;
+    if ((dns[2] & 0x80) || (dns[2] & 0x78)) return;                 // responses, other opcodes
+    uint32_t h = s_mhead, t = __atomic_load_n(&s_mtail, __ATOMIC_ACQUIRE);
+    if (h - t >= DISCOVERY_MDNS_SLOTS) { s_mdns_drop++; return; }
+    mdns_slot_t *sl = &s_mring[h % DISCOVERY_MDNS_SLOTS];
+    size_t n = ulen - 8;
+    if (n > DISCOVERY_MDNS_COPY) n = DISCOVERY_MDNS_COPY;
+    memcpy(&sl->ip, ip + 12, 4);
+    memcpy(sl->mac, f + 6, 6);
+    sl->mcast = mcast;
+    sl->len = (uint16_t)n;
+    memcpy(sl->data, dns, n);
+    __atomic_store_n(&s_mhead, h + 1, __ATOMIC_RELEASE);
+    s_mdns_q++;
+}
+
+void discovery_frame_tap(const uint8_t *f, size_t len, uint32_t our_ip)
 {
     if (!s_macq || !f || len < 14 + 20 + 8) return;
     if (f[12] != 0x08 || f[13] != 0x00 || (f[6] & 0x01)) return;   // IPv4, unicast source MAC
@@ -167,7 +210,9 @@ void discovery_frame_tap(const uint8_t *f, size_t len)
     unsigned hl = (ip[0] & 0x0fu) * 4u;
     if ((ip[0] >> 4) != 4 || hl < 20 || 14 + hl + 8 > len || ip[9] != 17) return;
     if (rd16(ip + 6) & 0x1fff) return;                              // later fragment
-    if (!disc_port(rd16(ip + hl + 2))) return;
+    uint16_t dport = rd16(ip + hl + 2);
+    if (dport == 5353) { if (s_mring) mdns_copy(f, len, ip, hl, our_ip); return; }
+    if (!disc_port(dport)) return;
     mac_msg_t m;
     memcpy(&m.ip, ip + 12, 4);
     if (!m.ip) return;                                              // DHCP: chaddr instead
@@ -389,26 +434,55 @@ static const char *qtype_name(uint16_t t, char *tmp, size_t cap)
     }
 }
 
+// The question section of a DNS-format query: "TYPE name, ..." into names
+// (cap bytes), at most max questions. Returns how many were read.
+static unsigned dns_questions(const uint8_t *b, size_t n, unsigned qd, unsigned max,
+                              char *names, size_t cap)
+{
+    size_t off = 12, nn = 0;
+    unsigned got = 0;
+    names[0] = '\0';
+    for (unsigned q = 0; q < qd && q < max; q++) {
+        char name[80], tb[12];
+        if (!dns_name(b, n, &off, name, sizeof(name)) || off + 4 > n) break;
+        const char *tn = qtype_name(rd16(b + off), tb, sizeof(tb));
+        off += 4;
+        got++;
+        int w = snprintf(names + nn, cap - nn, "%s%s %s", nn ? ", " : "", tn, name);
+        if (w < 0 || (size_t)w >= cap - nn) break;
+        nn += (size_t)w;
+    }
+    return got;
+}
+
 static bool parse_llmnr(const uint8_t *b, size_t n, obs_t *o)
 {
     if (n < 12) return false;
     uint16_t fl = rd16(b + 2), qd = rd16(b + 4);
     if ((fl & 0x8000) || ((fl >> 11) & 0x0f) || !qd) return false;     // queries only
     o->proto = DP_LLMNR;
-    size_t off = 12;
-    char names[KV_VAL] = "";
-    size_t nn = 0;
-    for (unsigned q = 0; q < qd && q < 4; q++) {
-        char name[80], tb[12];
-        if (!dns_name(b, n, &off, name, sizeof(name)) || off + 4 > n) break;
-        const char *tn = qtype_name(rd16(b + off), tb, sizeof(tb));
-        off += 4;
-        int w = snprintf(names + nn, sizeof(names) - nn, "%s%s %s", nn ? ", " : "", tn, name);
-        if (w < 0 || (size_t)w >= sizeof(names) - nn) break;
-        nn += (size_t)w;
-    }
-    if (!names[0]) return false;
+    char names[KV_VAL];
+    if (!dns_questions(b, n, qd, 4, names, sizeof(names)) || !names[0]) return false;
     kv_str(o, "names", names);
+    q_set(o, "%s", names);
+    return true;
+}
+
+// mDNS query from the ring (the tap already checked QR=0 and the opcode).
+// Known answers and the rest are not read.
+static bool parse_mdns(const uint8_t *b, size_t n, bool mcast, obs_t *o)
+{
+    if (n < 12) return false;
+    uint16_t fl = rd16(b + 2), qd = rd16(b + 4);
+    if ((fl & 0x8000) || ((fl >> 11) & 0x0f) || !qd) return false;
+    o->proto = DP_MDNS;
+    char names[KV_VAL], cnt[8];
+    unsigned got = dns_questions(b, n, qd, 8, names, sizeof(names));
+    if (!got || !names[0]) return false;
+    snprintf(cnt, sizeof(cnt), "%u", (unsigned)qd);
+    kv_str(o, "names", names);
+    kv_str(o, "questions", cnt);
+    kv_str(o, "dst", mcast ? "multicast" : "unicast");
     q_set(o, "%s", names);
     return true;
 }
@@ -766,8 +840,13 @@ static void event(const disc_dev_t *d, const obs_t *o, int what, const char *old
                      old_label[0] ? old_label : "none", DP_KEY[o->proto]);
     if (w < 0) e->payload[0] = '\0';
     strlcat(e->payload, held, sizeof(e->payload));
-    log_store_append(e);
-    telegram_notify(e);                         // gated by the alert mask: off by default
+    // Not log_store_append(): discovery stays out of the flash ring, the
+    // dashboard's attack list, the panel and stats.bin. Discord's event log
+    // and the incident logic get the event directly; the alarm and Telegram
+    // apply the alert mask (discovery off by default) and the ignore list.
+    discord_log_event(e);
+    alarm_note_event(e);
+    telegram_notify(e);
 
     uint32_t hw = (uint32_t)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
     if (hw < s_stack_low) {
@@ -858,6 +937,8 @@ static uint32_t my_ip(void)
     return (n && esp_netif_get_ip_info(n, &info) == ESP_OK) ? info.ip.addr : 0;
 }
 
+static void finish(obs_t *o);
+
 static void handle(int li, size_t n, uint32_t src)
 {
     const uint8_t *b = S->rx;
@@ -877,9 +958,38 @@ static void handle(int li, size_t n, uint32_t src)
     default: break;
     }
     if (!ok) return;
+    finish(o);
+}
+
+static void finish(obs_t *o)
+{
     if (!o->mac_known && o->ip && mac_for(o->ip, o->mac)) o->mac_known = true;
     if (o->mac_known && !memcmp(o->mac, s_my_mac, 6)) return;
     observe(o);
+}
+
+// Queued mDNS queries, oldest first. The slot is copied out before it is freed.
+static void mdns_drain(uint32_t me)
+{
+    uint32_t t = s_mtail, h = __atomic_load_n(&s_mhead, __ATOMIC_ACQUIRE);
+    for (; t != h; t++) {
+        const mdns_slot_t *sl = &s_mring[t % DISCOVERY_MDNS_SLOTS];
+        uint32_t ip = sl->ip;
+        uint8_t mac[6];
+        memcpy(mac, sl->mac, 6);
+        bool mcast = sl->mcast;
+        size_t n = sl->len <= DISCOVERY_MDNS_COPY ? sl->len : DISCOVERY_MDNS_COPY;
+        memcpy(S->rx, sl->data, n);
+        __atomic_store_n(&s_mtail, t + 1, __ATOMIC_RELEASE);
+        S->rx[n] = 0;
+        if (!ip || ip == me) continue;
+        obs_t *o = &S->obs;
+        memset(o, 0, sizeof(*o));
+        o->ip = ip;
+        memcpy(o->mac, mac, 6);
+        o->mac_known = true;
+        if (parse_mdns(S->rx, n, mcast, o)) finish(o);
+    }
 }
 
 void discovery_init(void)
@@ -888,13 +998,16 @@ void discovery_init(void)
     S = heap_caps_calloc(1, sizeof(state_t), MALLOC_CAP_SPIRAM);
     s_mux = xSemaphoreCreateMutex();
     QueueHandle_t q = xQueueCreateWithCaps(MACQ_DEPTH, sizeof(mac_msg_t), MALLOC_CAP_SPIRAM);
-    if (!S || !s_mux || !q) {
+    mdns_slot_t *ring = heap_caps_calloc(DISCOVERY_MDNS_SLOTS, sizeof(mdns_slot_t), MALLOC_CAP_SPIRAM);
+    if (!S || !s_mux || !q || !ring) {
         ESP_LOGE(TAG, "No memory for the discovery state, listeners off");
         return;
     }
-    s_macq = q;                                 // last: the frame tap starts queueing now
-    ESP_LOGI(TAG, "Discovery: %u B state + %u B MAC queue in PSRAM",
-             (unsigned)sizeof(state_t), (unsigned)(MACQ_DEPTH * sizeof(mac_msg_t)));
+    s_mring = ring;
+    s_macq = q;                                 // last: the frame tap starts now
+    ESP_LOGI(TAG, "Discovery: %u B state + %u B MAC queue + %u B mDNS ring in PSRAM",
+             (unsigned)sizeof(state_t), (unsigned)(MACQ_DEPTH * sizeof(mac_msg_t)),
+             (unsigned)(DISCOVERY_MDNS_SLOTS * sizeof(mdns_slot_t)));
 }
 
 void discovery_task(void *arg)
@@ -913,8 +1026,8 @@ void discovery_task(void *arg)
                       s_stage[i] == 'j' ? "join" : s_stage[i] == 'b' ? "bind" : "socket", s_err[i]);
     }
     ESP_LOGI(TAG, "Listening (log only, never answers) on %d of %d UDP ports: SSDP 1900, WSD 3702, "
-             "LLMNR 5355, NBNS 137, Kasa 9999 20002, LIFX 56700, PlayStation 987 9302%s; mDNS 5353 not bound "
-             "(owned by the mdns component)", n_open, L_N - (DISCOVERY_DHCP ? 0 : 1),
+             "LLMNR 5355, NBNS 137, Kasa 9999 20002, LIFX 56700, PlayStation 987 9302%s; mDNS 5353 queries "
+             "copied from the Wi-Fi input (no socket)", n_open, L_N - (DISCOVERY_DHCP ? 0 : 1),
              DISCOVERY_DHCP ? ", DHCP 67" : "");
 
     uint32_t last_retry = up_s(), me = my_ip(), last_me = up_s();
@@ -924,13 +1037,14 @@ void discovery_task(void *arg)
         int maxfd = -1;
         for (int i = 0; i < L_N; i++)
             if (s_sock[i] >= 0) { FD_SET(s_sock[i], &rd); if (s_sock[i] > maxfd) maxfd = s_sock[i]; }
-        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };   // also the mDNS ring's latency
         int r = 0;
         if (maxfd >= 0) r = select(maxfd + 1, &rd, NULL, NULL, &tv);
-        else vTaskDelay(pdMS_TO_TICKS(1000));
+        else vTaskDelay(pdMS_TO_TICKS(500));
         macmap_drain();
         uint32_t now = up_s();
         if (now - last_me >= 5) { me = my_ip(); last_me = now; }
+        mdns_drain(me);
         if (now - last_retry >= RETRY_S) {
             last_retry = now;
             for (int i = 0; i < L_N; i++)
@@ -969,9 +1083,11 @@ size_t discovery_devices_json(char *buf, size_t cap)
     uint32_t pk = 0;
     for (int i = 0; i < L_N; i++) pk += s_pkts[i];
     jraw(buf, lim, &o, "{\"enabled\":%s,\"packets\":%lu,\"mac_queue_dropped\":%lu,\"sd_dropped\":%lu,"
-         "\"events_held\":%lu,\"max\":%d,\"mdns\":\"not bound: the mdns component owns UDP 5353\",\"listeners\":[",
+         "\"events_held\":%lu,\"max\":%d,\"mdns\":\"copied from the Wi-Fi input, no socket: %lu queries, %lu dropped\","
+         "\"mdns_queries\":%lu,\"mdns_dropped\":%lu,\"listeners\":[",
          S ? "true" : "false", (unsigned long)pk, (unsigned long)s_macq_drop, (unsigned long)s_sd_drop,
-         (unsigned long)s_ev_held, DISCOVERY_DEV_MAX);
+         (unsigned long)s_ev_held, DISCOVERY_DEV_MAX, (unsigned long)s_mdns_q, (unsigned long)s_mdns_drop,
+         (unsigned long)s_mdns_q, (unsigned long)s_mdns_drop);
     for (int i = 0; i < L_N; i++) {
         char err[40] = "";
         if (i == L_DHCP && !DISCOVERY_DHCP) strlcpy(err, "disabled", sizeof(err));

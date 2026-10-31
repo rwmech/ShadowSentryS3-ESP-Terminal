@@ -164,6 +164,11 @@ static void on_event(const attack_log_t *e)
     if (xQueueSend(s_evq, e, 0) != pdTRUE) count_drop();
 }
 
+void discord_log_event(const attack_log_t *e)
+{
+    if (s_evq && e) on_event(e);
+}
+
 void discord_note_dashboard_ack(void)
 {
     s_dash_ack_tick = xTaskGetTickCount() | 1;

@@ -5,7 +5,7 @@
 
 #include "detect.h"
 #include "ignore.h"
-#include "discovery.h"            // discovery_frame_tap(): source MACs for the discovery listeners
+#include "discovery.h"            // discovery_frame_tap(): source MACs and mDNS queries for discovery
 #include "settings.h"
 #include "log_store.h"
 #include "telegram.h"
@@ -185,7 +185,8 @@ static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
 {
-    if (p && p->payload) discovery_frame_tap((const uint8_t *)p->payload, p->len);
+    if (p && p->payload && inp)
+        discovery_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)));
     if (s_q && p && p->payload && p->len >= 42) {
         const uint8_t *f = (const uint8_t *)p->payload;
         static const uint8_t REQ[8] = { 0, 1, 8, 0, 6, 4, 0, 1 };   // Ethernet, IPv4, who-has

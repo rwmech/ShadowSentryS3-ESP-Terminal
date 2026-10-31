@@ -107,8 +107,8 @@ static const char *TAG = "MAIN";
 //           log_store_append (so it must stay internal)
 //           → TRIPWIRE_TASK_STACK 3072 (high-water printed on each new low)
 //  disco  : receive buffer, device table and parse state in PSRAM; the stack
-//           holds small locals, ESP_LOG formatting and the SPIFFS append under
-//           log_store_append (so it must stay internal)
+//           holds small locals and ESP_LOG formatting. It never touches flash
+//           (no log_store_append: events go to queues), so the stack is PSRAM
 //           → DISCOVERY_TASK_STACK 3584 (high-water printed on each new low)
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
@@ -329,7 +329,7 @@ void app_main(void)
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);
 #if DISCOVERY_ENABLE
-    SPAWN(discovery_task,   "disco",  DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
+    SPAWN_PSRAM(discovery_task, "disco", DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
 #endif
 
     // Live WebSocket push server (esp_http_server manages its own task).

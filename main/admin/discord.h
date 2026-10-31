@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "log_store.h"
 
 /*
  * Discord alerts, Core 1 (fork addition, Robert Mech)
@@ -31,6 +32,11 @@ void discord_init(void);
 
 // FreeRTOS task entry point, Core 1. Spawn after discord_init().
 void discord_task(void *arg);
+
+// Queue an event for the event log without going through the log store (LAN
+// discovery keeps its events out of the flash ring). Same path as the
+// log_store listener: copy and enqueue, never blocks, safe from any task.
+void discord_log_event(const attack_log_t *e);
 
 // Call just before alarm_ack() on the dashboard route, so the acknowledged
 // embed can say where it came from (any other ack is the front panel).
