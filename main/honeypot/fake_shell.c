@@ -317,7 +317,9 @@ void fake_shell_run(const shell_io_t *io, struct sockaddr_in *addr, const char *
         "\r\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n"
         "Last login: Fri Jan 12 09:14:02 2024 from %s\r\n", ip);
     put(io, motd);
-    log_event(addr, mac, sh.user, "shell session opened", true);
+    char opened[40] = "shell session opened";
+    if (io->port) snprintf(opened, sizeof(opened), "shell session opened (port %u)", (unsigned)io->port);
+    log_event(addr, mac, sh.user, opened, true);
 
     char prompt[128];
     char line[FAKE_SHELL_CMD_MAXLEN];

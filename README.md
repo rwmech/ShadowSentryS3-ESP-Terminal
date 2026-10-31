@@ -27,7 +27,7 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ## This fork: Elecrow ESP Terminal 3.5" edition
 
-This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Every upstream trap and monitor is unchanged.
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap and the alternate Telnet and SSH ports, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports.
 
 ### Hardware (board revision V1.0)
 
@@ -43,6 +43,19 @@ This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/Sha
 
 Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not used.
 
+### Traps and ports
+
+| Port | Trap | Events | |
+|---|---|---|---|
+| 21 | FTP (upstream) | FTP | |
+| 22, 2222 | SSH, wolfSSH (upstream), then the fake shell | SSH, Shell | 2222 is a fork addition, `SSH_ALT_PORT` |
+| 23, 2323 | Telnet (upstream), then the fake shell | Telnet, Shell | 2323 is a fork addition, `TELNET_ALT_PORT` |
+| 80 | HTTP, fake NVR (upstream) | HTTP | |
+| 554 | RTSP, fake Hikvision (upstream) | RTSP | |
+| 5555 | ADB, fake Android TV box (fork) | ADB | `ADB_PORT` |
+
+The fork's ports follow a ranking of what reaches a home LAN most often: unauthenticated ADB (infected Android TV boxes and residential-proxy apps hunt for it), then Telnet and SSH bruteforce on the alternate ports. Each port option takes 0 to disable it; `main/honeypot/trap_listen.h` has defaults for a `config.h` written before these options. The alternate ports run on the existing Telnet and SSH tasks through `select()` (no extra stack, one wolfSSH context), so each service serves one session at a time across its two ports, as upstream does on one port. An event from an alternate port ends in "(port N)".
+
 ### What this fork adds
 
 - Front panel (LVGL 8 + LovyanGFX, using Elecrow's own panel config), laid out for status and control rather than a scrolling log, in a bright palette (white and light grey text, saturated accents, slate cards) because the ILI9488 has no gamma tuning:
@@ -56,10 +69,15 @@ Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not u
   - backlight brightness is a setting
 - Sounds: at every boot, the opening of Grieg's "In the Hall of the Mountain King" (public domain), the theme's whole first statement in the score's rhythm at its marked tempo (crotchet = 138), short and detached as written, with a short close on the tonic, about 8 s, played from its own task so boot does not wait. An alarm siren cuts it short at once. A click sounds on every touch of the screen. The boot sound and the click can each be switched off in Settings.
 - Incident alarm: the first attack sounds a 3.2 s siren on the buzzer (a sweep from 2300 to 3100 Hz and back, across the piezo's 2.7 kHz resonance, four times), then the same siren every minute until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the web dashboard. Acknowledging cuts a siren short. After acknowledgement the same source stays quiet; a new source, or the same one after 10 quiet minutes, alarms again. Re-arm (hold RE-ARM on the panel, or Re-arm on the dashboard) ends an acknowledged incident at once, so the next event alarms again; it deletes nothing, the logs, metrics and the panel's last-incident summary all stay. An unacknowledged incident survives a reboot. The reminder interval (default 60 s), quiet time and alarm sound are settings.
+- ADB trap on 5555 (`main/honeypot/adb_trap.c`, protocol handling ported from [Glutton](https://github.com/mushorg/glutton), MIT, see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)): it answers the CNXN handshake as an Android 6 TV box with auth off (`device::ro.product.name=p281;ro.product.model=MBOX;...`) and logs, as ADB events:
+  - the connection with the client's banner (alert)
+  - every OPEN: `shell:<cmd>` and `exec:<cmd>` get canned output for recon commands (`id`, `whoami`, `uname -m`, `getprop ...`, a plain `echo`) and silence for everything else; `shell:` gives an interactive prompt and every line is logged; anything else (`tcp:`, `localabstract:`, `reverse:`, ...) is refused and logged, so the honeypot never forwards a connection (alert)
+  - `sync:` pushes: the remote path, size and SHA-256 of each pushed file (alert); an unfinished push is logged with the bytes received. The bytes themselves are not kept yet. Pulls are logged and fail with "No such file or directory".
+  - Bounds: one session at a time, 60 s per session, 10 s idle, 1 MB received, 4096 messages, 4 streams, 64 logged events, 4 KB per message (the maximum we advertise). Nothing is executed.
 - Recon detection (`main/detect/detect.c`), so a scan raises an alert before any trap sees a login:
   - an lwIP IPv4 input hook sees every inbound TCP SYN (plus FIN, NULL and Xmas probes) and UDP datagram to the board, open port or not. It only queues (source, port, protocol); the gateway and replies to the board's own DNS, DHCP, NTP and mDNS are skipped.
   - Port scan: 5 distinct ports from one source within 10 s (both settings) raise one "Port scan" event with the port count, lowest to highest port, protocol and sample ports. Nothing more while it continues; after 60 s of quiet a summary follows ("Scan ended: N ports total", with the trap ports it found).
-  - Probe: a SYN to a trap port (21, 22, 23, 80, 554) raises one "Probe" per source, port and minute. It is held 1.5 s, so a scan that starts meanwhile folds it in; none while that source is scanning.
+  - Probe: a SYN to a trap port (21, 22, 23, 80, 554, 2222, 2323, 5555; a disabled one excluded) raises one "Probe" per source, port and minute. It is held 1.5 s, so a scan that starts meanwhile folds it in; none while that source is scanning.
   - ARP sweep: a wrapper on the station interface's input sees ARP who-has requests (every frame is passed on). One MAC asking for 10 distinct hosts within 10 s (settings) raises one "ARP sweep" event with the MAC, vendor, count and range, then a summary after 60 s of quiet. The gateway and the board itself are excluded.
   - The three are new attack types (appended, so the flash ring stays readable) shown everywhere: panel, dashboard type list, filters and charts, microSD `tname`, Telegram.
   - The Logs page shows the detector's counters since boot (scans, probes, sweeps, packets queued and dropped, admin SYNs hidden, ARP tap on or off).

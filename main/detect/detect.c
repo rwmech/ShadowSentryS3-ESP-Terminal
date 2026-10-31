@@ -10,6 +10,7 @@
 #include "telegram.h"
 #include "wifi_manager.h"
 #include "config.h"
+#include "trap_listen.h"            // TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT
 #include "ss_lwip_hooks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -53,7 +54,7 @@ static const char *TAG = "DETECT";
 #define PROBE_PEND_MAX    16
 #define PROBE_SEEN_MAX    64
 #define SAMPLE_MAX        6
-#define TRAP_N            5
+#define TRAP_N            8         // fits the uint8_t traps bitmap
 
 // ── Messages, hook and ARP tap to the detector task ───────────────────────────
 
@@ -271,14 +272,18 @@ static det_state_t *S;
 static uint8_t      s_gw_mac[6];
 static uint32_t     s_gw_ip;
 
-static const uint16_t    TRAP_PORT[TRAP_N] = { FTP_PORT, SSH_PORT, TELNET_PORT, HTTP_PORT, RTSP_PORT };
-static const char *const TRAP_NAME[TRAP_N] = { "FTP", "SSH", "Telnet", "HTTP", "RTSP" };
+// A 0 entry is a disabled port (trap_listen.h) and never matches.
+static const uint16_t    TRAP_PORT[TRAP_N] = { FTP_PORT, SSH_PORT, TELNET_PORT, HTTP_PORT, RTSP_PORT,
+                                               TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT };
+static const char *const TRAP_NAME[TRAP_N] = { "FTP", "SSH", "Telnet", "HTTP", "RTSP",
+                                               "Telnet alt", "SSH alt", "ADB" };
+_Static_assert(TRAP_N <= 8, "src_t.traps is a uint8_t bitmap");
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static int trap_index(uint16_t port)
 {
-    for (int i = 0; i < TRAP_N; i++) if (TRAP_PORT[i] == port) return i;
+    for (int i = 0; i < TRAP_N; i++) if (TRAP_PORT[i] && TRAP_PORT[i] == port) return i;
     return -1;
 }
 

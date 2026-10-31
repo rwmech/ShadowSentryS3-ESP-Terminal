@@ -1,5 +1,6 @@
 #include "ssh_trap.h"
 #include "fake_shell.h"
+#include "trap_listen.h"
 #include "ssh_hostkey.h"
 #include "log_store.h"
 #include "telegram.h"
@@ -30,6 +31,7 @@ typedef struct {
     struct sockaddr_in *addr;
     char username[32];
     bool  authed;
+    uint16_t port;              // local port, for the payload when not SSH_PORT
 } ssh_conn_t;
 
 // ── User authentication ─────────────────────────────────────────────────────────
@@ -65,7 +67,10 @@ static int ssh_userauth(byte authType, WS_UserAuthData *authData, void *ctx)
     };
     strlcpy(e.username, user, sizeof(e.username));
     strlcpy(e.password, pass, sizeof(e.password));
-    snprintf(e.payload, sizeof(e.payload), "SSH login %s:%s", user, pass);
+    if (c->port != SSH_PORT)
+        snprintf(e.payload, sizeof(e.payload), "SSH login %s:%s (port %u)", user, pass, (unsigned)c->port);
+    else
+        snprintf(e.payload, sizeof(e.payload), "SSH login %s:%s", user, pass);
     wifi_manager_lookup_mac(c->addr->sin_addr.s_addr, e.src_mac);
     log_store_append(&e);
     telegram_notify(&e);
@@ -97,7 +102,7 @@ static int ssh_write(void *io, const char *buf, int len)
     return sent;
 }
 
-static void handle_client(int sock, struct sockaddr_in *addr)
+static void handle_client(int sock, struct sockaddr_in *addr, uint16_t port)
 {
     // Bound a session: long enough for a human to think between commands, short
     // enough that one idle attacker can't pin the (single) SSH task forever.
@@ -110,7 +115,7 @@ static void handle_client(int sock, struct sockaddr_in *addr)
         return;
     }
 
-    ssh_conn_t conn = { .addr = addr };
+    ssh_conn_t conn = { .addr = addr, .port = port };
     wolfSSH_SetUserAuthCtx(ssh, &conn);
     wolfSSH_set_fd(ssh, sock);
 
@@ -121,6 +126,7 @@ static void handle_client(int sock, struct sockaddr_in *addr)
             .read_byte = ssh_read_byte,
             .write     = ssh_write,
             .echo      = true,                   // SSH PTY is raw — server echoes
+            .port      = port != SSH_PORT ? port : 0,
         };
         fake_shell_run(&io, addr, conn.authed ? conn.username : "root");
     } else {
@@ -148,31 +154,24 @@ void ssh_trap_task(void *arg)
     }
     wolfSSH_SetUserAuth(s_ctx, ssh_userauth);
 
-    int srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    configASSERT(srv >= 0);
+    // Standard and alternate port on this one task and wolfSSH context, one
+    // session at a time (trap_listen.h): a second task would cost 16 KB internal.
+    const uint16_t ports[2] = { SSH_PORT, SSH_ALT_PORT };
+    int srv[2] = { trap_listen(SSH_PORT, SSH_BACKLOG),
+                   trap_listen(SSH_ALT_PORT, SSH_BACKLOG) };
+    configASSERT(srv[0] >= 0);
 
-    int opt = 1;
-    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr = {
-        .sin_family      = AF_INET,
-        .sin_port        = htons(SSH_PORT),
-        .sin_addr.s_addr = INADDR_ANY,
-    };
-    configASSERT(bind(srv, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-    configASSERT(listen(srv, SSH_BACKLOG) == 0);
-
-    ESP_LOGI(TAG, "Honeypot listening on port %d (backlog=%d, timeout=%ds) — real SSH server",
-             SSH_PORT, SSH_BACKLOG, SSH_RECV_TIMEOUT_S);
+    ESP_LOGI(TAG, "Honeypot listening on port %d, alt %d (backlog=%d, timeout=%ds), real SSH server",
+             SSH_PORT, srv[1] >= 0 ? SSH_ALT_PORT : 0, SSH_BACKLOG, SSH_RECV_TIMEOUT_S);
 
     while (1) {
         struct sockaddr_in client;
-        socklen_t clen = sizeof(client);
-        int csock = accept(srv, (struct sockaddr *)&client, &clen);
+        uint16_t port;
+        int csock = trap_accept_any(srv, ports, 2, &client, &port);
         if (csock < 0) continue;
 
-        ESP_LOGI(TAG, "Connect from %s", inet_ntoa(client.sin_addr));
-        handle_client(csock, &client);
+        ESP_LOGI(TAG, "Connect from %s to port %u", inet_ntoa(client.sin_addr), (unsigned)port);
+        handle_client(csock, &client, port);
         close(csock);
     }
 }

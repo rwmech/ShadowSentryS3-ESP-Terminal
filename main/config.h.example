@@ -132,6 +132,15 @@
 #define SSH_PORT                    22      // SSH scanner version fingerprinting
 #define FTP_PORT                    21      // FTP bruteforce (USER/PASS plaintext)
 
+// ── Extra trap ports (fork) ───────────────────────────────────────────────────
+//
+// Alternate Telnet and SSH ports, served by the same Telnet and SSH tasks (one
+// session at a time across both ports), and the ADB trap. 0 disables a port.
+// main/honeypot/trap_listen.h has the same defaults for a config.h without them.
+#define TELNET_ALT_PORT             2323    // Mirai-family Telnet bruteforce
+#define SSH_ALT_PORT                2222    // SSH bruteforce on the common alt port
+#define ADB_PORT                    5555    // Android Debug Bridge (TV boxes, Kimwolf, BADBOX)
+
 // ── Telnet fake shell (Cowrie-style) ───────────────────────────────────────────
 //
 // After the Telnet honeypot collects credentials it can "accept" the login and
@@ -277,3 +286,14 @@ _Static_assert(FTP_PORT    != HTTP_PORT,   "FTP_PORT and HTTP_PORT must differ")
 _Static_assert(FTP_PORT    != TELNET_PORT, "FTP_PORT and TELNET_PORT must differ");
 _Static_assert(FTP_PORT    != SSH_PORT,    "FTP_PORT and SSH_PORT must differ");
 _Static_assert(ADMIN_PORT  != FTP_PORT,    "ADMIN_PORT collides with FTP_PORT");
+
+// Fork ports: 0 = disabled, never collides
+#define PORT_FREE_(p) ((p) != RTSP_PORT && (p) != HTTP_PORT && (p) != TELNET_PORT && \
+                       (p) != SSH_PORT && (p) != FTP_PORT && (p) != ADMIN_PORT && \
+                       (p) != ADMIN_WS_PORT && (p) != ADMIN_WS_PORT + 1)
+_Static_assert(TELNET_ALT_PORT == 0 || PORT_FREE_(TELNET_ALT_PORT), "TELNET_ALT_PORT collides with another port");
+_Static_assert(SSH_ALT_PORT    == 0 || PORT_FREE_(SSH_ALT_PORT),    "SSH_ALT_PORT collides with another port");
+_Static_assert(ADB_PORT        == 0 || PORT_FREE_(ADB_PORT),        "ADB_PORT collides with another port");
+_Static_assert(TELNET_ALT_PORT == 0 || TELNET_ALT_PORT != SSH_ALT_PORT, "TELNET_ALT_PORT and SSH_ALT_PORT must differ");
+_Static_assert(ADB_PORT == 0 || (ADB_PORT != TELNET_ALT_PORT && ADB_PORT != SSH_ALT_PORT),
+    "ADB_PORT collides with an alternate port");
