@@ -33,13 +33,14 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - Branches: work on `main`. A `crowpanel35` branch also exists; ask before using it.
 - Upstream is an ESP-IDF honeypot. It runs SSH (wolfSSH), Telnet with a Cowrie-style fake shell, and FTP, HTTP and RTSP traps. It also has an ARP spoof monitor, a Wi-Fi deauth monitor, GeoIP, Telegram alerts, and an admin dashboard with a WebSocket feed.
 - The fork adds:
-  - an LVGL 8 front panel through LovyanGFX
+  - an LVGL 8 front panel through LovyanGFX: a status and control layout in a bright palette, with a red/black strobe and full backlight while an incident is unacknowledged
   - an incident alarm on the buzzer (a 3.2 s siren, repeated every minute until acknowledged), with acknowledgement from the panel or `POST /api/ack` and re-arm from the panel or `POST /api/alarm/clear`
   - OTA: two 6 MB slots and `POST /api/ota`, with rollback if a new image never reaches Wi-Fi
   - PSRAM-first allocation
   - a startup melody (the opening of Grieg's "In the Hall of the Mountain King", `main\alarm\melody.c`) and a touch click on the buzzer
   - runtime settings in NVS, edited from the dashboard's Settings tab
   - a microSD JSONL event log with summary metrics, shown on the dashboard's Logs tab
+  - a heartbeat on the dashboard's header shield, one soft pulse per answered status poll
 - The README section "This fork" (`C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\README.md`) is the user-facing summary. Update it in the same change as the code.
 - Build with `pio run -e crowpanel35` from the fork root. `crowpanel35_ota` uploads with `C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\tools\ota_upload.py`.
 
@@ -94,7 +95,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
 - Copyright and author lines: the upstream MIT line stays as it is, and Rob's own additions may carry his name. Only people who wrote the code are ever named.
 - Rob decides each time: push, tag, a force push, making the repo public, an OTA upload, and exposing the honeypot to the internet (port forwarding, a DMZ).
 
-## Current state (2026-10-30)
+## Current state (2026-10-31)
 
 - Committed: the port, the front panel, the alarm, OTA, the README, and this file (`C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\CLAUDE.md`; `C:\Users\rwmec\Documents\Development\Honeypot\CLAUDE.md` imports it).
 - Rob's ordered work list, 2026-10-30, all committed on `main` in f3d4f88:
@@ -110,12 +111,12 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - edits to the buzzer (`buzzer_test`), alarm, display, Wi-Fi manager, Telegram, main and admin panel
   - `CONFIG_FATFS_LFN_HEAP` (long file names); `tools\ota_upload.py` reads `tools\ota_password` first. After changing the admin password on the Settings page, put it in `tools\ota_password`.
 - Lanes, 2026-10-30: the dev lane worked on `main` (items 1 to 4 and style fixes, f3d4f88). The startup-melody lane worked on `lane/startup-melody` (4749d3c, branched from 5b7c3b5, worktree `C:\Users\rwmec\Documents\Development\Honeypot\lanes\startup-melody`, now removed; the branch is kept).
-- Merged `lane/startup-melody` into `main` with `--no-ff`. The boot sound is now the 12-note opening of "In the Hall of the Mountain King" (`main\alarm\melody.c`, about 1.8 s) instead of the two-tone chirp. `buzzer_boot()` plays it under the buzzer mutex and still honours the boot sound setting (NVS key `boot_chirp`, kept so saved settings survive). `app_main` runs it from a short-lived task (`melody`, 3 KB stack, priority 1) right after `alarm_init()`, so boot does not wait. The dashboard label is now "Boot sound".
+- Merged `lane/startup-melody` into `main` with `--no-ff`. The boot sound is now the 12-note opening of "In the Hall of the Mountain King" (`main\alarm\melody.c`, then about 1.8 s, 3.56 s since alarm-ux) instead of the two-tone chirp. `buzzer_boot()` plays it under the buzzer mutex and still honours the boot sound setting (NVS key `boot_chirp`, kept so saved settings survive). `app_main` runs it from a short-lived task (`melody`, 3 KB stack, priority 1) right after `alarm_init()`, so boot does not wait. The dashboard label is now "Boot sound".
 - Open, batched:
   - Upstream cosmetic bug, `main\wifi_manager.c` line 174: "IP acquired" prints the gateway as the mask, because `ip4addr_ntoa()` returns one static buffer and is called twice in one log call. Fix in upstream's file or leave; Rob's call.
   - Commits 5a5f5b0, 631c4d3 and 12533fd are authored `rwmech@gmail.com`, not the address above. Fixing them needs a history rewrite and a force push: Rob's call.
 - On the board, 2026-10-30, by OTA (Rob's go): 1cb2e82 (the merge f8bcb60 plus a buzzer fix: stay disabled if the mutex cannot be created), 1780160 bytes into `ota_0`. First boot clean: no panic or reboot, SETTINGS loaded, microSD "ASTC" mounted (7447 MB, 7446 MB free), IP 192.168.0.118 at 2.7 s, image confirmed after Wi-Fi, internal heap free 299351 B at boot and 56707 B after "All tasks spawned" (total 8278332 B), melody task stack high-water 2304 B of 3072. Over HTTP: `/api/summary` shows the card mounted and 1 line written, `/api/logs` lists `2026-10-30.jsonl` (110 B), so a line on the card is confirmed.
-- Lane alarm-ux, 2026-10-31 (branch `lane/alarm-ux`, worktree `C:\Users\rwmec\Documents\Development\Honeypot\lanes\alarm-ux`, from 022634e), Rob's requests of 2026-10-31. Built, reviewed, not on the board; a merge lane integrates and OTAs it.
+- Lane alarm-ux, 2026-10-31 (branch `lane/alarm-ux`, worktree `C:\Users\rwmec\Documents\Development\Honeypot\lanes\alarm-ux`, from 022634e, commit 0fd27d9), Rob's requests of 2026-10-31. Merged into `main` with `--no-ff` by the merge lane (no conflicts), together with the dashboard heartbeat below.
   - Boot tune at march tempo: 260 ms per note (210 ms sounding, `MELODY_GAP_MS` 50), final B 700 ms, 3560 ms in all. The old 100 ms notes played it about 2.5x fast.
   - Siren (`main\alarm\buzzer.c`): 2300 to 3100 Hz and back in 50 Hz steps of 25 ms, 800 ms a cycle, 4 cycles, 3.2 s, 50 % duty, under the buzzer mutex, timer back to `BOARD_BUZZER_HZ` before the unlock. It replaces the three beeps (incident), the single reminder beep and the test pattern.
   - The siren plays on a new `buzzer` task (3 KB stack, priority 3, core 1) fed by an 8-deep command queue (SIREN, TEST, STOP). `buzzer_alarm()`, `buzzer_remind()` and `buzzer_test()` return at once, so the alarm task never blocks 3 s with its 32-deep event queue filling (a scan would overflow it and could drop an ACK), and `POST /api/buzzer/test` answers at once. `buzzer_stop()` (on acknowledge) cuts a siren short within 25 ms. If the task cannot be created the siren plays on the caller, as before.
@@ -123,5 +124,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - Re-arm: `alarm_clear()` takes an ACKED incident to IDLE at once (persisted, listeners notified); ignored in any other state. Nothing is deleted: the flash ring, SD log, metrics and `s_info` (the panel's last-incident summary) stay. `POST /api/alarm/clear` returns 409 "acknowledge first" while ACTIVE. Dashboard banner now shows for ACKED too, with Re-arm in place of Acknowledge. The SD log records the re-arm as a "closed" alarm line, like a quiet-time close.
   - Panel redesign (`main\ui\ui.c`): incident card (ACKNOWLEDGE hold while ACTIVE, RE-ARM hold 1.5 s while ACKED), key figures row (events, distinct sources from the flash ring plus new events, SD free, RSSI), last 3 events. Bright palette: background #0b1220, cards #1e293b with 2 px state borders, text white and #cbd5e1, accents #22ff9a / #ffc400 / #ff3b3b, pill text dark on the fill. Fonts stay 12/14/20/28 (28 for headline and source); larger ones would need `sdkconfig.defaults` changes and a fresh sdkconfig.
   - Strobe: while ACTIVE the overlay background alternates #e00000 and black every 500 ms (an lv_timer on the UI task); labels and the white button keep their colours. `display_set_backlight_override(bool)` in `main\ui\display.cpp` forces the backlight to 100 % and restores `settings_get()->brightness` on ACKED or IDLE; the override and the duty write share a mutex with the settings-change callback.
-  - To measure on the board: the UI logs internal heap before and after building the panel ("Panel built, internal heap ..."); the `buzzer` task stack high-water is not logged yet.
+  - To measure on the board: the UI logs internal heap before and after building the panel ("Panel built, internal heap ..."); the `buzzer` task logs its stack high-water after the first siren ("First siren done, stack high-water ...").
+- Dashboard heartbeat (`main\index.html`, Rob 2026-10-31, from `docs\backlog.md`): the header `.logo-mark` shield pulses once (scale 1.07 and a stronger green glow, 0.9 s ease-in-out) on each answered `/api/status` poll (every 5 s). A poll that errors, returns non-2xx or takes over 4 s is a miss; after two misses in a row the shield fades to grey (grayscale, 45 % opacity) until a poll is answered. No colour flashing; `prefers-reduced-motion` drops the pulse. The ACTIVE pill is unchanged.
+- Lanes still in flight, 2026-10-31: `lane/discord` and `lane/camera` (worktrees under `C:\Users\rwmec\Documents\Development\Honeypot\lanes`), merged later. `docs\backlog.md` is the TA's backlog, committed with this merge.
 - Next, on the board: the Settings save and reboot path, the Logs page in a browser, the Wi-Fi fallback, and Rob's ear on the boot sound, click and siren; the panel's look and the strobe.

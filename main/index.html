@@ -55,7 +55,16 @@ header{
   background:linear-gradient(135deg,var(--g),#0ea5e9);
   border-radius:8px;display:flex;align-items:center;justify-content:center;
   font-size:18px;box-shadow:0 0 20px rgba(0,210,160,.3);
+  transition:filter .8s ease,opacity .8s ease,box-shadow .8s ease;
 }
+/* heartbeat: one soft pulse per answered /api/status poll; grey after two misses */
+.logo-mark.beat{animation:beat .9s ease-in-out}
+@keyframes beat{
+  0%,100%{transform:scale(1);box-shadow:0 0 20px rgba(0,210,160,.3)}
+  35%{transform:scale(1.07);box-shadow:0 0 28px rgba(0,210,160,.55)}
+}
+.logo-mark.lost{filter:grayscale(1);opacity:.45;box-shadow:none}
+@media (prefers-reduced-motion:reduce){.logo-mark.beat{animation:none}}
 .brand h1{font-size:.95rem;font-weight:700;letter-spacing:.5px;color:var(--g)}
 .brand p{font-size:.68rem;color:var(--muted);margin-top:1px}
 .spacer{flex:1}
@@ -298,7 +307,7 @@ footer{
 <div id="app">
 
 <header>
-  <div class="logo-mark">&#128737;</div>
+  <div class="logo-mark" id="logo-mark">&#128737;</div>
   <div class="brand">
     <h1>ShadowSentry S3</h1>
     <p>Edge Deception Honeypot &nbsp;·&nbsp; ESP32-S3</p>
@@ -784,16 +793,29 @@ async function clearLogs(){
   try{await fetch('/api/clear',POSTH);_seen.clear();document.getElementById('feed').innerHTML='<div class="feed-empty">Waiting for attackers…</div>';load();}
   catch{alert('Clear failed');}
 }
+// heartbeat on the header shield: a pulse per answered poll, grey after two misses in a row
+let _hbMiss=0;
+function heartbeat(ok){
+  const m=document.getElementById('logo-mark');
+  if(ok){
+    _hbMiss=0;m.classList.remove('lost','beat');void m.offsetWidth;m.classList.add('beat');
+    m.title='Device answering';
+  }else if(++_hbMiss>=2){m.classList.remove('beat');m.classList.add('lost');m.title='No answer from the device';}
+}
+document.getElementById('logo-mark').addEventListener('animationend',e=>e.currentTarget.classList.remove('beat'));
 async function loadStatus(){
+  let beat=false;
   try{
-    const r=await fetch('/api/status');if(!r.ok)return;
+    const sig=AbortSignal.timeout?AbortSignal.timeout(4000):undefined;   // a hung request counts as a miss
+    const r=await fetch('/api/status',{signal:sig});if(!r.ok){heartbeat(false);return;}
     const d=await r.json();
+    heartbeat(true);beat=true;
     const s=d.uptime_s,p=n=>String(n).padStart(2,'0');
     const up=`${p(Math.floor(s/3600))}:${p(Math.floor(s%3600/60))}:${p(s%60)}`;
     document.getElementById('sys-info').textContent=
       `Device ${up} · Heap ${(d.free_heap/1024).toFixed(0)}KB · WiFi ${d.rssi}dBm`;
     if(d.alarm)renderAlarm(d.alarm);
-  }catch{}
+  }catch{if(!beat)heartbeat(false);}
 }
 // incident alarm: state 0 idle, 1 active (unacknowledged), 2 acknowledged
 function renderAlarm(a){
