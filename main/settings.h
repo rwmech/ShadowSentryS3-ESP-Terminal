@@ -41,7 +41,8 @@ typedef struct {
     char     discord_webhook[160];  // secret: "" = off, else https://discord.com/api/webhooks/...
     bool     discord_log_events;    // deduplicated event log to Discord (incidents post regardless)
     // Detection and alerting (applied immediately)
-    uint32_t alert_mask;            // bit n set: attack_type_t n opens an incident; logging is always on
+    uint32_t alert_mask;            // bit n set: attack_type_t n opens an incident; logging is always on.
+                                    // Default all on except ATTACK_DISCOVERY (settings.c)
     uint32_t scan_ports;            // distinct ports from one source that make a port scan, 3..32
     uint32_t scan_window_s;         // ... within this many seconds, 2..300
     uint32_t arp_targets;           // distinct who-has targets from one MAC that make an ARP sweep, 3..32

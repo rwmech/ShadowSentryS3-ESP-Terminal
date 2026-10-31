@@ -12,6 +12,7 @@
 #   honeypot/trap_listen.c  - 2323 and 2222 on the Telnet and SSH tasks
 #   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
 #   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
+#   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -59,6 +60,8 @@ idf_component_register(
         "admin/api_cam.c"
         "detect/detect.c"
         "detect/ignore.c"
+        "detect/discovery.c"
+        "admin/api_devices.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
@@ -69,7 +72,7 @@ idf_component_register(
         "alarm"        # alarm.h, buzzer.h
         "ui"           # display.h, ui.h
         "camera"       # cam.h, OV2640 panel-press snapshots
-        "detect"       # detect.h, ignore.h (recon detection, ignore list)
+        "detect"       # detect.h, ignore.h, discovery.h (recon detection, ignore list, LAN discovery)
 
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}

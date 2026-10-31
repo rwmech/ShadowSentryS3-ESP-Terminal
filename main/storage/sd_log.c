@@ -83,7 +83,7 @@ static bool               s_stats_dirty;
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
-    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
 };
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
 _Static_assert(ATTACK_TYPE_COUNT <= STATS_TYPE_SLOTS, "stats.bin by_type[] too small: bump STATS_VERSION");

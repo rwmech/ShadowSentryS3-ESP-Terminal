@@ -33,6 +33,7 @@
 #include "sd_log.h"
 #include "cam.h"
 #include "detect.h"
+#include "discovery.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -105,6 +106,10 @@ static const char *TAG = "MAIN";
 //           tables, ESP_LOG formatting and the SPIFFS append under
 //           log_store_append (so it must stay internal)
 //           → TRIPWIRE_TASK_STACK 3072 (high-water printed on each new low)
+//  disco  : receive buffer, device table and parse state in PSRAM; the stack
+//           holds small locals, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → DISCOVERY_TASK_STACK 3584 (high-water printed on each new low)
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
 // Telegram is 3 — non-critical, may wait behind WiFi driver work on Core 1.
@@ -203,6 +208,9 @@ void app_main(void)
 
     // ── Recon detection and the ignore list (before anything logs events) ───
     detect_init();
+#if DISCOVERY_ENABLE
+    discovery_init();               // state and the MAC queue the frame tap feeds
+#endif
 
     // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
     alarm_init();                   // also brings up the buzzer
@@ -274,6 +282,9 @@ void app_main(void)
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");
+#if DISCOVERY_ENABLE
+    ESP_LOGI(TAG, "  │  LAN discovery listeners: log only, never answer");
+#endif
     ESP_LOGI(TAG, "  └─────────────────────────────────────────");
     ESP_LOGI(TAG, "");
 
@@ -317,6 +328,9 @@ void app_main(void)
     SPAWN(admin_panel_task, "admin",  STACK_ADMIN,    PRIO_ADMIN,    1);
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);
+#if DISCOVERY_ENABLE
+    SPAWN(discovery_task,   "disco",  DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
+#endif
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();
