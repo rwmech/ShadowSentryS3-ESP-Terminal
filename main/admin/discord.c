@@ -11,6 +11,7 @@
 #include "log_store.h"
 #include "settings.h"
 #include "wifi_manager.h"
+#include "ignore.h"
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -70,6 +71,7 @@ typedef struct {
 
 typedef struct {
     bool     used, posted, sel;
+    bool     ignored;       // source on the ignore list at its latest event
     uint8_t  type;
     uint32_t ip;
     uint32_t pending;       // events since the last post
@@ -117,12 +119,15 @@ static bool          s_log_was_on;
 
 static int64_t mono_s(void) { return esp_timer_get_time() / 1000000LL; }
 
-static const char *const TYPE_SHORT[8] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell"};
-static const char *const TYPE_LONG[8]  = {"RTSP login", "HTTP request", "Telnet login", "SSH login",
-                                          "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
-                                          "Interactive shell"};
-static const char *type_short(uint8_t t) { return t < 8 ? TYPE_SHORT[t] : "?"; }
-static const char *type_long(uint8_t t)  { return t < 8 ? TYPE_LONG[t] : "unknown"; }
+static const char *const TYPE_SHORT[] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell",
+                                         "Scan", "Probe", "Sweep"};
+static const char *const TYPE_LONG[]  = {"RTSP login", "HTTP request", "Telnet login", "SSH login",
+                                         "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
+                                         "Interactive shell", "Port scan", "Probe", "ARP sweep"};
+_Static_assert(sizeof(TYPE_SHORT) / sizeof(TYPE_SHORT[0]) == ATTACK_TYPE_COUNT, "TYPE_SHORT: one per attack_type_t");
+_Static_assert(sizeof(TYPE_LONG) / sizeof(TYPE_LONG[0]) == ATTACK_TYPE_COUNT, "TYPE_LONG: one per attack_type_t");
+static const char *type_short(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_SHORT[t] : "?"; }
+static const char *type_long(uint8_t t)  { return t < ATTACK_TYPE_COUNT ? TYPE_LONG[t] : "unknown"; }
 
 static void count_drop(void)
 {
@@ -711,6 +716,7 @@ static void handle_event(const attack_log_t *e, int64_t now)
 
     char sum[DC_SUMMARY_LEN];
     summarise(e, sum, sizeof(sum));
+    bool ign = ignore_match(e->src_ip, e->src_mac);      // as the SD line: at log time
     dc_key_t *free_k = NULL, *idle_k = NULL, *old_k = NULL;
     for (int i = 0; i < DC_KEYS; i++) {
         dc_key_t *k = &s_keys[i];
@@ -718,6 +724,7 @@ static void handle_event(const attack_log_t *e, int64_t now)
         if (k->ip == e->src_ip && k->type == (uint8_t)e->type && !strcmp(k->summary, sum)) {
             k->pending++;
             k->last_seen = now;
+            k->ignored = ign;
             return;
         }
         if (!k->pending && (!idle_k || k->last_seen < idle_k->last_seen)) idle_k = k;
@@ -731,6 +738,7 @@ static void handle_event(const attack_log_t *e, int64_t now)
     k->type = (uint8_t)e->type;
     k->pending = 1;
     k->last_seen = now;
+    k->ignored = ign;
     strlcpy(k->summary, sum, sizeof(k->summary));
 }
 
@@ -767,7 +775,8 @@ static void flush_batch(int64_t now)
         cnt[0] = '\0';
         if (k->posted)          snprintf(cnt, sizeof(cnt), " +%lu more", (unsigned long)k->pending);
         else if (k->pending > 1) snprintf(cnt, sizeof(cnt), " x%lu", (unsigned long)k->pending);
-        int n = snprintf(line, sizeof(line), "%-15s %-6s %s%s\n", ip, type_short(k->type), k->summary, cnt);
+        int n = snprintf(line, sizeof(line), "%-15s %-6s %s%s%s\n", ip, type_short(k->type), k->summary, cnt,
+                         k->ignored ? " (ignored)" : "");
         if (n <= 0) continue;
         if ((size_t)n >= sizeof(line)) { n = sizeof(line) - 1; line[n - 1] = '\n'; }
         size_t d = display_len(line, (size_t)n);
