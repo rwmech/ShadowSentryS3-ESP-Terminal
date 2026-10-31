@@ -15,6 +15,8 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # the big buffers are heap-allocated from PSRAM in code; push Wi-Fi/lwIP and
 # mbedTLS (Telegram/GeoIP HTTPS) allocations out to PSRAM.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# malloc() of 4 KB or more goes to PSRAM (default 16 KB), so mid-size buffers leave internal RAM alone
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # OTA via POST /api/ota: a new image must reach Wi-Fi and mark itself valid,
 # otherwise the bootloader rolls back to the previous slot on the next reset.
@@ -25,7 +27,8 @@ CONFIG_MBEDTLS_SSL_PROTO_TLS1_1=n
 CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
-CONFIG_LWIP_MAX_SOCKETS=24
+# 25 sockets needed at worst with the extra listeners (Telnet 2323, SSH 2222, ADB 5555)
+CONFIG_LWIP_MAX_SOCKETS=32
 CONFIG_ESP_TASK_WDT_EN=n
 # wolfSSL: compile in wolfSSH support (wc_SSH_KDF etc.) so the real SSH server builds
 CONFIG_ESP_ENABLE_WOLFSSH=y

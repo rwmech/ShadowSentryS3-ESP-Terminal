@@ -5,6 +5,7 @@
 #include "adb_trap.h"
 #include "trap_listen.h"
 #include "log_store.h"
+#include "sd_log.h"
 #include "telegram.h"
 #include "wifi_manager.h"
 #include "config.h"
@@ -61,12 +62,43 @@ typedef struct {
     uint32_t   need;                    // body bytes still to come
     uint16_t   path_len;
     char       path[SYNC_PATH_KEEP];
-    // push in progress (SEND ... DONE): counted and hashed, not kept
+    // push in progress (SEND ... DONE): counted, hashed, and kept in PSRAM up to
+    // ADB_MAX_BYTES (the session's byte limit) for the card
     bool       pushing;
     char       push_path[SYNC_PATH_KEEP];
     uint32_t   push_size;
     mbedtls_sha256_context sha;
+    uint8_t   *buf;                     // PSRAM, NULL when nothing kept
+    uint32_t   buf_len, buf_cap;
+    bool       buf_lost;                // out of PSRAM: hashed but not kept
 } adb_stream_t;
+
+#define PUSH_BUF_START  (16 * 1024)
+
+static void push_buf_free(adb_stream_t *st)
+{
+    free(st->buf);
+    st->buf = NULL;
+    st->buf_len = st->buf_cap = 0;
+}
+
+// Keep a DATA chunk. Doubling growth in PSRAM, never past ADB_MAX_BYTES.
+static void push_keep(adb_stream_t *st, const uint8_t *d, uint32_t n)
+{
+    if (st->buf_lost || !n) return;
+    if (st->buf_len + n > ADB_MAX_BYTES) { st->buf_lost = true; push_buf_free(st); return; }
+    if (st->buf_len + n > st->buf_cap) {
+        uint32_t cap = st->buf_cap ? st->buf_cap : PUSH_BUF_START;
+        while (cap < st->buf_len + n) cap *= 2;
+        if (cap > ADB_MAX_BYTES) cap = ADB_MAX_BYTES;
+        uint8_t *nb = heap_caps_realloc(st->buf, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!nb) { st->buf_lost = true; push_buf_free(st); return; }
+        st->buf = nb;
+        st->buf_cap = cap;
+    }
+    memcpy(st->buf + st->buf_len, d, n);
+    st->buf_len += n;
+}
 
 typedef struct {
     int         sock;
@@ -253,6 +285,7 @@ static void push_abandon(adb_sess_t *s, adb_stream_t *st)
     adb_event(s, true, "ADB push incomplete: %.40s, %lu B received",
               st->push_path, (unsigned long)st->push_size);
     mbedtls_sha256_free(&st->sha);
+    push_buf_free(st);
     st->pushing = false;
 }
 
@@ -372,6 +405,8 @@ static int sync_path_done(adb_sess_t *s, adb_stream_t *st)
         push_abandon(s, st);                                 // a SEND without DONE before it
         strlcpy(st->push_path, st->path, sizeof(st->push_path));
         st->push_size = 0;
+        push_buf_free(st);
+        st->buf_lost = false;
         mbedtls_sha256_init(&st->sha);
         mbedtls_sha256_starts(&st->sha, 0);
         st->pushing = true;
@@ -413,16 +448,26 @@ static int sync_push_done(adb_sess_t *s, adb_stream_t *st)
     st->pushing = false;
     for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", dig[i]);
 
-    // TODO(merge lane): main has the camera lane's sd_log_write_file(). To keep
-    // pushed files on the card, buffer the DATA bytes of a push in PSRAM (up to
-    // a bound, e.g. 256 KB, inside ADB_MAX_BYTES) and hand the buffer to
-    // sd_log_write_file(SD_MOUNT_POINT "/adb/<first 16 hex of sha256>.bin", buf, n)
-    // here; ownership passes to sd_log. This base has no such call, so only the
-    // name, size and hash are logged.
-    ESP_LOGW(TAG, "[%s] push done: %s, %lu B, sha256 %s",
-             s->ip, st->push_path, (unsigned long)st->push_size, hex);
-    adb_event(s, true, "ADB push %.32s, %lu B, sha256 %s",
-              st->push_path, (unsigned long)st->push_size, hex);
+    // Keep the file on the card: /sd/adb/YYYY-MM-DD_HH-MM-SS_<sha8>.bin. The
+    // buffer goes to the SD writer task, which frees it (also on failure).
+    char file[64] = "";
+    if (st->buf && st->buf_len == st->push_size) {
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        char stamp[24];
+        strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &tm);
+        snprintf(file, sizeof(file), SD_MOUNT_POINT "/adb/%s_%.8s.bin", stamp, hex);
+        if (!sd_log_write_file(file, st->buf, st->buf_len)) file[0] = '\0';
+        st->buf = NULL;                     // owned (and freed) by sd_log now
+    }
+    push_buf_free(st);
+    ESP_LOGW(TAG, "[%s] push done: %s, %lu B, sha256 %s%s%s",
+             s->ip, st->push_path, (unsigned long)st->push_size, hex,
+             file[0] ? ", saved " : ", not saved", file);
+    adb_event(s, true, "ADB push %.32s, %lu B, sha256 %s%s%s",
+              st->push_path, (unsigned long)st->push_size, hex,
+              file[0] ? ", saved " : "", file);
 
     uint8_t ok[8] = { 'O', 'K', 'A', 'Y' };
     return sync_reply(s, st, ok, sizeof(ok)) ? 0 : -1;
@@ -483,6 +528,7 @@ static bool sync_feed(adb_sess_t *s, adb_stream_t *st, const uint8_t *d, uint32_
         } else if (st->pushing) {                    // SY_DATA; DATA without SEND is skipped
             mbedtls_sha256_update(&st->sha, d, take);
             st->push_size += take;
+            push_keep(st, d, take);
         }
         d += take;
         n -= take;

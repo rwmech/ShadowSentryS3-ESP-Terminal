@@ -161,7 +161,8 @@ static const char *type_name(uint8_t t)
 {
     static const char *const NAMES[] = {"RTSP login", "HTTP request", "Telnet login", "SSH login",
                                         "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
-                                        "Interactive shell", "Port scan", "Probe", "ARP sweep"};
+                                        "Interactive shell", "Port scan", "Probe", "ARP sweep",
+                                        "ADB (Android Debug Bridge)"};
     _Static_assert(sizeof(NAMES) / sizeof(NAMES[0]) == ATTACK_TYPE_COUNT, "NAMES: one per attack_type_t");
     return t < ATTACK_TYPE_COUNT ? NAMES[t] : "other attack";
 }
