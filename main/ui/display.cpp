@@ -71,9 +71,11 @@ static LGFX_CrowPanel35 s_tft;
 //
 // New i2c_master driver: LovyanGFX links it, and IDF aborts at boot ("CONFLICT!
 // driver_ng is not allowed to be used with this old driver") if the legacy
-// driver is linked alongside. The camera (whose SCCB needs the legacy driver
-// below IDF 5.4) is unused, so nothing here needs the old one.
+// driver is linked alongside. The OV2640 SCCB shares this bus: esp32-camera's
+// new-driver SCCB attaches to it by port (main/camera/cam.c), so nothing in the
+// firmware links the old driver.
 
+static i2c_master_bus_handle_t s_i2c_bus;       // set once, read by the camera
 static i2c_master_dev_handle_t s_touch_dev;
 static bool s_touch_ok = false;
 
@@ -85,7 +87,7 @@ static esp_err_t touch_read(uint8_t reg, uint8_t *out, size_t len, int timeout_m
 static void touch_init(void)
 {
     i2c_master_bus_config_t bc = {};
-    bc.i2c_port          = I2C_NUM_0;
+    bc.i2c_port          = (i2c_port_num_t)BOARD_I2C_PORT;
     bc.sda_io_num        = (gpio_num_t)BOARD_TOUCH_SDA;
     bc.scl_io_num        = (gpio_num_t)BOARD_TOUCH_SCL;
     bc.clk_source        = I2C_CLK_SRC_DEFAULT;
@@ -96,6 +98,7 @@ static void touch_init(void)
         ESP_LOGE(TAG, "I2C init failed, touch disabled");
         return;
     }
+    s_i2c_bus = bus;
     i2c_device_config_t dc = {};
     dc.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dc.device_address  = BOARD_TOUCH_ADDR;
@@ -142,6 +145,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     data->point.y = (lv_coord_t)y;
     data->state   = LV_INDEV_STATE_PR;
 }
+
+extern "C" i2c_master_bus_handle_t display_i2c_bus(void) { return s_i2c_bus; }
 
 // ── LVGL display driver ───────────────────────────────────────────────────────
 

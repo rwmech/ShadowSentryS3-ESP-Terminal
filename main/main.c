@@ -23,6 +23,7 @@
 #include "buzzer.h"
 #include "settings.h"
 #include "sd_log.h"
+#include "cam.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -165,6 +166,7 @@ void app_main(void)
     }
     sd_log_init();
     ui_start();
+    cam_snap_init();                // waits on its own task for the touch I2C bus
 
     // ── WiFi ─────────────────────────────────────────────────────────────────
     const char *ssid = settings_get()->wifi_ssid;

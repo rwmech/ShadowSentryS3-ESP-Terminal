@@ -44,6 +44,8 @@ idf_component_register(
         "alarm/melody.c"
         "ui/display.cpp"
         "ui/ui.c"
+        "camera/cam.c"
+        "admin/api_cam.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
@@ -53,6 +55,7 @@ idf_component_register(
         "board"        # board.h, CrowPanel 3.5" pin map
         "alarm"        # alarm.h, buzzer.h
         "ui"           # display.h, ui.h
+        "camera"       # cam.h, OV2640 panel-press snapshots
 
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}

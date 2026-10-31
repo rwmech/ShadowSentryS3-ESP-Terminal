@@ -37,10 +37,11 @@ This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/Sha
 | Display | 3.5" ILI9488, 480x320, SPI (SCLK 12, MOSI 13, MISO 14, CS 3, DC 42, backlight 46) |
 | Touch | FT6236 capacitive, I2C 0x38 (SDA 2, SCL 1) |
 | microSD | on the display's SPI bus, CS 10 |
+| Camera | OV2640 on J5 (24-pin FPC): XCLK 7, PCLK 17, VSYNC 4, HREF 5, D0-D7 8, 47, 48, 21, 18, 16, 15, 6; SCCB on the touch I2C bus, 0x30; no PWDN or RESET |
 | Buzzer | passive, GPIO 45 |
 | USB | CH340C serial bridge; V1.0 has no auto-reset wiring |
 
-Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S microphone are not used.
+Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not used.
 
 ### What this fork adds
 
@@ -52,6 +53,7 @@ Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S m
 - Dashboard tabs: Dashboard (upstream, plus the incident banner), Logs and Settings.
   - Logs: summary cards, 24 h, daily and by-type charts, top sources and top credentials, card status, and a day picker that loads a day file (the last 256 KB, or the whole file) into a filterable table, newest first, with a download link.
   - Settings: admin password, Wi-Fi, Telegram, timezone (POSIX TZ, with presets), alarm timings, brightness and the three sounds, plus Save, Reboot and Test buzzer. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
+- Panel-press camera: the OV2640 faces whoever stands at the screen. A press on the panel's ACK or CLEAR button takes a photo (640x480 JPEG, Elecrow's sensor settings) at the moment of the press, not when the hold completes. It is saved as `/sd/snap/YYYY-MM-DD_HH-MM-SS_<action>.jpg` (through the SD writer task) with a `snap` line in the day log, and the last one is kept in PSRAM for the dashboard's "Last panel action" card (thumbnail, action, time; refreshed on every alarm state change and every 30 s). At most one photo a second. Without a camera the board logs it once and runs as before. The camera's SCCB runs on the new `i2c_master` driver and attaches to the bus touch already owns, so the legacy I2C driver (which would abort IDF 5.4 at boot) is never linked.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
 - Memory: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
 
@@ -69,6 +71,8 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `GET` | `/api/logs` | day files, newest first |
 | `GET` | `/api/logs/file?f=NAME[&tail=1][&dl=1]` | one day file as NDJSON; `tail=1` sends the last 256 KB |
 | `POST` | `/api/ack` | acknowledge the incident |
+| `GET` | `/api/snap/last` | last panel-press photo, `image/jpeg`; 404 if none since boot |
+| `GET` | `/api/snap/last.json` | `{camera, seq, ts, action, file, size, width, height}`; `seq` 0 if none |
 | `POST` | `/api/ota` | raw app image |
 
 ### Build and flash (PlatformIO)

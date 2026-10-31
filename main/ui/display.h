@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include "driver/i2c_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,13 @@ extern "C" {
  * the UI task only. Returns false if the panel failed to initialise.
  */
 bool display_init(void);
+
+/*
+ * The I2C master bus touch creates on BOARD_I2C_PORT (SDA 2 / SCL 1), shared
+ * with the camera SCCB and the Crowtail header. NULL until display_init() has
+ * created it, and stays NULL if that failed. Any task may call this.
+ */
+i2c_master_bus_handle_t display_i2c_bus(void);
 
 #ifdef __cplusplus
 }
