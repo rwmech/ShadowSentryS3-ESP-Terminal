@@ -1096,8 +1096,7 @@ async function testDiscord(){
     setTimeout(poll,1500);
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
-async function testBuzzer(){
-try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
+async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
 async function rebootDev(){
   if(!confirm('Reboot the device now?'))return;
   try{await fetch('/api/reboot',POSTH);}catch{}

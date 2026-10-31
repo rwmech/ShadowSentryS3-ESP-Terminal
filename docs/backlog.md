@@ -10,6 +10,27 @@ Everything Rob has asked for, or that came out of testing and research, that is 
 
 - Dashboard heartbeat on the header shield (soft pulse per successful status poll, grey after two misses, ACTIVE pill unchanged). Being added by the merge lane with alarm-ux.
 
+## Approved, starts when alarm-ux is on main
+
+- Hold-to-confirm progress fill. Rob, 2026-10-31: "on the hold to acknowledge can we have it fill the button as we hold to ack. meaning if it takes 2 seconds spend 2 seconds filling the button like a progress bar, this is a common ui trait."
+  - ACKNOWLEDGE and RE-ARM both take a 2 s hold (Rob's choice).
+  - A solid fill grows left to right over the hold, with the label readable on top. Releasing early drains it back with no action; completing it fires the action with a short confirm tone.
+  - Applies on the incident card and on the strobing overlay, in main\ui\ui.c.
+  - The camera snapshot hook stays on the press start, not the completion.
+- Startup melody timing from the score. Rob, 2026-10-31, after hearing the 260 ms version: "now the melody sounds too slow. use the legit song timings".
+  - Read the tempo marking and the note values for the opening theme from the public-domain score: Grieg, Peer Gynt Suite No. 1, Op. 46 No. 4, on IMSLP.
+  - Set main\alarm\melody.c to match: eighths and quarters as written, at the marked tempo, staccato articulation.
+  - Keep our added cadence (F#, then the held B6), in the same tempo.
+  - Record the source edition and the metronome mark in melody.c's comment.
+- Tighter panel layout. Rob, 2026-10-31: "the new on screen layout is using a bit too much space". Keep the structure; cut paddings, margins and card height, and keep the headline and source readable.
+- Ignore-source button on the panel, plus the ignore list it needs. Rob, 2026-10-31: "an ignore ip button on the display. Make sure the back end can always undo it. Id also make sure it gets an are you sure dialog over it."
+  - On the incident card: IGNORE SOURCE opens a confirmation dialog showing the IP, MAC and vendor, with Ignore and Cancel buttons.
+  - Confirming adds the source to the ignore list (NVS). If the open incident is from that source, it is closed (acknowledged and re-armed), so the siren and strobe stop.
+  - Ignored sources are still logged, flagged "ignored", and never open an incident. This settles the open question under Detection.
+  - The dashboard Settings page gets an Ignore list: view, add and remove entries, with an API under the X-ShadowSentry check.
+  - The panel can only add; removal is dashboard-only, so the panel can never undo what only the backend should, and the backend can always undo the panel.
+  - It is built so the later "Alert on" page reuses it.
+
 ## Proposed build order
 
 The TA's recommendation, by value against effort. Rob picks.

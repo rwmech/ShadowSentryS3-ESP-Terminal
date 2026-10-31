@@ -61,9 +61,15 @@ void alarm_ack(void);
 // task; non-blocking.
 void alarm_clear(void);
 
+// true if the last ACKED -> IDLE close was a re-arm (alarm_clear()), false if
+// it was the quiet timer. Meaningful only inside a listener, on the alarm
+// task, when a listener sees the state go to IDLE.
+bool alarm_closed_by_rearm(void);
+
 // Snapshot of the current incident. Safe from any task.
 void alarm_get(alarm_info_t *out);
 
 // Called from the alarm task on every state or count change. Must be
-// non-blocking (copy and queue). Up to 4 listeners, registered at boot.
+// non-blocking (copy and queue). Up to 6 listeners (ALARM_MAX_LISTENERS in
+// alarm.c), registered at boot; four are used (UI, WebSocket, SD log, Discord).
 void alarm_add_listener(void (*cb)(const alarm_info_t *info));

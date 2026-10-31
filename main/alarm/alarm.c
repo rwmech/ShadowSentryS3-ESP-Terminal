@@ -16,7 +16,7 @@ static const char *TAG = "ALARM";
 #define ALARM_QUEUE_DEPTH    32
 #define ALARM_TASK_STACK     4096
 #define ALARM_TASK_PRIO      4
-#define ALARM_MAX_LISTENERS  4
+#define ALARM_MAX_LISTENERS  6     // UI, WebSocket, SD log, Discord, plus 2 spare
 #define NVS_NS               "alarm"
 #define NVS_KEY              "incident"
 
@@ -35,6 +35,7 @@ static SemaphoreHandle_t s_mutex;
 static alarm_info_t      s_info;            // guarded by s_mutex
 static int64_t           s_last_event_s;    // monotonic, alarm task only
 static int64_t           s_last_remind_s;   // monotonic, alarm task only
+static bool              s_rearmed;         // alarm task only: the last close was a re-arm
 
 static void (*s_listeners[ALARM_MAX_LISTENERS])(const alarm_info_t *info);
 static int s_listener_count = 0;
@@ -43,8 +44,17 @@ static int64_t mono_s(void) { return esp_timer_get_time() / 1000000LL; }
 
 void alarm_add_listener(void (*cb)(const alarm_info_t *info))
 {
-    if (!cb || s_listener_count >= ALARM_MAX_LISTENERS) return;
+    if (!cb) return;
+    if (s_listener_count >= ALARM_MAX_LISTENERS) {
+        ESP_LOGE(TAG, "Alarm listener table full (%d), listener dropped", ALARM_MAX_LISTENERS);
+        return;
+    }
     s_listeners[s_listener_count++] = cb;
+}
+
+bool alarm_closed_by_rearm(void)
+{
+    return s_rearmed;
 }
 
 void alarm_get(alarm_info_t *out)
@@ -174,6 +184,7 @@ static void alarm_task(void *arg)
                 xSemaphoreGive(s_mutex);
                 persist();
                 ESP_LOGI(TAG, "Incident #%lu closed, re-armed", (unsigned long)s_info.id);
+                s_rearmed = true;
                 notify();
                 dirty = false;
             }
@@ -217,6 +228,7 @@ static void alarm_task(void *arg)
             persist();
             ESP_LOGI(TAG, "Incident #%lu closed after %lu s quiet",
                      (unsigned long)s_info.id, (unsigned long)settings_get()->alarm_quiet_s);
+            s_rearmed = false;
             notify();
         }
     }

@@ -65,6 +65,7 @@ typedef struct {
     alarm_info_t cur;
     alarm_info_t prev;      // the listener's previous snapshot: final count of a superseded incident
     uint8_t      ack_src;
+    bool         rearmed;   // IDLE reached by re-arm, not by the quiet timer
 } dc_alarm_msg_t;
 
 typedef struct {
@@ -142,6 +143,7 @@ static void on_alarm(const alarm_info_t *a)
             m.ack_src = ACK_DASHBOARD;
         }
         if (a->state == ALARM_ACKED) s_dash_ack_tick = 0;
+        if (a->state == ALARM_IDLE) m.rearmed = alarm_closed_by_rearm();   // we are on the alarm task
         if (xQueueSend(s_alq, &m, 0) != pdTRUE) count_drop();
     }
     s_prev = *a;
@@ -608,7 +610,9 @@ static void handle_alarm(const dc_alarm_msg_t *m, int64_t now)
         if (on) post_acked(a, m->ack_src);
     } else if (a->state == ALARM_IDLE && p->state != ALARM_IDLE) {
         s_inc_active = false;
-        if (on) {
+        if (on && m->rearmed) {
+            post_closed(a, "Closed: re-armed.");
+        } else if (on) {
             char q[24], why[64];
             fmt_dur(settings_get()->alarm_quiet_s, q, sizeof(q));
             snprintf(why, sizeof(why), "Closed after %s without events.", q);
