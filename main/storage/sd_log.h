@@ -53,6 +53,13 @@ bool sd_log_write_file(const char *path, void *data, size_t len);
 // snapshot of a panel press). Never blocks. Returns true if queued.
 bool sd_log_snap(uint32_t ts, const char *action, const char *file, size_t size);
 
+// Append one preformatted JSON line (ending in a newline) to today's log. The
+// writer task owns line from here and frees it; allocate it from PSRAM
+// (heap_caps_malloc(MALLOC_CAP_SPIRAM)). Freed at once, and false, if there is
+// no card or the queue is full. Never blocks. Used by the HTTP engine for its
+// {"kind":"http"} request lines.
+bool sd_log_line(char *line, size_t len);
+
 // Save the summary metrics now (queued to the writer task). Call before a
 // deliberate restart, then give it ~300 ms.
 void sd_log_flush(void);

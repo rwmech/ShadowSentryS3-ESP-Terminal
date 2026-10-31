@@ -9,6 +9,7 @@
 #include "log_store.h"
 #include "rtsp_trap.h"
 #include "http_trap.h"
+#include "http_engine.h"
 #include "telnet_trap.h"
 #include "ssh_trap.h"
 #include "ftp_trap.h"
@@ -94,6 +95,10 @@ static const char *TAG = "MAIN";
 //           append under log_store_append, and the SHA-256 finish
 //           → 6144 (high-water printed at the end of each session)
 #define STACK_ADB       6144
+//  httpeng: all buffers in PSRAM; the stack holds attack_log_t(240), a few
+//           small locals, ESP_LOG formatting and the SPIFFS append under
+//           log_store_append (so it must stay internal)
+//           → HTTP_ENG_TASK_STACK 4096 (high-water printed on each new low)
 
 // Priority 5 = equal to lwIP core; keeps honeypot latency low.
 // Telegram is 3 — non-critical, may wait behind WiFi driver work on Core 1.
@@ -224,6 +229,10 @@ void app_main(void)
     ESP_LOGI(TAG, "  ┌─ Core 0  Hacker World ──────────────────");
     ESP_LOGI(TAG, "  │  RTSP    port %-5d  (Fake Hikvision camera)",  RTSP_PORT);
     ESP_LOGI(TAG, "  │  HTTP    port %-5d  (Fake NVR login page)",    HTTP_PORT);
+#if HTTP_ENGINE_ENABLE
+    ESP_LOGI(TAG, "  │  HTTP    ports %d %d %d  (same page, 0 = off)",
+             HTTP_ALT_PORT1, HTTP_ALT_PORT2, HTTP_ALT_PORT3);
+#endif
     ESP_LOGI(TAG, "  │  Telnet  port %-5d  (Fake Ubuntu 20.04)",      TELNET_PORT);
     ESP_LOGI(TAG, "  │  SSH     port %-5d  (Fake OpenSSH 8.9p1)",     SSH_PORT);
     ESP_LOGI(TAG, "  │  FTP     port %-5d  (Fake vsFTPd 3.0.5)",      FTP_PORT);
@@ -258,7 +267,11 @@ void app_main(void)
     // Each honeypot is a blocking accept loop; lower-priority tasks (Core 1)
     // cannot starve because the honeypots sleep inside accept() most of the time.
     SPAWN(rtsp_trap_task,   "rtsp",   STACK_RTSP,     PRIO_HONEYPOT, 0);
+#if HTTP_ENGINE_ENABLE
+    SPAWN(http_engine_task, "http",   HTTP_ENG_TASK_STACK, PRIO_HONEYPOT, 0);
+#else
     SPAWN(http_trap_task,   "http",   STACK_HTTP,     PRIO_HONEYPOT, 0);
+#endif
     SPAWN(telnet_trap_task, "telnet", STACK_TELNET,   PRIO_HONEYPOT, 0);
     SPAWN(ssh_trap_task,    "ssh",    STACK_SSH,      PRIO_HONEYPOT, 0);
     SPAWN(ftp_trap_task,    "ftp",    STACK_FTP,      PRIO_HONEYPOT, 0);
