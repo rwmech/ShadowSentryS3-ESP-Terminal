@@ -312,6 +312,83 @@ footer{
 .note{padding:8px 20px;font-size:.7rem;color:var(--muted)}
 .muted{color:var(--muted)}
 .td-ip.link{cursor:pointer;text-decoration:underline dotted}
+
+/* ── Fork: readability (Rob, 2026-10-31: "This back end font is way too small") ──
+   Overrides only, so the rules above stay as upstream wrote them. Sizes in px:
+   base 15, table text 14 to 15, small and meta text 13. Text #f1f5f9, secondary
+   #cbd5e1. Monospace only for IPs, MACs and hex. */
+:root{--text:#f1f5f9;--muted:#cbd5e1;--mono:Consolas,'Cascadia Mono',ui-monospace,Menlo,monospace}
+html,body{font-size:15px;line-height:1.5}
+.brand h1{font-size:17px}
+.brand p,.pill,.clear-btn{font-size:13px}
+.tab{font-size:15px;padding:7px 16px}
+.alarm-banner .ab-title{font-size:17px}
+.alarm-banner .ab-sub{font-size:14px}
+.alarm-banner button{font-size:15px}
+.stat-card .label{font-size:13px}
+.stat-card .sub{font-size:13px;opacity:1}
+.card-title{font-size:13px}
+.donut-center .dc-lbl{font-size:13px}
+.legend-item{font-size:14px}
+.feed{max-height:320px}
+.fi-ip{font-size:14px;font-family:var(--mono)}
+.fi-cred{font-size:13px;font-family:var(--font)}
+.feed-time{font-size:13px}
+.feed-badge{font-size:13px;padding:2px 8px}
+.dev-q{font-size:14px;font-family:var(--font);max-width:none;min-width:320px}
+.dev-sub{font-size:13px}
+.ign-chip{font-size:13px}
+.alerts label{font-size:14px}
+.feed-empty{font-size:15px}
+th{font-size:13px;padding:11px 16px;color:var(--muted)}
+td{font-size:15px;padding:12px 16px;line-height:1.45;border-bottom-color:rgba(255,255,255,.07)}
+tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+tbody tr:hover td{background:rgba(0,210,160,.06)}
+.td-ts{font-size:14px;font-family:var(--font);font-variant-numeric:tabular-nums}
+.td-ip{font-size:14px;font-family:var(--mono);white-space:nowrap}
+.td-mac{font-size:14px;font-family:var(--mono)}
+.vendor-chip{font-size:13px}
+.td-cred{font-size:14px;font-family:var(--font)}
+.td-payload{font-size:15px;color:var(--text);max-width:none;min-width:260px;white-space:normal;overflow-wrap:anywhere}
+.empty-row td{font-size:15px}
+.m-title h3{font-size:18px}
+.m-title p,.detail-row .dk{font-size:13px}
+.detail-row .dv{font-size:15px;font-family:var(--font)}
+.m-btn{font-size:14px}
+footer{font-size:13px}
+.uptime{color:var(--g)}
+#sys-info{font-size:13px;color:var(--muted);font-family:var(--font)}
+#tbl-count{font-size:13px!important}
+#dv-count{font-size:14px!important}
+.bar-lbl{font-size:13px}
+.hbar{font-size:14px}
+.hbar .n{width:130px}
+.ctl select,.ctl input:not([type=checkbox]),.form input:not([type=checkbox]):not([type=range]),.form select{font-size:14px;padding:7px 11px}
+.ctl label{font-size:14px}
+.btn{font-size:14px;padding:8px 16px}
+.form{grid-template-columns:240px minmax(0,440px)}
+.form label{font-size:14px}
+.form .hint,.form h4{font-size:13px}
+.hint{font-size:13px}
+.msg{font-size:14px}
+.kv{font-family:var(--font);font-size:14px;line-height:1.7}
+.note{font-size:14px;padding:10px 20px}
+.mono{font-family:var(--mono)}
+/* Tables keep their text size and scroll sideways on a narrow screen. */
+.table-card{min-width:0}
+.grid2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.tbl-wrap table{min-width:640px}
+#page-devices table{min-width:1040px}
+#dv-body td{vertical-align:top}
+#dv-body td:first-child{min-width:220px}
+@media(max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){
+  header{flex-wrap:wrap;padding:12px 16px;gap:10px}
+  .tabs{margin-left:0}
+  main{padding:16px}
+  .form{grid-template-columns:minmax(0,1fr)}
+  .form .hint{grid-column:1}
+}
 </style>
 </head>
 <body>
@@ -528,7 +605,7 @@ footer{
       <div class="kv">
         <div id="snap-what" class="muted">Loading&hellip;</div>
         <div id="snap-when" class="muted"></div>
-        <div id="snap-file" class="muted" style="font-size:.68rem"></div>
+        <div id="snap-file" class="muted"></div>
       </div>
     </div>
   </div>
@@ -611,7 +688,7 @@ footer{
       <div class="card-title">Log file</div>
       <div class="ctl">
         <select id="lg-day" onchange="updDl()"></select>
-        <label class="muted" style="font-size:.72rem"><input type="checkbox" id="lg-full"> whole file</label>
+        <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
         <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>boot</option><option>snap</option><option>discovery</option></select>
@@ -708,7 +785,7 @@ footer{
   <div class="card" style="margin-top:14px">
     <div class="card-title">Ignore list</div>
     <div class="msg" id="ig-msg"></div>
-    <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">Ignored sources are still logged (flagged "ignored") but never open an incident or send an alert. The panel's IGNORE SOURCE adds here; only this page removes.</div>
+    <div class="hint muted" style="margin-bottom:8px">Ignored sources are still logged (flagged "ignored") but never open an incident or send an alert. The panel's IGNORE SOURCE adds here; only this page removes.</div>
     <div class="tbl-wrap"><table>
       <thead><tr><th>IP</th><th>MAC / Vendor</th><th>Note</th><th>Added</th><th></th></tr></thead>
       <tbody id="ig-body"></tbody>
