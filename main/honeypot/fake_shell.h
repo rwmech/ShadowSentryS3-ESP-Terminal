@@ -29,7 +29,8 @@ struct sockaddr_in;   // forward decl — avoid pulling lwip/sockets.h into the 
  *   - download / exec IOC command → additional Telegram alert (wget/curl/tftp/…)
  *
  * Returns when the attacker logs out, the per-session command cap is hit, or the
- * transport closes.
+ * transport closes. Fork: also after FAKE_SHELL_IDLE_S without a keystroke (with
+ * bash's TMOUT message), FAKE_SHELL_SESSION_S or FAKE_SHELL_MAX_INPUT bytes.
  */
 
 // Hard cap on commands handled per session — bounds log volume and run time
@@ -41,6 +42,20 @@ struct sockaddr_in;   // forward decl — avoid pulling lwip/sockets.h into the 
 // Maximum length of a single command line (longer input is truncated).
 #ifndef FAKE_SHELL_CMD_MAXLEN
 #define FAKE_SHELL_CMD_MAXLEN     256
+#endif
+
+// Shell-phase limits (fork). The transports set FAKE_SHELL_IDLE_S as the socket
+// receive timeout before fake_shell_run(); the login prompts keep their own.
+// A session ends after FAKE_SHELL_SESSION_S (checked after each byte, so an idle
+// wait can run past it by up to FAKE_SHELL_IDLE_S) or FAKE_SHELL_MAX_INPUT bytes.
+#ifndef FAKE_SHELL_IDLE_S
+#define FAKE_SHELL_IDLE_S         120
+#endif
+#ifndef FAKE_SHELL_SESSION_S
+#define FAKE_SHELL_SESSION_S      600
+#endif
+#ifndef FAKE_SHELL_MAX_INPUT
+#define FAKE_SHELL_MAX_INPUT      65536
 #endif
 
 // Transport abstraction. The Telnet trap backs this with a raw socket; the SSH
