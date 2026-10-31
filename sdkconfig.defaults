@@ -72,3 +72,6 @@ CONFIG_SC031GS_SUPPORT=n
 CONFIG_HM1055_SUPPORT=n
 CONFIG_HM0360_SUPPORT=n
 CONFIG_MEGA_CCM_SUPPORT=n
+# Frames DMA straight into the PSRAM frame buffer, so the driver keeps no 16 KB
+# bounce buffer in internal RAM (only its DMA descriptors, about 1 KB).
+CONFIG_CAMERA_PSRAM_DMA=y

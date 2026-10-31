@@ -76,8 +76,12 @@ static LGFX_CrowPanel35 s_tft;
 // driver is linked alongside. The OV2640 SCCB shares this bus: esp32-camera's
 // new-driver SCCB attaches to it by port (main/camera/cam.c), so nothing in the
 // firmware links the old driver.
+//
+// Touch runs at 100 kHz, as Elecrow's examples (Arduino Wire default) and the
+// SCCB, so the bus never switches speed between the two devices.
 
 static i2c_master_bus_handle_t s_i2c_bus;       // set once, read by the camera
+static volatile bool           s_touch_hold;    // camera init owns the bus
 static i2c_master_dev_handle_t s_touch_dev;
 static bool s_touch_ok = false;
 
@@ -104,7 +108,7 @@ static void touch_init(void)
     i2c_device_config_t dc = {};
     dc.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dc.device_address  = BOARD_TOUCH_ADDR;
-    dc.scl_speed_hz    = 400000;
+    dc.scl_speed_hz    = 100000;
     if (i2c_master_bus_add_device(bus, &dc, &s_touch_dev) != ESP_OK) {
         ESP_LOGE(TAG, "I2C device add failed, touch disabled");
         return;
@@ -123,7 +127,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
     (void)drv;
     data->state = LV_INDEV_STATE_REL;
-    if (!s_touch_ok) return;
+    if (!s_touch_ok || s_touch_hold) return;
 
     // TD_STATUS, P1_XH, P1_XL, P1_YH, P1_YL
     uint8_t b[5];
@@ -149,6 +153,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 }
 
 extern "C" i2c_master_bus_handle_t display_i2c_bus(void) { return s_i2c_bus; }
+
+extern "C" void display_touch_hold(bool hold) { s_touch_hold = hold; }
 
 // ── LVGL display driver ───────────────────────────────────────────────────────
 

@@ -27,6 +27,11 @@ void display_set_backlight_override(bool full);
  */
 i2c_master_bus_handle_t display_i2c_bus(void);
 
+// true: stop polling the touch controller, so another device (the camera's
+// SCCB init) has the bus to itself; touch reads as released meanwhile.
+// false: resume. Any task.
+void display_touch_hold(bool hold);
+
 #ifdef __cplusplus
 }
 #endif
