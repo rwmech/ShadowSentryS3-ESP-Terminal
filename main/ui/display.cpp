@@ -12,6 +12,8 @@
 #include "driver/ledc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "DISPLAY";
 
@@ -159,11 +161,31 @@ static void touch_feedback_cb(lv_indev_drv_t *drv, uint8_t event)
 #define BL_TIMER    LEDC_TIMER_0
 #define BL_CHANNEL  LEDC_CHANNEL_0
 
+static bool              s_bl_ok = false;      // LEDC drives the backlight
+static bool              s_bl_override = false; // full on, whatever the setting
+static SemaphoreHandle_t s_bl_lock;             // UI task and settings save
+
+// Runs on the UI task (override) and on whichever task saved the settings
+// (settings_on_change), so the read of the override and the duty write go
+// together under s_bl_lock.
 static void backlight_apply(void)
 {
-    uint32_t duty = (uint32_t)settings_get()->brightness * 1023 / 100;
+    if (!s_bl_ok) return;
+    xSemaphoreTake(s_bl_lock, portMAX_DELAY);
+    uint32_t duty = s_bl_override ? 1023
+                                  : (uint32_t)settings_get()->brightness * 1023 / 100;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
+    xSemaphoreGive(s_bl_lock);
+}
+
+extern "C" void display_set_backlight_override(bool full)
+{
+    if (!s_bl_ok) return;
+    xSemaphoreTake(s_bl_lock, portMAX_DELAY);
+    s_bl_override = full;
+    xSemaphoreGive(s_bl_lock);
+    backlight_apply();
 }
 
 static void backlight_init(void)
@@ -186,6 +208,14 @@ static void backlight_init(void)
         gpio_set_level((gpio_num_t)BOARD_LCD_BL, 1);
         return;
     }
+    s_bl_lock = xSemaphoreCreateMutex();
+    if (!s_bl_lock) {
+        ESP_LOGE(TAG, "No heap for the backlight lock, staying full on");
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, 1023);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
+        return;
+    }
+    s_bl_ok = true;
     backlight_apply();
 }
 

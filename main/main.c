@@ -112,7 +112,7 @@ static const char *TAG = "MAIN";
              (unsigned long)esp_get_free_heap_size());                  \
 } while(0)
 
-// Boot sound (about 1.8 s, skipped if the boot sound setting is off): plays
+// Boot sound (about 3.6 s, skipped if the boot sound setting is off): plays
 // once, then the task deletes itself, so app_main never waits for it.
 static void startup_melody_task(void *arg)
 {

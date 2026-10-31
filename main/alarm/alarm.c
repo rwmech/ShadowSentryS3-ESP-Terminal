@@ -20,7 +20,7 @@ static const char *TAG = "ALARM";
 #define NVS_NS               "alarm"
 #define NVS_KEY              "incident"
 
-typedef enum { MSG_EVENT, MSG_ACK } msg_kind_t;
+typedef enum { MSG_EVENT, MSG_ACK, MSG_CLEAR } msg_kind_t;
 
 typedef struct {
     msg_kind_t kind;
@@ -58,6 +58,13 @@ void alarm_ack(void)
 {
     if (!s_queue) return;
     alarm_msg_t m = { .kind = MSG_ACK };
+    xQueueSend(s_queue, &m, 0);
+}
+
+void alarm_clear(void)
+{
+    if (!s_queue) return;
+    alarm_msg_t m = { .kind = MSG_CLEAR };
     xQueueSend(s_queue, &m, 0);
 }
 
@@ -152,6 +159,21 @@ static void alarm_task(void *arg)
                 xSemaphoreGive(s_mutex);
                 persist();
                 ESP_LOGI(TAG, "Incident #%lu acknowledged", (unsigned long)s_info.id);
+                buzzer_stop();
+                notify();
+                dirty = false;
+            }
+        } else if (got && m.kind == MSG_CLEAR) {
+            // Re-arm: end an acknowledged incident now rather than after
+            // ALARM_QUIET_S, so the next event alerts again. The incident's
+            // details stay in s_info (the panel's "last incident") and nothing
+            // in the logs is touched. An unacknowledged incident is left alone.
+            if (s_info.state == ALARM_ACKED) {
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                s_info.state = ALARM_IDLE;
+                xSemaphoreGive(s_mutex);
+                persist();
+                ESP_LOGI(TAG, "Incident #%lu closed, re-armed", (unsigned long)s_info.id);
                 notify();
                 dirty = false;
             }

@@ -44,12 +44,18 @@ Pin map: [`main/board/board.h`](main/board/board.h). The OV2640 camera and I2S m
 
 ### What this fork adds
 
-- Front panel (LVGL 8 + LovyanGFX, using Elecrow's own panel config): status bar with IP, clock and an ARMED / ALARM / ACKED state, event counters, a live attack feed (tap a row for details), and a full-screen incident overlay. Backlight brightness is a setting.
-- Sounds: at every boot, the opening of Grieg's "In the Hall of the Mountain King" (public domain, about 1.8 s, played from its own task so boot does not wait), and a click on every touch of the screen. The boot sound and the click can each be switched off in Settings.
-- Incident alarm: the first attack sounds a short alarm on the buzzer, then a reminder beep every 5 minutes until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the web dashboard. After acknowledgement the same source stays quiet; a new source, or the same one after 10 quiet minutes, alarms again. An unacknowledged incident survives a reboot. The reminder interval, quiet time and alarm sound are settings.
+- Front panel (LVGL 8 + LovyanGFX, using Elecrow's own panel config), laid out for status and control rather than a scrolling log, in a bright palette (white and light grey text, saturated accents, slate cards) because the ILI9488 has no gamma tuning:
+  - status bar: name, IP : port, clock, and an ARMED / ALARM / ACKED pill
+  - incident card: when armed, "No active incident" and the last incident's summary; during an incident, the source IP in large type, attack type, event count, MAC vendor, MAC, first and last seen, how long it has been open, and one hold button: ACKNOWLEDGE while unacknowledged, RE-ARM (hold 1.5 s) once acknowledged
+  - key figures: all-time events, distinct sources, microSD free space (or "no card"), Wi-Fi RSSI
+  - the last 3 events, one line each (tap for details)
+  - while an incident is unacknowledged, a full-screen overlay strobes red and black every 500 ms with the backlight forced to 100 %, the hold-to-acknowledge button staying white and readable; acknowledging it restores the brightness setting
+  - backlight brightness is a setting
+- Sounds: at every boot, the opening of Grieg's "In the Hall of the Mountain King" (public domain, at march tempo: 260 ms per note, about 3.6 s, played from its own task so boot does not wait), and a click on every touch of the screen. The boot sound and the click can each be switched off in Settings.
+- Incident alarm: the first attack sounds a 3.2 s siren on the buzzer (a sweep from 2300 to 3100 Hz and back, across the piezo's 2.7 kHz resonance, four times), then the same siren every minute until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the web dashboard. Acknowledging cuts a siren short. After acknowledgement the same source stays quiet; a new source, or the same one after 10 quiet minutes, alarms again. Re-arm (hold RE-ARM on the panel, or Re-arm on the dashboard) ends an acknowledged incident at once, so the next event alarms again; it deletes nothing, the logs, metrics and the panel's last-incident summary all stay. An unacknowledged incident survives a reboot. The reminder interval (default 60 s), quiet time and alarm sound are settings.
 - microSD event log: every attack, alarm transition and boot is appended as one JSON line to `/sd/log/YYYY-MM-DD.jsonl` (device local date; `nosync.jsonl` before the clock is set). A writer task drains a queue, so the traps never touch FAT. The card must be FAT32 or exFAT; the firmware never formats it.
 - Summary metrics, kept from every attack and saved to `/sd/stats.bin` once a minute (and before a reboot or OTA): total and per-type counts, 24 hourly and 30 daily buckets, the top 64 sources and top 32 credential pairs. Top-N counts are upper bounds for entries that were evicted and came back.
-- Dashboard tabs: Dashboard (upstream, plus the incident banner), Logs and Settings.
+- Dashboard tabs: Dashboard (upstream, plus the incident banner: Acknowledge while unacknowledged, Re-arm once acknowledged), Logs and Settings.
   - Logs: summary cards, 24 h, daily and by-type charts, top sources and top credentials, card status, and a day picker that loads a day file (the last 256 KB, or the whole file) into a filterable table, newest first, with a download link.
   - Settings: admin password, Wi-Fi, Telegram, timezone (POSIX TZ, with presets), alarm timings, brightness and the three sounds, plus Save, Reboot and Test buzzer. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
@@ -64,11 +70,12 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `GET` | `/api/settings` | settings; secrets only as `*_set` flags |
 | `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone; `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
 | `POST` | `/api/reboot` | 204, restart after 500 ms |
-| `POST` | `/api/buzzer/test` | the alarm pattern, even with the sound off |
+| `POST` | `/api/buzzer/test` | the alarm siren, even with the sound off; 204 at once, the siren plays after |
 | `GET` | `/api/summary` | card status and summary metrics |
 | `GET` | `/api/logs` | day files, newest first |
 | `GET` | `/api/logs/file?f=NAME[&tail=1][&dl=1]` | one day file as NDJSON; `tail=1` sends the last 256 KB |
 | `POST` | `/api/ack` | acknowledge the incident |
+| `POST` | `/api/alarm/clear` | re-arm: end an acknowledged incident, 204; 409 `{"error":"acknowledge first"}` while unacknowledged; logs untouched |
 | `POST` | `/api/ota` | raw app image |
 
 ### Build and flash (PlatformIO)

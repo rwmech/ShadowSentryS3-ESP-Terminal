@@ -703,6 +703,20 @@ static void get_log_file(int sock, const char *query)
     fclose(f);
 }
 
+// ── POST /api/alarm/clear: re-arm ─────────────────────────────────────────────
+//
+// Ends an acknowledged incident so the next event alarms again. Logs and
+// metrics are untouched. An unacknowledged incident must be acknowledged first.
+
+static void post_alarm_clear(int sock)
+{
+    alarm_info_t a;
+    alarm_get(&a);
+    if (a.state == ALARM_ACTIVE) { send_error(sock, "409 Conflict", "acknowledge first"); return; }
+    alarm_clear();
+    send_204(sock);
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 bool api_ext_handle(int sock, const char *req, int req_len)
@@ -711,6 +725,7 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (!parse_request_line(req, method, sizeof(method), path, sizeof(path), query, sizeof(query)))
         return false;
     bool get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
+    if (post && !strcmp(path, "/api/alarm/clear")) { post_alarm_clear(sock); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE } r = R_NONE;
     if      (get  && !strcmp(path, "/api/settings"))    r = R_SET_GET;

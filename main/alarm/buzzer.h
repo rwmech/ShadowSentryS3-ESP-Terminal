@@ -10,24 +10,29 @@ extern "C" {
 /*
  * Passive buzzer on BOARD_BUZZER, driven with an LEDC tone.
  *
- * The alarm/remind patterns block for their length (under a second), so call
- * them only from the alarm task or the admin task (the test from the Settings
- * page). buzzer_boot() and buzzer_play_melody() block for the whole tune
- * (about 1.8 s for the startup melody), so run them from a task of their own.
- * buzzer_click() is a few milliseconds and never waits: if a pattern or tune
- * is playing, the click is skipped.
+ * buzzer_alarm(), buzzer_remind() and buzzer_test() only queue a request and
+ * return at once: the siren (about 3.2 s) plays on the buzzer's own task, one
+ * request after another, so call them from any task. buzzer_stop() ends the
+ * siren that is playing. buzzer_boot() and buzzer_play_melody() block for the
+ * whole tune (about 3.6 s for the startup melody), so run them from a task of
+ * their own; a siren requested meanwhile waits for the tune to end.
+ * buzzer_click() is a few milliseconds and never waits: if a siren or tune is
+ * playing, the click is skipped.
  */
 
 void buzzer_init(void);
 
-// Incident opened: three short beeps (~0.7 s).
+// Incident opened: the siren, if the alarm sound setting is on.
 void buzzer_alarm(void);
 
-// The alarm pattern, played even when the alarm sound is switched off.
+// The siren, played even when the alarm sound is switched off.
 void buzzer_test(void);
 
-// Unacknowledged-incident reminder: one short beep.
+// Unacknowledged-incident reminder: the same siren, if the setting is on.
 void buzzer_remind(void);
+
+// Incident acknowledged or cleared: cut the siren short.
+void buzzer_stop(void);
 
 // Boot: the startup melody (MELODY_STARTUP), if the boot sound setting is on.
 void buzzer_boot(void);

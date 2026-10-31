@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 // Silence after every note but the last, so repeated pitches articulate.
-#define MELODY_GAP_MS   30
+#define MELODY_GAP_MS   50
 
 typedef struct {
     uint16_t hz;    // tone frequency, 0 for a rest
@@ -20,7 +20,7 @@ extern "C" {
 #endif
 
 // Boot sound: the opening of Grieg's "In the Hall of the Mountain King"
-// (1875, public domain), two octaves up, closing on the tonic. About 1.8 s.
+// (1875, public domain), two octaves up, closing on the tonic. About 3.6 s.
 extern const melody_note_t MELODY_STARTUP[];
 extern const size_t        MELODY_STARTUP_LEN;
 
