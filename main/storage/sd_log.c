@@ -107,7 +107,7 @@ typedef struct {
 
 static void on_attack(const attack_log_t *e)
 {
-    sdm_t m = { .kind = SDM_ATTACK, .ignored = ignore_match(e->src_ip, e->src_mac) };
+    sdm_t m = { .kind = SDM_ATTACK, .ignored = ignore_match(e->src_ip, e->src_mac, describe_code(e)) };
     m.e = *e;
     if (xQueueSend(s_q, &m, 0) != pdTRUE) s_status.dropped++;
 }

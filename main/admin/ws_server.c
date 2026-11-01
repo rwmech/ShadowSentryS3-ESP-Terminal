@@ -70,7 +70,7 @@ static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
         "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
         "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\"}",
         (unsigned long)e->timestamp, (unsigned long)e->src_ip, (int)e->type,
-        ignore_match(e->src_ip, e->src_mac) ? "true" : "false",
+        ignore_match(e->src_ip, e->src_mac, describe_code(e)) ? "true" : "false",
         user_j, pass_j, pay_j, mac_j, vendor,
         gi.cc, ctry_j, org_j, gi.asn, gi.tag, hl_j, describe_tier_key(describe_tier(e)));
 }

@@ -32,7 +32,13 @@ static const char *TAG = "BUZZER";
 #define BUZ_TASK_PRIO    3          // below the alarm task (4), above the UI (2)
 #define BUZ_QUEUE_DEPTH  8
 
-typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_CONFIRM } buz_cmd_t;
+typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_CONFIRM, CMD_YELLOW } buz_cmd_t;
+
+// YELLOW condition opened: one soft falling tone, about 300 ms, well off the
+// piezo's resonance and at a low duty, so it reads as a notice, not the siren.
+#define YELLOW_HI_HZ     1400
+#define YELLOW_LO_HZ     1050
+#define BUZ_DUTY_SOFT    64             // 6 % of 10-bit
 
 // Hold-to-confirm done: two short rising pips, about 110 ms.
 #define CONFIRM_LO_HZ    2700
@@ -153,6 +159,23 @@ static void buzzer_task(void *arg)
             }
             continue;
         }
+        if (c == CMD_YELLOW) {
+            // The alarm sound setting governs it; waits out a click, not the
+            // boot tune or a siren.
+            if (settings_get()->alarm_sound && xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, YELLOW_HI_HZ);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_SOFT);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+                vTaskDelay(pdMS_TO_TICKS(120));
+                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, YELLOW_LO_HZ);
+                vTaskDelay(pdMS_TO_TICKS(180));
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+                xSemaphoreGive(s_lock);
+            }
+            continue;
+        }
         // The alarm sound setting is read when the siren starts, not when queued.
         if (c == CMD_TEST || (c == CMD_SIREN && settings_get()->alarm_sound)) {
             siren_play();
@@ -187,6 +210,7 @@ void buzzer_alarm(void)  { request(CMD_SIREN); }
 void buzzer_remind(void) { request(CMD_SIREN); }
 void buzzer_test(void)   { request(CMD_TEST); }
 void buzzer_confirm(void){ if (s_cmds) request(CMD_CONFIRM); }   // no task: skip, never block the UI
+void buzzer_yellow(void) { if (s_cmds) request(CMD_YELLOW); }    // no task: skip, never block the alarm
 
 // To the front of the queue: stop_requested() only looks at the head, so a
 // CONFIRM (or anything else) queued behind the playing siren must not hide it.

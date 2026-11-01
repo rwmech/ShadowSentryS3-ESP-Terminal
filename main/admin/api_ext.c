@@ -989,7 +989,7 @@ static void post_ignore(int sock, const char *req, int req_len)
         if (!ip && !memcmp(mac, zero, 6)) err = "give an IP, a MAC or both";
         else if (strlen(note) >= IGNORE_NOTE_MAX) err = "note is too long (max 39)";
         else {
-            r = ignore_add(ip, memcmp(mac, zero, 6) ? mac : NULL, note);
+            r = ignore_add(ip, memcmp(mac, zero, 6) ? mac : NULL, "", note);
             if (r == ESP_ERR_NO_MEM) { st = "409 Conflict"; err = "the ignore list is full (32)"; }
             else if (r != ESP_OK)    { st = "500 Internal Server Error"; err = "could not save the ignore list"; }
         }

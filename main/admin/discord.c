@@ -799,7 +799,7 @@ static void handle_event(const attack_log_t *e, int64_t now)
 
     char sum[DC_SUMMARY_LEN];
     summarise(e, sum, sizeof(sum));
-    bool ign = ignore_match(e->src_ip, e->src_mac);      // as the SD line: at log time
+    bool ign = ignore_match(e->src_ip, e->src_mac, describe_code(e));    // as the SD line: at log time
     dc_key_t *free_k = NULL, *idle_k = NULL, *old_k = NULL;
     for (int i = 0; i < DC_KEYS; i++) {
         dc_key_t *k = &s_keys[i];
