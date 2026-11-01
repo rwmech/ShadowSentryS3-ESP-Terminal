@@ -941,12 +941,27 @@ function mk(tag,cls,text){const x=document.createElement(tag);if(cls)x.className
 // "NN-NN" from the event, the alarm or a log line; '' from older firmware,
 // which sends none (the type name stands in everywhere then).
 function codeOf(x){const c=x&&x.code;return typeof c==='string'&&/^[0-9A-Za-z]{1,4}-[0-9A-Za-z]{1,4}$/.test(c)?c:'';}
-const CODES={};            // code -> name, see the code table further down
+// code -> name and code -> tier, from GET /api/codes (describe.c's table),
+// loaded at start (loadCodes below). Empty with older firmware.
+const CODES={},CODE_TIER={};
 function codeName(c,type){return(c&&CODES[c])||TNAME[type]||'Event';}
 const TIERS={alert:'Alert',probe:'Probe',info:'Info'};
-// The event's tier ("alert", "probe" or "info", from describe.c); a guess by
-// type for firmware that sends none (HTTP is per event there: probe here).
-function tierOf(e){return TIERS[e&&e.tier]?e.tier:e&&e.type===13?'info':e&&(e.type===9||e.type===1)?'probe':'alert';}
+const tierKey=t=>TIERS[t]?t:t===1?'alert':t===2?'probe':t===3?'info':'';
+// The event's tier ("alert", "probe" or "info", from describe.c), else its
+// code's, else a guess by type (older firmware; HTTP is per event: probe here).
+function tierOf(e){
+  return(e&&tierKey(e.tier))||(e&&CODE_TIER[codeOf(e)])||(e&&e.type===13?'info':e&&(e.type===9||e.type===1)?'probe':'alert');
+}
+// "Code NN-NN" as a chip, then the headline. Headlines from firmware with
+// codes already start "Code NN-NN <name> | ...": that prefix becomes the chip.
+function codeLead(x,c,hl){
+  if(c){
+    x.append(mk('span','code-chip','Code '+c));
+    if(hl.startsWith('Code '+c+' '))hl=hl.slice(c.length+6);
+  }
+  x.append(document.createTextNode(hl));
+  return x;
+}
 // The trap port the event hit. Taken from the event when it carries one ("port",
 // or the port in its payload's fixed prefix or suffix), else the type's port.
 const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
@@ -1142,9 +1157,7 @@ function updateTable(entries){
 // Null when the event has neither, so the caller falls back to the payload.
 function hlCell(cls,e,tag){
   const c=codeOf(e);if(!c&&!e.headline)return null;
-  const x=mk(tag||'div',cls);
-  if(c)x.append(mk('span','code-chip','Code '+c));
-  x.append(document.createTextNode(e.headline||codeName(c,e.type)));
+  const x=codeLead(mk(tag||'div',cls),c,String(e.headline||codeName(c,e.type)));
   if(tag==='td')x.append(mk('div','td-raw',e.payload||''));
   return x;
 }
@@ -1231,14 +1244,13 @@ function renderAlarm(a){
   a=a||{};_alarm=a;
   const b=document.getElementById('cond'),c=condOf(a),g=id=>document.getElementById(id);
   b.className='cond cond-'+c;b.hidden=false;
-  g('cond-title').textContent=COND_TITLE[c];
+  g('cond-title').textContent=COND_TITLE[c]+(c==='green'&&a.id&&a.resolved_by?' · incident #'+a.id+' resolved from the '+String(a.resolved_by):'');
   const open=c!=='green',code=codeOf(a);
   g('cond-hl').hidden=g('cond-meta').hidden=!open;
   if(open){
     const hl=g('cond-hl');hl.replaceChildren();
-    if(code)hl.append(mk('span','code-chip','Code '+code));
     const src=alarmSource(a);
-    hl.append(document.createTextNode(a.headline?String(a.headline):(TNAME[a.type]||'Incident')+' from '+(src.ip||'an unknown source')));
+    codeLead(hl,code,a.headline?String(a.headline):(TNAME[a.type]||'Incident')+' from '+(src.ip||'an unknown source'));
     const n=+a.count||0,meta=[];
     if(a.id)meta.push('Incident #'+a.id);
     meta.push('Source '+src.text,n+' event'+(n===1?'':'s'),'first '+whenOf(a.first),'last '+whenOf(a.last));
@@ -1258,7 +1270,15 @@ async function alarmPost(path,old,body){
   const opt=body?{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)}:POSTH;
   let r=await fetch(path,opt);
   if(r.status===404&&old)r=await fetch(old,POSTH);
-  if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(String(d.error||('HTTP '+r.status)));}
+  return alarmReply(r);
+}
+// 200 {"alarm":{...}}: the state after the alarm task applied it, shown at
+// once; 204 (older firmware): the status poll shows it. 409: nothing to act on.
+async function alarmReply(r){
+  let d={};try{d=await r.json();}catch{}
+  if(d&&d.alarm&&typeof d.alarm==='object')renderAlarm(d.alarm);
+  if(r.status===409)throw new Error('nothing to act on'+(d.error?' ('+String(d.error)+')':''));
+  if(!r.ok)throw new Error(String(d.error||('HTTP '+r.status)));
 }
 async function alarmAction(what,fn){
   condBusy(true);condErr('');
@@ -1283,7 +1303,7 @@ function ignoreAlarm(scope){
         body:JSON.stringify({action:'add',ip:src.ip,mac:src.mac,note:'banner, incident #'+(a.id||'?')})});
       if(!r2.ok)throw new Error('HTTP '+r2.status);return;
     }
-    if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(String(d.error||('HTTP '+r.status)));}
+    await alarmReply(r);
   });
 }
 load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
@@ -1357,7 +1377,7 @@ async function loadDevices(){
   if(!devs.length){emptyRow(tb,6,'No devices yet');return;}
   tb.replaceChildren(...devs.flatMap(x=>{
     const tr=el('tr','dv-row'),lab=td(x.label||'unknown');
-    if(x.headline||codeOf(x)){const h=el('div','dev-sub');if(codeOf(x))h.append(el('span','code-chip','Code '+codeOf(x)));h.append(document.createTextNode(S(x.headline)||codeName(codeOf(x),13)));lab.append(h);}
+    if(x.headline||codeOf(x))lab.append(codeLead(el('div','dev-sub'),codeOf(x),S(x.headline)||codeName(codeOf(x),13)));
     if(x.label_src)lab.append(el('div','dev-sub','from '+x.label_src));
     if(x.host&&x.host!==x.label)lab.append(el('div','dev-sub','host '+x.host));
     const mac=td(x.mac&&x.mac!=='unknown'?x.mac:'','td-mac');
@@ -1697,10 +1717,9 @@ function devCell(vendor,mac){
 function logRow(v){
   const tr=el('tr'),tc=td(fmt(v.t0),'td-ts nw'),dc=td('','td-payload td-det');
   if(v.n>1){const a=fmt(v.t0),b=fmt(v.t1);tc.append(el('div','tsub','to '+(a.slice(0,10)===b.slice(0,10)?b.slice(11):b)));dc.append(el('span','rep','x'+v.n));}
-  // A headline (newer firmware) leads; the raw details stay underneath.
-  if(v.code)dc.append(el('span','code-chip','Code '+v.code));
-  if(v.hl){dc.append(document.createTextNode(v.hl));dc.append(el('div','td-raw',v.det));}
-  else dc.append(document.createTextNode(v.det));
+  // The code and headline (newer firmware) lead; the raw details stay underneath.
+  codeLead(dc,v.code,v.hl||v.det);
+  if(v.hl)dc.append(el('div','td-raw',v.det));
   dc.title=v.det;
   const cc=td(v.code,'nw mono');if(v.code)cc.title=codeName(v.code,-1);
   tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),cc,td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
@@ -1917,6 +1936,16 @@ async function rebootDev(){
   setTimeout(poll,8000);
 }
 
+// ── Code table (GET /api/codes) ──
+async function loadCodes(){
+  try{
+    const r=await fetch('/api/codes');if(!r.ok)return;
+    const d=await r.json(),rows=Array.isArray(d)?d:(d&&d.codes)||[];
+    rows.forEach(x=>{const c=codeOf(x);if(!c)return;CODES[c]=S(x.name);const t=tierKey(x.tier);if(t)CODE_TIER[c]=t;});
+    fillIgnCodes();if(_loaded)fillCodeFilter();
+  }catch{}
+}
+loadCodes();
 showPage(location.hash.slice(1)||'dash');
 </script>
 </body>
