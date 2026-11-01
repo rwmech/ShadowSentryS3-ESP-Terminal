@@ -215,6 +215,7 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | Method | Path | |
 |---|---|---|
 | `GET` | `/api/status` | upstream's uptime, heap and RSSI, plus `reset_reason` (e.g. "software restart (OTA update)"), `internal_free`, `internal_min` and `internal_after_boot` (internal heap once every task is up), and `alarm`: `state` (0 idle, 1 active, 2 acked), `cond` (`green`, `yellow`, `red`), `code`, `headline`, `id`, `ip` (u32), `mac`, `vendor`, `type`, `count`, `first`, `last`, `acked_by` and `resolved_by` (`""`, `panel`, `dashboard`). The WebSocket pushes the same object as `{"alarm":{...}}` on every change |
+| `GET` | `/api/tasks` | per-task CPU share over one second (`cpu_pct`, of both cores together) and since boot, priority, core and stack high-water; holds the admin task about 1 s |
 | `GET` | `/api/codes` | the alert code table: `{"codes":[{"code","name","tier"}]}` |
 | `GET` | `/api/settings` | settings; secrets only as `*_set` flags; also `alert_mask` (bit per type), `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow` (array) and `client_ip` |
 | `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone (`"discord_webhook_clear":true` clears the webhook, `"whatsapp_apikey_clear":true` the WhatsApp apikey); `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |

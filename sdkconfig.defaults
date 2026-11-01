@@ -89,3 +89,6 @@ CONFIG_MEGA_CCM_SUPPORT=n
 # Frames DMA straight into the PSRAM frame buffer, so the driver keeps no 16 KB
 # bounce buffer in internal RAM (only its DMA descriptors, about 1 KB).
 CONFIG_CAMERA_PSRAM_DMA=y
+# GET /api/tasks: per-task CPU share and stack high-water (no serial console on the board)
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

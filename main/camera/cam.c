@@ -385,6 +385,10 @@ static void cam_task(void *arg)
 
 void cam_snap_init(void)
 {
+    if (!CAM_ENABLE) {
+        ESP_LOGW(TAG, "camera off (CAM_ENABLE 0), snapshots disabled");
+        return;
+    }
     s_lock = xSemaphoreCreateMutex();
     s_q    = xQueueCreate(CAM_QUEUE_DEPTH, sizeof(cam_req_t));
     if (!s_lock || !s_q ||
