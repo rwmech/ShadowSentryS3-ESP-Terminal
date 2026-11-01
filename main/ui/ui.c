@@ -461,11 +461,10 @@ static void runlight_set(lv_color_t c)
 // ── Alert emblem ──────────────────────────────────────────────────────────────
 //
 // After the Starfleet alert graphic, drawn natively: a rounded chevron above
-// and one below a central band, stacked stripes inside each, long bars out to
-// the left and right edges at the band's height, and in the band "ALERT" over
-// "CONDITION: <name>". Flat fills on black: two lv_lines (rounded caps and
-// joins), rounded rectangles and labels. For height h (cx 240, cy h / 2):
-//   side bars   x 4..240-gap-1 and 240+gap..475, bar_h tall, centred on cy
+// and one below a central band, stacked stripes inside each, and in the band
+// "ALERT" over "CONDITION: <name>". No side bars (Rob, 2026-11-01). Flat fills
+// on black: two lv_lines (rounded caps and joins), rounded rectangles and
+// labels. For height h (cx 240, cy h / 2):
 //   chevrons    feet at (240 -/+ foot, cy - bar_h / 2 - lw / 2), shoulders at
 //               (240 -/+ top, lw / 2 + 2), line width lw; mirrored below
 //   stripes     in an area from 5 px under the shoulder line, n slots of
@@ -484,7 +483,7 @@ static void runlight_set(lv_color_t c)
 // nothing else.
 
 typedef struct {
-    lv_coord_t h, gap, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes;
+    lv_coord_t h, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes;
     lv_coord_t title_dy, cond_dy, title_ls;
     const lv_font_t *f_title, *f_cond;
     const char *cond;
@@ -492,14 +491,14 @@ typedef struct {
 } emblem_spec_t;
 
 static const emblem_spec_t EMB_RED = {
-    .h = RED_EMB_H, .gap = 116, .bar_h = 16, .foot = 150, .top = 70, .lw = 8,
+    .h = RED_EMB_H, .bar_h = 16, .foot = 150, .top = 70, .lw = 8,
     .stripe_h = 4, .stripe_gap = 4, .stripes = 4,
     .title_dy = -12, .cond_dy = 24, .title_ls = 4,
     .f_title = &lv_font_montserrat_48, .f_cond = &lv_font_montserrat_20,
     .cond = "CONDITION: RED", .col_hex = 0xe00000, .roll_ms = EMB_ROLL_RED_MS,
 };
 static const emblem_spec_t EMB_YELLOW = {
-    .h = YEL_EMB_H, .gap = 92, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
+    .h = YEL_EMB_H, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
     .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
     .title_dy = -8, .cond_dy = 14, .title_ls = 2,
     .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
@@ -604,13 +603,6 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
             e->st[k][i] = emb_pill(a, 0, 0, 8, s->stripe_h, col);
     }
     emb_roll(e, 0);
-
-    for (int i = 0; i < 2; i++) {           // side bars
-        lv_obj_t *bar = box(e->root, col);
-        lv_obj_set_pos(bar, i ? 240 + s->gap : 4, cy - s->bar_h / 2);
-        lv_obj_set_size(bar, 236 - s->gap, s->bar_h);
-        lv_obj_set_style_radius(bar, 3, 0);
-    }
 
     for (int i = 0; i < 2; i++) {
         lv_obj_t *t = label(e->root, s->f_title, col);
