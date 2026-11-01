@@ -1,4 +1,5 @@
 #include "sd_log.h"
+#include "json_esc.h"
 #include "board.h"
 #include "config.h"
 #include "log_store.h"
@@ -198,18 +199,11 @@ void sd_log_status(sd_status_t *out)
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
+// json_esc() (fork): also turns bytes that are not UTF-8 into U+FFFD, so
+// every line on the card is valid JSON.
 static void jesc(const char *in, char *out, size_t outlen)
 {
-    size_t o = 0;
-    for (; in && *in && o + 7 < outlen; in++) {
-        unsigned char c = (unsigned char)*in;
-        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
-        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
-        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
-        else if (c < 0x20)  { o += snprintf(out + o, outlen - o, "\\u%04x", c); }
-        else out[o++] = (char)c;
-    }
-    out[o] = '\0';
+    json_esc(in, (size_t)-1, out, outlen);
 }
 
 static void fmt_ip(uint32_t ip_net, char *buf, size_t len)

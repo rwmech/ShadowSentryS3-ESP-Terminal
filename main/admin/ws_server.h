@@ -41,5 +41,5 @@ void ws_server_start(void);
 // buf should hold WS_ALARM_JSON_MAX bytes.
 #include <stddef.h>
 #include "alarm.h"
-#define WS_ALARM_JSON_MAX  640
+#define WS_ALARM_JSON_MAX  768     // worst case about 660: headline 191, vendor 127 escaped
 void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len);

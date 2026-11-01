@@ -28,6 +28,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "json_esc.c"
         "wifi_manager.c"
         "arp_monitor.c"
         "geoip.c"

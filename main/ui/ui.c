@@ -62,6 +62,7 @@ typedef struct {
 } umsg_t;
 
 static QueueHandle_t s_q;
+static volatile bool s_debug_paused;   // POST /api/debug/panel: skip lv_timer_handler()
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
@@ -1544,12 +1545,23 @@ static void ui_task(void *arg)
         uint32_t ms = (uint32_t)((esp_timer_get_time() - last_us) / 1000);
         lv_tick_inc(ms);
         last_us += (int64_t)ms * 1000;      // carry the sub-ms remainder
+        // Debug pause (POST /api/debug/panel): no LVGL timers, so no refresh,
+        // no sweeps and no SPI display traffic, to split network latency.
+        if (s_debug_paused) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
         int64_t t = esp_timer_get_time();
         lv_timer_handler();
         loop_measure((uint32_t)(esp_timer_get_time() - t));
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+
+void ui_debug_pause(bool paused)
+{
+    s_debug_paused = paused;
+    ESP_LOGW(TAG, "Panel %s (debug)", paused ? "paused" : "running");
+}
+
+bool ui_debug_paused(void) { return s_debug_paused; }
 
 void ui_start(void)
 {

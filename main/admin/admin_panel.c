@@ -1,4 +1,5 @@
 #include "admin_panel.h"
+#include "json_esc.h"
 #include "alarm.h"
 #include "settings.h"
 #include "api_ext.h"
@@ -41,32 +42,12 @@ extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 
 // ── JSON helper ───────────────────────────────────────────────────────────────
 
-// Escape a string for use as a JSON string value (between the double-quotes).
-// Handles: " \ \n \r \t and ASCII control chars < 0x20.
+// Escape a string for use as a JSON string value (between the double-quotes):
+// json_esc() (fork), which also turns bytes that are not UTF-8 into U+FFFD.
 // Returns number of bytes written (excluding null terminator).
 static int json_escape_str(const char *src, char *dst, size_t dstlen)
 {
-    size_t pos = 0;
-    for (; *src && pos < dstlen - 2; src++) {
-        unsigned char c = (unsigned char)*src;
-        switch (c) {
-            case '"':  dst[pos++] = '\\'; dst[pos++] = '"';  break;
-            case '\\': dst[pos++] = '\\'; dst[pos++] = '\\'; break;
-            case '\n': dst[pos++] = '\\'; dst[pos++] = 'n';  break;
-            case '\r': dst[pos++] = '\\'; dst[pos++] = 'r';  break;
-            case '\t': dst[pos++] = '\\'; dst[pos++] = 't';  break;
-            default:
-                if (c < 0x20) {
-                    if (pos + 6 >= dstlen) goto done;
-                    pos += snprintf(dst + pos, dstlen - pos, "\\u%04x", c);
-                } else {
-                    dst[pos++] = (char)c;
-                }
-        }
-    }
-done:
-    dst[pos] = '\0';
-    return (int)pos;
+    return (int)json_esc(src, (size_t)-1, dst, dstlen);
 }
 
 // ── Authentication ────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 #include "ws_server.h"
+#include "json_esc.h"
 #include "alarm.h"
 #include "log_store.h"
 #include "geoip.h"
@@ -23,19 +24,11 @@ static int s_clients[ADMIN_WS_MAX_CLIENTS];
 
 // ── JSON helpers ────────────────────────────────────────────────────────────────
 
-// Minimal JSON string escaper for embedding attacker-supplied text.
+// JSON string escaper for attacker-supplied text: json_esc() (fork), which
+// also turns bytes that are not UTF-8 into U+FFFD.
 static void jesc(const char *in, char *out, size_t outlen)
 {
-    size_t o = 0;
-    for (; in && *in && o + 7 < outlen; in++) {
-        unsigned char c = (unsigned char)*in;
-        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
-        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
-        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
-        else if (c < 0x20)  { o += snprintf(out + o, outlen - o, "\\u%04x", c); }
-        else out[o++] = (char)c;
-    }
-    out[o] = '\0';
+    json_esc(in, (size_t)-1, out, outlen);
 }
 
 // Serialize one attack into the same per-entry JSON shape as the REST API, so
@@ -127,10 +120,11 @@ static void on_attack(const attack_log_t *e)
 
 void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
 {
-    char mac[WIFI_MAC_STR_LEN], code_j[2 * DESCRIBE_CODE_LEN], hl_j[2 * DESCRIBE_MAX];
+    char mac[WIFI_MAC_STR_LEN], code_j[2 * DESCRIBE_CODE_LEN], hl_j[2 * DESCRIBE_MAX], vend_j[128];
     wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
     jesc(a->code, code_j, sizeof(code_j));
     jesc(a->headline, hl_j, sizeof(hl_j));
+    jesc(wifi_manager_mac_vendor(a->src_mac), vend_j, sizeof(vend_j));   // the OUI database's text
     snprintf(buf, len,
         "{\"state\":%d,\"cond\":\"%s\",\"code\":\"%s\",\"headline\":\"%s\","
         "\"id\":%lu,\"ip\":%lu,\"type\":%u,\"count\":%lu,"
@@ -140,7 +134,7 @@ void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
         (unsigned long)a->id, (unsigned long)a->src_ip,
         (unsigned)a->type, (unsigned long)a->count,
         (unsigned long)a->first_ts, (unsigned long)a->last_ts,
-        mac, wifi_manager_mac_vendor(a->src_mac),
+        mac, vend_j,
         alarm_by_key(a->acked_by), alarm_by_key(a->resolved_by));
 }
 

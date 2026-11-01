@@ -1,6 +1,7 @@
 // Per-device log route on the admin port. See api_devlog.h.
 
 #include "api_devlog.h"
+#include "json_esc.h"
 #include "sd_log.h"
 #include "lwip/sockets.h"
 #include "esp_heap_caps.h"
@@ -235,6 +236,7 @@ static void take_line(scan_t *s, const char *p, size_t n)
     if (!n || !line_matches(s, p, n)) return;
     if (s->arena_used + n + 1 > s->arena_cap) { s->full = true; return; }
     memcpy(s->arena + s->arena_used, p, n);
+    utf8_sanitize(s->arena + s->arena_used, n);     // lines written before json_esc() may hold raw bytes
     s->arena[s->arena_used + n] = '\n';
     s->arena_used += n + 1;
     if (++s->matched >= s->limit) s->full = true;     // stop here: older lines may match too

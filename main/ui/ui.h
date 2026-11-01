@@ -14,5 +14,11 @@
 
 void ui_start(void);
 
+// Debug (POST /api/debug/panel, not in the dashboard): true stops the UI task
+// running LVGL (no refresh, no sweeps, no SPI display traffic) until false.
+#include <stdbool.h>
+void ui_debug_pause(bool paused);
+bool ui_debug_paused(void);
+
 // Network line in the status bar ("Connecting to X…", "192.168.1.20"). Any task.
 void ui_set_net(const char *text);
