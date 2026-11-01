@@ -31,6 +31,11 @@ extern "C" {
 #define CAM_FLASH_SETTLE_MS   500
 #endif
 
+// 0: the camera is never started (no XCLK, no DMA); cam_snap() is a no-op.
+#ifndef CAM_ENABLE
+#define CAM_ENABLE            1
+#endif
+
 #define CAM_ACTION_MAX  12      // incl. NUL; [a-z0-9_-] only, else "press"
 #define CAM_FILE_MAX    64
 

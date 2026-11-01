@@ -66,6 +66,8 @@ idf_component_register(
         "detect/discovery.c"
         "admin/api_devices.c"
         "admin/api_oui.c"
+        "admin/api_devlog.c"
+        "admin/api_tasks.c"
         "storage/oui.c"
 
     INCLUDE_DIRS
