@@ -105,7 +105,9 @@ void alarm_clear(void);
 // Ignore and close. alarm_ignore_error() adds the incident's source (IP and
 // MAC) with the incident's code to the ignore list; alarm_ignore_device()
 // adds the source with an empty code (every code). Either then resolves the
-// incident if every code it has seen is now ignored for that source.
+// incident (resolved_by = by), whatever other codes it saw: the events stay
+// in the logs, and a later event whose code is not ignored opens a new
+// incident.
 // ESP_ERR_INVALID_STATE when there is no open incident, else ignore_add()'s
 // result. Writes NVS: call from a task with a few KB of stack (UI, admin).
 esp_err_t alarm_ignore_error(alarm_by_t by);

@@ -6,6 +6,7 @@
 #include "telegram.h"
 #include "wifi_manager.h"
 #include "config.h"
+#include "detect.h"             // detect_note_logged(): no probe event besides ours
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -241,7 +242,10 @@ void tripwire_task(void *arg)
         if (csock < 0) continue;
         int idx = -1;
         for (int i = 0; i < SVC_N; i++) if (srv[i] >= 0 && ports[i] == port) { idx = i; break; }
-        if (idx >= 0) handle_client(csock, idx, &client);
+        if (idx >= 0) {
+            detect_note_logged(client.sin_addr.s_addr, port);    // logged or counted below, always
+            handle_client(csock, idx, &client);
+        }
         close(csock);
     }
 }
