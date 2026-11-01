@@ -103,6 +103,13 @@ typedef struct {
     bool     dirty, fresh;
     uint8_t  act_n, act_more;
     char     act[DISCOVERY_ACT_KEEP][DISCOVERY_ACT_LEN];
+    // Every distinct query string seen from this device, as FNV-1a hashes
+    // with an LRU stamp, so a query is "new" only the first time (bounded).
+    uint32_t qh[DISCOVERY_QHASH_N], qh_used[DISCOVERY_QHASH_N];
+    uint8_t  qh_n;
+    // This hour, for the discovery_summary line.
+    uint32_t hour_pkts[DP_COUNT];
+    uint16_t hour_newq;
 } disc_dev_t;
 
 typedef struct { uint32_t ip; uint8_t mac[6]; uint8_t _pad[2]; } mac_msg_t;
@@ -564,7 +571,7 @@ static bool parse_kasa(const uint8_t *b, size_t n, uint16_t port, obs_t *o)
             return true;
         }
     }
-    q_set(o, "%u: %u B %s", (unsigned)port, (unsigned)n, o->v[1]);
+    q_set(o, "%u: %u B", (unsigned)port, (unsigned)n);  // stable per prober; the hex is in the kv
     return true;
 }
 
@@ -877,6 +884,30 @@ static void event(const disc_dev_t *d, const obs_t *o, int what, const char *old
     }
 }
 
+static uint32_t fnv1a(const char *s)
+{
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h ? h : 1;
+}
+
+// True the first time this device sends this query string; remembered in an
+// LRU set of DISCOVERY_QHASH_N hashes (the stalest is forgotten when full).
+static bool query_is_new(disc_dev_t *d, const char *q)
+{
+    static uint32_t tick;
+    uint32_t h = fnv1a(q);
+    int lru = 0;
+    for (int i = 0; i < d->qh_n; i++) {
+        if (d->qh[i] == h) { d->qh_used[i] = ++tick; return false; }
+        if (d->qh_used[i] < d->qh_used[lru]) lru = i;
+    }
+    int slot = d->qh_n < DISCOVERY_QHASH_N ? d->qh_n++ : lru;
+    d->qh[slot] = h;
+    d->qh_used[slot] = ++tick;
+    return true;
+}
+
 static void observe(obs_t *o)
 {
     xSemaphoreTake(s_mux, portMAX_DELAY);
@@ -888,6 +919,7 @@ static void observe(obs_t *o)
     d->last_ts = t >= CLOCK_VALID ? t : 0;
     if (o->ip) d->ip = o->ip;
     d->count[o->proto]++;
+    d->hour_pkts[o->proto]++;
     d->total++;
     bool new_proto = !is_new && !(d->protos & (1u << o->proto));
     d->protos |= (uint16_t)(1u << o->proto);
@@ -903,20 +935,22 @@ static void observe(obs_t *o)
         strlcpy(d->label_src, src, sizeof(d->label_src));
         d->label_score = sc;
     }
-    if (o->host[0]) strlcpy(d->host, o->host, sizeof(d->host));
+    bool new_host = o->host[0] && strcmp(o->host, d->host);
+    if (new_host) strlcpy(d->host, o->host, sizeof(d->host));
+    if (is_new) new_host = false;
     if (!is_new) vendor_label(d, o->vendor);
 
     bool new_query = false;
     if (o->query[0]) {
-        new_query = true;
-        for (int i = 0; i < d->q_n; i++) if (!strcmp(d->q[i], o->query)) { new_query = false; break; }
+        new_query = query_is_new(d, o->query);
+        if (new_query && d->hour_newq < 65535) d->hour_newq++;
         if (new_query) {
             strlcpy(d->q[d->q_head], o->query, DISCOVERY_QUERY_LEN);
             d->q_head = (uint8_t)((d->q_head + 1) % DISCOVERY_QUERY_KEEP);
             if (d->q_n < DISCOVERY_QUERY_KEEP) d->q_n++;
         }
     }
-    if (is_new || new_proto || new_label || new_query) {
+    if (is_new || new_proto || new_label || new_host || new_query) {
         d->dirty = true;
         if (is_new) d->fresh = true;
         if (o->phrase[0]) {
@@ -929,8 +963,9 @@ static void observe(obs_t *o)
     S->snap = *d;                               // logged outside the lock
     xSemaphoreGive(s_mux);
 
-    if (!(is_new || new_proto || new_label || new_query)) return;
-    const char *what = is_new ? "device" : new_proto ? "protocol" : new_label ? "label" : "query";
+    if (!(is_new || new_proto || new_label || new_host || new_query)) return;
+    const char *what = is_new ? "device" : new_proto ? "protocol" : new_label ? "label" :
+                       new_host ? "hostname" : "query";
     sd_line(&S->snap, o, what);
     if (is_new || new_proto || new_label) event(&S->snap, o, is_new ? 0 : new_proto ? 1 : 2, old);
 }
@@ -1154,6 +1189,58 @@ static void plain(const obs_t *o, char *out, size_t cap)
     shorten(out, cap - 1);
 }
 
+// ── Hourly summary (SD) ───────────────────────────────────────────────────────
+
+// One {"kind":"discovery_summary"} line per device that sent anything this
+// hour: packets per protocol, total, new queries. Not rate-limited (at most
+// DISCOVERY_DEV_MAX lines an hour); the hour's counts start over.
+static void hour_summary(uint32_t period_s)
+{
+    int lines = 0;
+    for (int i = 0; i < DISCOVERY_DEV_MAX; i++) {
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        disc_dev_t *d = &S->dev[i];
+        uint32_t tot = 0;
+        for (int p = 0; p < DP_COUNT; p++) tot += d->hour_pkts[p];
+        bool any = d->used && tot;
+        if (any) S->snap = *d;
+        if (d->used) { memset(d->hour_pkts, 0, sizeof(d->hour_pkts)); d->hour_newq = 0; }
+        xSemaphoreGive(s_mux);
+        if (!any) continue;
+        const disc_dev_t *s = &S->snap;
+        char *line = heap_caps_malloc(SD_LINE_MAX, MALLOC_CAP_SPIRAM);
+        if (!line) { s_sd_drop++; continue; }
+        char ip[16], mac[WIFI_MAC_STR_LEN];
+        fmt_ip(s->ip, ip, sizeof(ip));
+        wifi_manager_format_mac(s->mac_known ? s->mac : (const uint8_t[6]){ 0 }, mac, sizeof(mac));
+        size_t n = 0, cap = SD_LINE_MAX - 2;
+        jraw(line, cap, &n, "{\"kind\":\"discovery_summary\",\"ts\":%lu,\"period_s\":%lu,",
+             (unsigned long)time(NULL), (unsigned long)period_s);
+        jstr(line, cap, &n, "ip", s->ip ? ip : "");
+        jraw(line, cap, &n, ",");
+        jstr(line, cap, &n, "mac", mac);
+        jraw(line, cap, &n, ",");
+        jstr(line, cap, &n, "vendor", s->vendor);
+        jraw(line, cap, &n, ",");
+        jstr(line, cap, &n, "label", s->label);
+        jraw(line, cap, &n, ",\"packets\":{");
+        bool first = true;
+        for (int p = 0; p < DP_COUNT; p++) {
+            if (!s->hour_pkts[p]) continue;
+            jraw(line, cap, &n, "%s\"%s\":%lu", first ? "" : ",", DP_KEY[p], (unsigned long)s->hour_pkts[p]);
+            first = false;
+        }
+        jraw(line, cap, &n, "},\"total\":%lu,\"new_queries\":%u", (unsigned long)tot, (unsigned)s->hour_newq);
+        if (n >= cap) { free(line); s_sd_drop++; continue; }   // cannot happen: fixed fields, bounded strings
+        line[n++] = '}';
+        line[n++] = '\n';
+        if (!sd_log_line(line, n)) s_sd_drop++;
+        lines++;
+        vTaskDelay(pdMS_TO_TICKS(10));      // paced: the writer's queue is 32 deep and attacks share it
+    }
+    if (lines) ESP_LOGI(TAG, "Hourly summary: %d devices", lines);
+}
+
 // ── Digest (Discord, every DISCOVERY_DIGEST_S) ────────────────────────────────
 
 // One message, only when something was new: a line per device with news,
@@ -1343,7 +1430,7 @@ void discovery_task(void *arg)
              "copied from the Wi-Fi input (no socket)", n_open, L_N - (DISCOVERY_DHCP ? 0 : 1),
              DISCOVERY_DHCP ? ", DHCP 67" : "");
 
-    uint32_t last_retry = up_s(), me = my_ip(), last_me = up_s(), last_digest = up_s();
+    uint32_t last_retry = up_s(), me = my_ip(), last_me = up_s(), last_digest = up_s(), last_summary = up_s();
     for (;;) {
         fd_set rd;
         FD_ZERO(&rd);
@@ -1360,6 +1447,7 @@ void discovery_task(void *arg)
         mdns_drain(me);
         oui_service(4);                         // vendor misses from other tasks
         if (now - last_digest >= DISCOVERY_DIGEST_S) { last_digest = now; digest(); }
+        if (now - last_summary >= DISCOVERY_SUMMARY_S) { hour_summary(now - last_summary); last_summary = now; }
         if (now - last_retry >= RETRY_S) {
             last_retry = now;
             for (int i = 0; i < L_N; i++)

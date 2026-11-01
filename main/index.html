@@ -770,7 +770,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <select id="lg-code" onchange="renderDay()" title="Filter by error code"><option value="">All codes</option></select>
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
@@ -1787,13 +1787,13 @@ async function loadDay(){
 // or the kind or type filter asks for it. Discovery lines are the kind
 // "discovery" and the Discovery attack type.
 const MAXROWS=1000,DISCO_T=TNAME.indexOf('Discovery'),LS_DISCO='ss_logs_show_discovery';
-const isDisco=o=>o.kind==='discovery'||(o.kind==='attack'&&o.type===DISCO_T);
+const isDisco=o=>o.kind==='discovery'||o.kind==='discovery_summary'||(o.kind==='attack'&&o.type===DISCO_T);
 try{$('lg-disco').checked=localStorage.getItem(LS_DISCO)==='1';}catch{}
 function setShowDisco(on){try{localStorage.setItem(LS_DISCO,on?'1':'0');}catch{}renderDay();}
 function renderDay(){
   if(!_loaded)return;
   const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value,cf=$('lg-code').value;
-  const disco=$('lg-disco').checked||k==='discovery'||(t!==''&&+t===DISCO_T)||!!cf;
+  const disco=$('lg-disco').checked||k==='discovery'||k==='discovery_summary'||(t!==''&&+t===DISCO_T)||!!cf;
   let hid=0;
   const rows=_lines.filter(o=>{
     if((k&&o.kind!==k)||(t!==''&&o.type!==+t)||(cf&&codeOf(o)!==cf)||(q&&!o._raw.includes(q)))return false;
@@ -1819,6 +1819,9 @@ function logView(o){
   else if(kind==='boot'){v.det='firmware '+S(o.fw)+', reset: '+(o.reason?S(o.reason):(RESET[o.reset]||S(o.reset)));}
   else if(kind==='discovery'){v.type=S(o.proto);v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
     v.det=S(o.what)+': '+[S(o.label),o.host&&o.host!==o.label?'host '+S(o.host):'',S(o.query)].filter(Boolean).join(', ');}
+  else if(kind==='discovery_summary'){v.type='hourly';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
+    v.det=(o.label?S(o.label)+': ':'')+S(o.total)+' packets in '+Math.round((+o.period_s||0)/60)+' min ('+
+      Object.entries(o.packets||{}).map(([a,b])=>S(a)+' '+S(b)).join(', ')+'), '+S(o.new_queries)+' new queries';}
   else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
   v.key=isDisco(o)?[kind,v.code,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
   v.n=1;v.t0=v.t1=v.ts;

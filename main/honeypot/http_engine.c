@@ -324,7 +324,18 @@ static void log_detail(const conn_t *c, cat_t cat, size_t body_len)
     snprintf(num, sizeof(num), "\",\"body_len\":%u,\"head_len\":%u}\n",
              (unsigned)body_len, (unsigned)(c->head_len ? c->head_len : c->len));
     jraw(r->dline, &o, DLINE_MAX, num);
-    if (o + 1 >= DLINE_MAX) { o = DLINE_MAX - 2; r->dline[o++] = '\n'; r->dline[o] = '\0'; }
+    if (o + 1 >= DLINE_MAX) {           // did not fit (escaped UA or body): a valid line without them
+        o = 0;
+        jraw(r->dline, &o, DLINE_MAX, "{\"kind\":\"http\",\"cut\":true,\"ip\":\"");
+        jraw(r->dline, &o, DLINE_MAX, ip);
+        jraw(r->dline, &o, DLINE_MAX, "\",\"category\":\"");
+        jraw(r->dline, &o, DLINE_MAX, CAT[cat].key);
+        jraw(r->dline, &o, DLINE_MAX, "\",\"request\":\"");
+        jput(r->dline, &o, DLINE_MAX / 2, r->rline);
+        snprintf(num, sizeof(num), "\",\"ts\":%lu,\"port\":%u,\"body_len\":%u}\n",
+                 (unsigned long)time(NULL), (unsigned)c->port, (unsigned)body_len);
+        jraw(r->dline, &o, DLINE_MAX, num);
+    }
 
     char *line = heap_caps_malloc(o + 1, MALLOC_CAP_SPIRAM);
     if (!line) return;
