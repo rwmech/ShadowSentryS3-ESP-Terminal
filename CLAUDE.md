@@ -130,6 +130,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
   - `ROUTER_ADMIN_IPS` in `main\config.h`: the addresses whose router logins are expected (router tripwires).
 - Open, not approved: Wi-Fi power save off (`esp_wifi_set_ps(WIFI_PS_NONE)`), proposed for the ping and throughput figures (batch 2: ping avg 52 to 62 ms at -50 dBm, against 16 to 17 ms on 43ce276).
 - Open: the first Wi-Fi join after a boot can land on a weak AP (-80 dBm on fc78037) until the RSSI re-roam moves it (`roams` 1, to b0:a7:b9:40:ac:a2 at -50 dBm).
+- Open, first for the next session: the system event task (`sys_evt`) had 416 B of stack free on ecb9fe3. Wi-Fi and IP event handlers run on it (wifi_manager, wifi_roam, crash's and the fork's handlers), and the default `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE` is 2304. Raise it (3584 or 4096) or slim the handlers, and measure internal heap after.
 - `main` is not pushed: `origin/main` is still ce0399f, 37 commits behind. Pushing is Rob's call.
 
 ## Current state (2026-10-31)
