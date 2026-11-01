@@ -43,6 +43,9 @@ window.ssAnalysis=(function(){
     [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
   const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
     dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname',pihole:'Pi-hole\'s name for it'};
+  // Smart-home hub makers (Rob, 2026-11-01): a hub that probes other makers'
+  // IoT gear is doing its job (Google includes Nest), so Watch, not Isolate.
+  const DV_HUB=new Set(['Google','Amazon','Apple']);
   const DV_CHATTY=360;      // packets an hour, all protocols: more than one every 10 s
   const DV_MIN_SPAN=600;    // seconds seen before a rate means anything
   function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}
@@ -86,7 +89,10 @@ window.ssAnalysis=(function(){
     // Risk notes
     if(av&&+av[1]<=8)flag('Android '+av[1]+'.x, no security updates for years',2);
     if(wpad)flag('WPAD can be answered by a hostile host to intercept web traffic (the honeypot never answers)',1);
-    if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', '),2);
+    // A hub maker by its brand, else by its MAC vendor alone.
+    const hub=[own,(DV_BRAND.find(([re])=>re.test(vendor))||[])[1]].find(b=>DV_HUB.has(b))||'';
+    const hubWhy=hub?'normal for a '+hub+' smart-home hub':'';
+    if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', ')+(hub?'; '+hubWhy:''),hub?1:2);
     if(span>=DV_MIN_SPAN&&total*3600/span>DV_CHATTY)flag('Very chatty multicast: '+dvRate(total,span)+' packets an hour in all',1);
     if(!vendor&&x.random_mac)flag('Can\'t identify; check your router\'s client list',1);
     // Rates
@@ -98,10 +104,14 @@ window.ssAnalysis=(function(){
     const sug=w>=2?['Isolate (guest or IoT network)','sg-iso']:w===1||!known?['Watch','sg-watch']:['Known and benign: name it','sg-ok'];
     const box=el('div','an'),sec=(h,items)=>{const s=el('div'),u=el('ul');s.append(el('h5','',h));items.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);};
     sec('Identity',id);sec('Behaviour',beh);sec('Risk notes',risk.length?risk:['None from these rules']);
-    const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
+    // Say why when the hub rule is what kept it from Isolate.
+    const why=looked.size&&hub&&w<2?'Probing other makers\' gear is '+hubWhy:'';
+    const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]));
+    if(why)s.append(el('div','an-foot',why));
+    s.append(el('h5','','Rates'));
     const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
     if(foot)box.append(el('div','an-foot',foot));
-    box._ai={id,beh,risk,rate,sug:sug[0],qs};
+    box._ai={id,beh,risk,rate,sug:sug[0]+(why?' ('+why+')':''),qs};
     return box;
   }
   return analyse;
