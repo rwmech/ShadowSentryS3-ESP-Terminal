@@ -42,3 +42,63 @@ into the board's vendor database (/sd/oui.bin, read by main/storage/oui.c).
 No IEEE data is committed to this repository; the file is built on the PC
 from the listings as published. The organisation names are the IEEE's public
 registry data, shortened (corporate suffixes dropped, at most 40 characters).
+
+--------------------------------------------------------------------------------
+btest-opensource
+https://github.com/samm-git/btest-opensource
+
+Used in: main/honeypot/tripwire.c and main/honeypot/mikrotik.c (the MikroTik
+bandwidth-test decoy on TCP 2000). Protocol facts only, from the README's
+protocol notes: the server's 4-byte hello 01 00 00 00 and the layout of the
+client's command (protocol and direction bytes). No code copied.
+
+MIT License
+
+Copyright (c) 2016 Alex Samorukov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+References consulted for the MikroTik decoys (nothing copied)
+
+The MikroTik decoys in main/honeypot/tripwire.c and main/honeypot/mikrotik.c
+were written from the protocol descriptions below. No code, data tables or
+exploit signatures were copied from any of them; they are listed so the
+sources are clear.
+
+- MikroTik RouterOS API manual
+  https://help.mikrotik.com/docs/spaces/ROS/pages/47579160/API
+  Word length encoding and sentence structure (the API decoy's reader).
+
+- tenable/routeros, 8291_honeypot (BSD-3-Clause, archived)
+  https://github.com/tenable/routeros/tree/master/8291_honeypot
+  Design reference: Winbox's client speaks first. That honeypot answers
+  "insufficient permissions"; this decoy stays silent instead.
+
+- Wireshark, epan/dissectors/packet-mndp.c (GPL)
+  https://github.com/wireshark/wireshark/blob/master/epan/dissectors/packet-mndp.c
+  Consulted for the MNDP format (4-byte header, 16-bit big-endian type and
+  length records, the record numbers for MAC, identity, version, platform and
+  board). Reimplemented from the format; no code copied.
+
+- haakonnessjoen/MAC-Telnet (GPL-2.0-or-later)
+  https://github.com/haakonnessjoen/MAC-Telnet
+  Consulted for the MAC-Telnet header layout and packet types, the 4-byte
+  MNDP solicitation, and how the client sends (IP broadcast). Reimplemented
+  from the format; no code copied.

@@ -17,8 +17,10 @@
 
 // ── Codes ─────────────────────────────────────────────────────────────────────
 
-// The code table, in code order. HTTP rows carry the engine's label key and
-// tripwire rows the service name; the lookups below match on those.
+// The code table, in code order, then rows added later (appended, so a row's
+// index, its bit in alarm_info_t.codes, never moves). HTTP rows carry the
+// engine's label key and tripwire rows the service name; the lookups below
+// match on those.
 typedef struct {
     const char *code;
     const char *name;
@@ -58,6 +60,13 @@ static const code_row_t CODES[] = {
     { "50-01", "ARP spoof",          TIER_SEV1, NULL },
     { "50-02", "Wi-Fi deauth",       TIER_SEV1, NULL },
     { "60-01", "LAN discovery",      TIER_SEV3, NULL },
+    // MikroTik decoys (tripwire.c, mikrotik.c). MNDP is SEV2: Winbox clients
+    // send neighbour discovery too.
+    { "40-10", "Winbox",             TIER_SEV1, "Winbox" },
+    { "40-11", "RouterOS API",       TIER_SEV1, "RouterOS API" },
+    { "40-12", "Bandwidth test",     TIER_SEV1, "Bandwidth test" },
+    { "40-13", "MNDP discovery",     TIER_SEV2, "MNDP" },
+    { "40-14", "MAC-Telnet",         TIER_SEV1, "MAC-Telnet" },
 };
 #define CODE_N ((int)(sizeof(CODES) / sizeof(CODES[0])))
 
@@ -66,7 +75,8 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_SSH, C_TELNET, C_FTP, C_RTSP, C_SHELL_CMD, C_SHELL_SESSION,
     C_WEB_LOGIN, C_WEB_FIRST = C_WEB_LOGIN, C_WEB_UNCLASSIFIED = C_WEB_LOGIN + 8,
     C_ADB, C_TRIP_FIRST, C_TRIP_OTHER = C_TRIP_FIRST + 7,
-    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY, C_COUNT
+    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY,
+    C_MT_FIRST, C_MT_LAST = C_MT_FIRST + 4, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
 
@@ -117,7 +127,9 @@ static const code_row_t *code_row(const attack_log_t *e)
     case ATTACK_ADB:       return &CODES[C_ADB];
     case ATTACK_TRIPWIRE: {
         payload_str(e, p, sizeof(p));
-        const code_row_t *r = row_by_key(C_TRIP_FIRST, C_TRIP_OTHER - 1, tripwire_service_key(p));
+        const char *key = tripwire_service_key(p);
+        const code_row_t *r = row_by_key(C_TRIP_FIRST, C_TRIP_OTHER - 1, key);
+        if (!r) r = row_by_key(C_MT_FIRST, C_MT_LAST, key);
         return r ? r : &CODES[C_TRIP_OTHER];
     }
     case ATTACK_ARP:       return &CODES[C_ARP_SPOOF];
@@ -378,6 +390,51 @@ static void discovery_detail(sb_t *s, const char *p)
     sb_fmt(s, "%s is searching the network", lab[0] ? lab : "a device");
 }
 
+// MikroTik decoys. Payloads (tripwire.c): "<service> on <port>[ (+N held)]: "
+// then "frame N B: <hex>" (Winbox), "<cmd>[ as <user>], N B" (API),
+// "[<proto> <dir>, ]N B: <hex>" (btest), "solicitation, N B" or
+// "announcement <identity>, <version>, <board>" (MNDP), "<what> to this
+// device, N B" (MAC-Telnet), "other, N B: <hex>" or "no data".
+static void mt_detail(sb_t *s, const char *key, const char *p)
+{
+    const char *body = after(p, ": ");
+    if (!body || !strncmp(body, "no data", 7)) {
+        sb_fmt(s, "%sconnection, no data", strcmp(key, "Winbox") ? "" : "Winbox ");
+        return;
+    }
+    if (!strcmp(key, "Winbox")) {
+        unsigned long n;
+        if (sscanf(body, "frame %lu", &n) == 1) {
+            const char *q = body + 6;
+            while (*q >= '0' && *q <= '9') q++;
+            sb_fmt(s, "Winbox connection, first frame %lu%s bytes", n, *q == '+' ? " or more" : "");
+        } else {
+            sb_fmt(s, "Winbox connection");
+        }
+        return;
+    }
+    const char *end = strstr(body, ": ");               // hex follows
+    size_t n = end ? (size_t)(end - body) : strlen(body);
+    if (!strcmp(key, "MNDP") && !strncmp(body, "solicitation", 12)) {
+        sb_fmt(s, "neighbour solicitation");
+        return;
+    }
+    char t[64];
+    if (!strcmp(key, "MNDP") && n > 13 && !strncmp(body, "announcement ", 13)) {
+        clean(t, sizeof(t), body + 13, n - 13);
+        sb_fmt(s, "announcement from %s", t);
+        return;
+    }
+    if (!strcmp(key, "RouterOS API")) {                 // drop the ", N B" tail
+        const char *c = NULL;
+        for (const char *q = body; q < body + n; q++) if (q[0] == ',' && q[1] == ' ') c = q;
+        if (c && c[2] >= '0' && c[2] <= '9') n = (size_t)(c - body);
+    }
+    clean(t, sizeof(t), body, n);
+    if (!strcmp(key, "Bandwidth test")) sb_fmt(s, "connection, %s", t);
+    else                                sb_fmt(s, "%s", t);
+}
+
 size_t describe_event(const attack_log_t *e, char *out, size_t len)
 {
     if (!out || !len) return 0;
@@ -442,7 +499,9 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
         http_detail(&s, e, p);
         break;
     case ATTACK_TRIPWIRE:
-        if ((q = after(p, " on ")) && q - p - 4 > 0 && q - p - 4 < 16) {
+        if (c->key && row_by_key(C_MT_FIRST, C_MT_LAST, c->key) == c) {
+            mt_detail(&s, c->key, p);
+        } else if ((q = after(p, " on ")) && q - p - 4 > 0 && q - p - 4 < 16) {
             char svc[16];
             clean(svc, sizeof(svc), p, (size_t)(q - p - 4));
             sb_fmt(&s, "%s connection on %lu", svc, strtoul(q, NULL, 10));

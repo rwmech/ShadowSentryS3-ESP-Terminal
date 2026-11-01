@@ -14,6 +14,7 @@
 #include "trap_listen.h"            // TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT
 #include "http_engine.h"            // HTTP_ENG_PORT1..3 (0 when the engine is off)
 #include "tripwire.h"               // TRIPWIRE_*_PORT, TRIPWIRE_LISTEN (0 when tripwires are off)
+#include "mikrotik.h"               // mikrotik_frame_tap(): datagrams for the MNDP and MAC-Telnet decoys
 #include "ss_lwip_hooks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -58,7 +59,7 @@ static const char *TAG = "DETECT";
 #define PROBE_PEND_MAX    16
 #define PROBE_SEEN_MAX    64
 #define SAMPLE_MAX        6
-#define TRAP_N            18        // fits the uint32_t traps bitmap
+#define TRAP_N            21        // fits the uint32_t traps bitmap
 
 // ── Messages, hook and ARP tap to the detector task ───────────────────────────
 
@@ -192,14 +193,18 @@ int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
 }
 
 // Station netif input wrapper (Wi-Fi RX task): peek at ARP requests, hand every
-// frame to the discovery tap (source MACs), pass all on.
+// frame to the discovery tap (source MACs) and the MikroTik decoy tap (MNDP and
+// MAC-Telnet datagrams), pass all on.
 static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
 {
     if (s_hooks_off) return s_orig_input(p, inp);
-    if (p && p->payload && inp)
+    if (p && p->payload && inp) {
         discovery_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)));
+        mikrotik_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)),
+                           ip4_addr_get_u32(netif_ip4_netmask(inp)));
+    }
     if (s_q && p && p->payload && p->len >= 42) {
         const uint8_t *f = (const uint8_t *)p->payload;
         static const uint8_t REQ[8] = { 0, 1, 8, 0, 6, 4, 0, 1 };   // Ethernet, IPv4, who-has
@@ -303,13 +308,17 @@ static const uint16_t    TRAP_PORT[TRAP_N] = { FTP_PORT, SSH_PORT, TELNET_PORT, 
                                                TRIPWIRE_LISTEN(TRIPWIRE_REDIS_PORT),
                                                TRIPWIRE_LISTEN(TRIPWIRE_MYSQL_PORT),
                                                TRIPWIRE_LISTEN(TRIPWIRE_MSSQL_PORT),
-                                               TRIPWIRE_LISTEN(TRIPWIRE_JETDIRECT_PORT) };
+                                               TRIPWIRE_LISTEN(TRIPWIRE_JETDIRECT_PORT),
+                                               TRIPWIRE_LISTEN(TRIPWIRE_WINBOX_PORT),
+                                               TRIPWIRE_LISTEN(TRIPWIRE_ROSAPI_PORT),
+                                               TRIPWIRE_LISTEN(TRIPWIRE_BTEST_PORT) };
 static const char *const TRAP_NAME[TRAP_N] = { "FTP", "SSH", "Telnet", "HTTP", "RTSP",
                                                "Telnet alt", "SSH alt", "ADB",
                                                "HTTP " TRAP_STR(HTTP_ALT_PORT1),
                                                "HTTP " TRAP_STR(HTTP_ALT_PORT2),
                                                "HTTP " TRAP_STR(HTTP_ALT_PORT3),
-                                               "RDP", "VNC", "SMB", "Redis", "MySQL", "MSSQL", "JetDirect" };
+                                               "RDP", "VNC", "SMB", "Redis", "MySQL", "MSSQL", "JetDirect",
+                                               "Winbox", "RouterOS-API", "btest" };
 _Static_assert(TRAP_N <= 32, "src_t.traps is a uint32_t bitmap");
 // Services that log every connection they take (the HTTP engine, ADB, the
 // tripwires) call detect_note_logged(): a probe held for that source and port
@@ -320,7 +329,8 @@ _Static_assert(TRAP_N <= 32, "src_t.traps is a uint32_t bitmap");
 static const bool TRAP_LOGS[TRAP_N] = { false, false, false, HTTP_ENGINE_ENABLE, false,
                                         false, false, true,
                                         true, true, true,
-                                        true, true, true, true, true, true, true };
+                                        true, true, true, true, true, true, true,
+                                        true, true, true };
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
