@@ -150,6 +150,33 @@
 #define MIKROTIK_PASSWORD           ""
 #define MIKROTIK_CERT_SHA256        ""
 
+// ── Router feeds (syslog tripwires, IPFIX, block list) ────────────────────────
+//
+// The router sends to this board; the board never writes to the router.
+// tools/routeros/*.rsc has the RouterOS side (README, "Router setup").
+// No sockets: the datagrams are copied off the Wi-Fi input, and only from
+// the router's address with the gateway's MAC.
+//
+// ROUTER_SYSLOG_ENABLE: the router's syslog (logins, failed logins, config
+//   changes, DHCP, and the SS-TRIP- firewall tripwires) as Codes 55-21..55-27.
+// ROUTER_SYSLOG_PORT: UDP port the router's logging action sends to.
+// ROUTER_SYSLOG_SRC: the router's IPv4 the datagrams come from. "" = the host
+//   of MIKROTIK_URL (or the Settings value), which must then be a dotted quad.
+// ROUTER_ADMIN_IPS: admin addresses, comma separated, up to 8. A login, a
+//   failed login (below 3 in 5 minutes) or a config change from one of them
+//   is logged, not alerted. The dashboard's admin allowlist counts too.
+// ROUTER_PIHOLE_IP: the Pi-hole's IPv4, never blocked. "" = the address the
+//   Pi-hole client resolved.
+// ROUTER_LIST_CHECK_S: how often the router's shadowsentry-trip address list
+//   is read over the REST client (GET only), 5..3600.
+// main/detect/router_trip.h has the defaults and checks for a config.h without these.
+#define ROUTER_SYSLOG_ENABLE        1
+#define ROUTER_SYSLOG_PORT          514
+#define ROUTER_SYSLOG_SRC           ""      // "192.168.0.1"
+#define ROUTER_ADMIN_IPS            ""      // "192.168.0.10,192.168.0.11"
+#define ROUTER_PIHOLE_IP            ""      // "192.168.0.2"
+#define ROUTER_LIST_CHECK_S         15
+
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
 // Dashboard is accessible at http://<device-ip>:ADMIN_PORT

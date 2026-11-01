@@ -15,6 +15,7 @@
 #include "http_engine.h"            // HTTP_ENG_PORT1..3 (0 when the engine is off)
 #include "tripwire.h"               // TRIPWIRE_*_PORT, TRIPWIRE_LISTEN (0 when tripwires are off)
 #include "mt_decoy.h"               // mikrotik_frame_tap(): datagrams for the MNDP and MAC-Telnet decoys
+#include "router_trip.h"            // router_frame_tap(): syslog (and IPFIX) from the router, consumed
 #include "ss_lwip_hooks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -194,7 +195,8 @@ int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
 
 // Station netif input wrapper (Wi-Fi RX task): peek at ARP requests, hand every
 // frame to the discovery tap (source MACs) and the MikroTik decoy tap (MNDP and
-// MAC-Telnet datagrams), pass all on.
+// MAC-Telnet datagrams), pass all on except the router's syslog and IPFIX
+// datagrams to us (router_trip.c), which are consumed.
 static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
@@ -204,6 +206,13 @@ static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
         discovery_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)));
         mikrotik_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)),
                            ip4_addr_get_u32(netif_ip4_netmask(inp)));
+        // The router's own feeds to this board: copied, then not passed on, so
+        // lwIP sends no port-unreachable for a port nothing is bound to. The
+        // input path owns p once it returns ERR_OK, so it is freed here.
+        if (router_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)))) {
+            pbuf_free(p);
+            return ERR_OK;
+        }
     }
     if (s_q && p && p->payload && p->len >= 42) {
         const uint8_t *f = (const uint8_t *)p->payload;

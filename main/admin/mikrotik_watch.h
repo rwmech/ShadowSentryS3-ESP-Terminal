@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "log_store.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +27,9 @@ extern "C" {
  *   55-07 /ip/dns, /ip/dns/static                        SEV1
  *   55-08 /interface, tunnel types only                  SEV1
  *   55-09 /system/logging, /system/logging/action        SEV1 (blinding the sensor)
- *   55-10 /log logins and failures, /user/active         SEV2 (no baseline: always on)
+ *   55-10 /log logins and failures, /user/active         SEV2 (no baseline: always on;
+ *                                                        not raised while router syslog is
+ *                                                        live: router_trip.c's 55-21/55-22)
  *   55-11 /system/package, /system/resource version,
  *         /system/routerboard firmware                   SEV2
  * (critical and high in the research table map to SEV1, medium to SEV2.)
@@ -77,6 +80,12 @@ unsigned mikrotik_watch_json(char *buf, unsigned cap);
 
 // The router's IPv4 (network order) from the MikroTik URL, 0 if it is a name.
 uint32_t mikrotik_watch_router_ip(void);
+
+// Queue an ATTACK_ROUTER event for log_store_append() and telegram_notify()
+// on the short-lived internal-stack helper (started on demand, gone after
+// 2 s idle). Copies; never blocks. False when the 8-deep queue is full. Any
+// task, also with MikroTik off (router_trip.c uses it).
+bool mikrotik_watch_post(const attack_log_t *e);
 
 #ifdef __cplusplus
 }

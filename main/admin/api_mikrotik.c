@@ -9,6 +9,7 @@
 #include "mikrotik.h"
 #include "mikrotik_watch.h"
 #include "correlate.h"
+#include "router_trip.h"
 #include "settings.h"
 #include "describe.h"
 #include "json_esc.h"
@@ -373,6 +374,24 @@ static void get_integrity(int sock)
     free(buf);
 }
 
+// GET /api/router/status: the router's feeds to this board.
+static void get_router_status(int sock)
+{
+    const size_t cap = 4096;
+    char *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!buf) { send_err(sock, "503 Service Unavailable", "out of memory"); return; }
+    jb_t j = { .b = buf, .n = 0, .cap = cap, .full = false };
+    jb_lit(&j, "{\"syslog\":");
+    if (j.cap - j.n > 1024) {
+        size_t w = router_trip_status_json(j.b + j.n, j.cap - j.n);
+        if (w) j.n += w; else jb_lit(&j, "null");
+    }
+    jb_lit(&j, "}");
+    if (j.full) send_err(sock, "500 Internal Server Error", "response too large");
+    else send_json(sock, "200 OK", buf, j.n);
+    free(buf);
+}
+
 static void post_arm(int sock)
 {
     if (!settings_mikrotik_enabled()) { send_err(sock, "409 Conflict", "MikroTik is off"); return; }
@@ -403,7 +422,8 @@ bool api_mikrotik_handle(int sock, const char *req, int req_len)
     if (plen >= sizeof(path)) return false;
     memcpy(path, t, plen);
     path[plen] = '\0';
-    bool ours = !strcmp(path, "/api/device/intel") || !strncmp(path, "/api/mikrotik/", 14);
+    bool ours = !strcmp(path, "/api/device/intel") || !strncmp(path, "/api/mikrotik/", 14) ||
+                !strcmp(path, "/api/router/status");
     if (!ours) return false;
     if (q) {
         size_t ql = (size_t)(e - q - 1);
@@ -420,6 +440,7 @@ bool api_mikrotik_handle(int sock, const char *req, int req_len)
     else if (post && !strcmp(path, "/api/mikrotik/cert/forget")) post_forget(sock);
     else if (get && !strcmp(path, "/api/mikrotik/integrity"))     get_integrity(sock);
     else if (post && !strcmp(path, "/api/mikrotik/integrity/arm")) post_arm(sock);
+    else if (get && !strcmp(path, "/api/router/status"))          get_router_status(sock);
     else send_err(sock, "404 Not Found", "no such route");
     return true;
 }

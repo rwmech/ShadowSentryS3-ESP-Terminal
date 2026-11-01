@@ -193,6 +193,13 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - Script source: diffed only if this user can read it; if the reply leaves it out, scripts are compared on name, owner and policy, and the status says so.
   - NVS keeps only a digest per menu and the arm time (the partition is 16 KB); the per-record baseline is in PSRAM. After a reboot each menu is compared with its armed digest, and a mismatch is reported once, without record detail, until you re-arm.
   - The router's own entry on the Devices tab (and `GET /api/device/intel` for its address) shows the integrity state.
+- Router tripwires, the router's own log as a sensor (`main/detect/router_trip.c`, Rob's choice "Syslog + list check"): the router sends logins, failed logins, configuration changes, DHCP leases and three firewall tripwires to the board over UDP syslog (setup below, under "Router setup"). The rules on the router only log and add to an address list: nothing is dropped and admin access is untouched.
+  - No socket: datagrams to UDP 514 on the board's address are copied off the Wi-Fi input into a PSRAM ring, and only when they come from the router's address (`ROUTER_SYSLOG_SRC`, else the MikroTik URL's host) with the gateway's MAC; those are then consumed, so the router gets no port-unreachable back. Anything else sent to that port is treated as before (a closed port).
+  - Codes 55-21 to 55-27 (table below), each with the offender as the source (not the router), so the incident, the device page and the ignore list name the device. Admins (`ROUTER_ADMIN_IPS` and the admin allowlist) are logged, not alerted, except a burst of 3 failed logins in 5 minutes. The board's own read-only REST login is ignored. One event per code and source per 5 minutes (DNS bypass per hour), repeats counted into the next.
+  - Every classified line is also a `router_log` line on the card (Logs page, kind "router_log"; at most 30 a minute). A DHCP assignment from a MAC the MikroTik client has never seen raises 60-02 once, whichever of syslog and the 5-minute lease poll sees it first.
+  - List check: every 15 s the board reads the router's `shadowsentry-trip` address list over the read-only REST login (GET only). A new entry whose address raised no syslog tripwire in the last day raises 55-27 (syslog lost or not set up); the first read only learns.
+  - While syslog is live, router integrity's 55-10 login events (from polling `/log` and `/user/active`) are not raised, so a login is not reported twice.
+  - Line formats parsed (RouterOS 7.24 manual's Log page and the 7.26 page's syslog section): "login failure for user U from A via S", "user U logged in from A via S", "&lt;item&gt; changed|added|removed|moved by &lt;actor&gt;" (actor "admin", "scheduler:..." or "&lt;client&gt;/&lt;service&gt;:&lt;user&gt;@&lt;address&gt;"), "&lt;server&gt; assigned &lt;ip&gt; for &lt;MAC&gt; &lt;host&gt;", and firewall lines with the SS-TRIP- prefix. The user name and the DHCP host name are attacker text: the source is taken from the last " from &lt;IPv4&gt; via" (and RouterOS's `src=` field when present), each kind is matched only at the start of the message and, when the topics are sent (tripwires.rsc turns them on), only under its own topic.
 - Panel-press camera: the OV2640 faces whoever stands at the screen. A press on the panel's ACKNOWLEDGE button (action `ack`), or a confirmed IGNORE ERROR or IGNORE DEVICE (action `ignore`), takes a photo (640x480 JPEG, Elecrow's sensor settings; 320x240 if the sensor will only start at Elecrow's own size) at the moment the press starts, not when the hold completes, so a press let go early is photographed too. To light the face, the screen first turns white above the button row (the emblem and the details; the buttons stay visible and a hold on ACKNOWLEDGE carries on in sight) and the backlight full on (`CAM_FLASH_ENABLE`, default 1); the camera drops frames for `CAM_FLASH_SETTLE_MS` (500) while its exposure settles on that light, captures, and the white comes down, in under a second. It is saved as `/sd/snap/YYYY-MM-DD_HH-MM-SS_<action>.jpg` (through the SD writer task) with a `snap` line in the day log (shown on the Logs page, kind "snap"), and the last one is kept in PSRAM for the dashboard's "Last panel action" card (thumbnail, action, time; refreshed on every alarm state change and every 30 s). At most one photo a second. Without a camera the board logs it once and runs as before. The camera's SCCB runs on the new `i2c_master` driver and attaches to the bus touch already owns (touch polling pauses for the second or so the sensor takes to start, and both run at 100 kHz), so the legacy I2C driver (which would abort IDF 5.4 at boot) is never linked.
 - Telegram (upstream's per-event alerts): each message now starts with the event's code and headline in bold.
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
@@ -256,12 +263,19 @@ Every event carries a two-part console code, "Code CC-NN": the category, then th
 | 55-09 | Router logging | SEV1 | a logging rule or action changed (someone may be blinding the sensor) |
 | 55-10 | Router login | SEV2 | a burst of login failures, or a login from a new address or service |
 | 55-11 | Router version | SEV2 | packages, the RouterOS version or the RouterBOOT firmware changed |
+| 55-21 | Router login failed | SEV1 | the router logged a failed login from an address that is not an admin, or 3 in 5 minutes from an admin |
+| 55-22 | Router login | SEV1 | the router logged a login from an address that is not an admin |
+| 55-23 | Router config change | SEV1 | the router logged a change by a non-admin address, a scheduler or a script |
+| 55-24 | Router port scan | SEV1 | the router's port scan detector (psd) fired on a LAN source (SS-TRIP-PSD) |
+| 55-25 | Router management | SEV2 | a non-admin host opened a connection to the router's management ports (SS-TRIP-MGMT) |
+| 55-26 | DNS bypass | SEV2 | a device sent DNS or DNS over TLS to a server that is not the Pi-hole (SS-TRIP-DNS) |
+| 55-27 | Router tripwire list | SEV2 | a new entry on the router's shadowsentry-trip list that no syslog line explained |
 | 60-01 | LAN discovery | SEV3 | a new device, protocol or label |
 | 60-02 | New device on network | SEV3 | a DHCP lease on the router from a MAC never seen before |
 
 "00-00" marks an event no code covers (an attack type added later); it counts as SEV2.
 
-This table is sorted by code. `GET /api/codes` lists the same 48 codes in the order of `describe.c`'s table, where new codes are appended so the existing ones keep their position.
+This table is sorted by code. `GET /api/codes` lists the same 55 codes in the order of `describe.c`'s table, where new codes are appended so the existing ones keep their position.
 
 ### Fork API (admin port, Basic auth)
 
@@ -306,6 +320,7 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `POST` | `/api/mikrotik/test` | queue a test (`/rest/system/resource`: board and RouterOS version); `{"queued":true,"test":N}`, 409 when off; poll the status for `test_done` |
 | `POST` | `/api/mikrotik/cert/forget` | forget the certificate recorded on first use |
 | `GET` | `/api/mikrotik/integrity` | `running`, `armed`, `arming`, `armed_at`, `last_check`, `checks` [{`key`,`title`,`code`,`state` (`pending`, `ok`, `changed`, `drift`, `missing`, `error`, `not_armed`),`records`,`armed_records`,`changes`,`last`,`note`,`findings`}] |
+| `GET` | `/api/router/status` | the router's feeds to this board: `syslog` {`enabled`,`port`,`router`,`gateway_mac_known`,`live`,`last`,`received`,`foreign` (to the port, not from the router),`dropped`,`cut`,`parsed`,`events`,`held`,`sd_lines`,`sd_dropped`,`lines` {per kind},`list` {`name`,`learned`,`checks`,`errors`,`status`,`entries`,`events`,`last`}} |
 | `POST` | `/api/mikrotik/integrity/arm` | arm or re-arm the baseline from the router's current state (one pass, about 30 s); 409 when off |
 | `POST` | `/api/ota` | raw app image |
 
@@ -333,6 +348,15 @@ Read only, from a user that can only read and only from the board's address. Rou
 - Then `MIKROTIK_URL "https://192.168.0.1"`. The board checks the certificate by its SHA-256 fingerprint: `MIKROTIK_CERT_SHA256` (or the pin field in Settings) if set, else the first certificate it sees is recorded in NVS and shown in Settings ("trust on first use"; that first connection already carries the password). A different certificate is refused (state `cert_mismatch`, with the new fingerprint shown) until you pin it or press "Forget recorded certificate". Verification is never switched off. mbedTLS also checks the key usage, so a certificate without `digital-signature` and `tls-server` fails the handshake (shown as `unreachable`). To read the fingerprint yourself: `openssl s_client -connect 192.168.0.1:443 </dev/null | openssl x509 -noout -fingerprint -sha256`.
 - `main/config.h`: `MIKROTIK_URL` (`http://host[:port]` or `https://host[:port]`, no path), `MIKROTIK_USER`, `MIKROTIK_PASSWORD` (empty user or password means off), `MIKROTIK_CERT_SHA256` (64 hex digits, colons allowed, https only). Settings, MikroTik, holds the same plus a "Use the router" switch and Test connection; it applies at once, no reboot. The password is never logged or returned by the API.
 - Nothing is written to the router: the client only sends GET.
+
+### Router setup
+
+The router sends to the board; the board never writes to the router (its REST user stays read-only). The RouterOS side is in `tools/routeros/`, written against the RouterOS 7.24 CLI reference (pages cited in each file) and not yet run on a router: read it before pasting.
+
+- `tools/routeros/tripwires.rsc`: the syslog action and logging rules, the `shadowsentry-admin` and `shadowsentry-dns` address lists, and a mangle chain `shadowsentry-trip` with three tripwires (psd, management ports from a non-admin host, DNS to anything but the Pi-hole), each `add-src-to-address-list` with `log=yes` and a `SS-TRIP-` prefix. Edit the lines marked EDIT: your admin PC, the sentry's and the Pi-hole's addresses, the router's LAN address (`src-address=` on the logging action), the LAN interface list, the management ports. The file ends with the commands that remove it again.
+- On the board, `main/config.h`: `ROUTER_ADMIN_IPS` (your admin PC, the same as in `shadowsentry-admin`), and `ROUTER_SYSLOG_SRC` if the MikroTik URL is not a dotted quad. Defaults in `main/detect/router_trip.h`.
+- Check: `GET /api/router/status` shows `syslog.live` true and `received` counting once the router sends; `foreign` counts datagrams to the port from anything else (a wrong `src-address=` on the router shows here).
+- The psd values (21,3s,3,1) are a common choice from MikroTik's forum, not from the manual; raise the first number if a busy LAN host trips it.
 
 ### Build and flash (PlatformIO)
 

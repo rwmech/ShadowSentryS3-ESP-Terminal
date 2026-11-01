@@ -169,6 +169,14 @@ bool mikrotik_conn_request(uint32_t ip, const uint8_t *mac);
 // out->pending still set if one is on its way).
 bool mikrotik_conn_get(uint32_t ip, mikrotik_conn_t *out);
 
+// A DHCP assignment the router logged (router_trip.c, from syslog): the MAC
+// goes into the known-device set on the mikrotik task, and a MAC never seen
+// raises the same Code 60-02 event as the lease poll, once, whichever sees it
+// first. host is the client's name (hostile text, cleaned there). False when
+// the MikroTik client is not running (nothing raised) or its queue is full.
+// Non-blocking, any task.
+bool mikrotik_note_lease(const uint8_t mac[6], uint32_t ip, const char *host);
+
 // ── Status and test ───────────────────────────────────────────────────────────
 
 typedef enum {

@@ -12,6 +12,7 @@
 
 #include "mikrotik_watch.h"
 #include "mikrotik.h"
+#include "router_trip.h"        // router_trip_syslog_live(): syslog covers logins
 #include "settings.h"
 #include "log_store.h"
 #include "telegram.h"
@@ -327,7 +328,29 @@ static void event(const check_t *k, const char *fmt, ...)
     if (n > 0 && n < (int)sizeof(e->payload)) vsnprintf(e->payload + n, sizeof(e->payload) - (size_t)n, fmt, ap);
     va_end(ap);
     ESP_LOGW(TAG, "%s", e->payload);
-    if (!s_evq || xQueueSend(s_evq, e, 0) != pdTRUE) { ESP_LOGW(TAG, "event dropped (queue full)"); return; }
+    if (!mikrotik_watch_post(e)) ESP_LOGW(TAG, "event dropped (queue full)");
+}
+
+// The helper's queue, made by whoever posts first (this module's load, or the
+// router tripwires' task when MikroTik is off).
+static QueueHandle_t ev_queue(void)
+{
+    QueueHandle_t q = __atomic_load_n(&s_evq, __ATOMIC_ACQUIRE);
+    if (q) return q;
+    QueueHandle_t n = xQueueCreateWithCaps(MW_EV_DEPTH, sizeof(attack_log_t), MALLOC_CAP_SPIRAM);
+    if (!n) return NULL;
+    QueueHandle_t exp = NULL;
+    if (!__atomic_compare_exchange_n(&s_evq, &exp, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        vQueueDeleteWithCaps(n);
+        return exp;
+    }
+    return n;
+}
+
+bool mikrotik_watch_post(const attack_log_t *e)
+{
+    QueueHandle_t q = ev_queue();
+    if (!e || !q || xQueueSend(q, e, 0) != pdTRUE) return false;
     portENTER_CRITICAL(&s_ev_mux);
     bool start = !s_ev_running;
     if (start) s_ev_running = true;
@@ -336,6 +359,7 @@ static void event(const check_t *k, const char *fmt, ...)
         s_ev_running = false;
         ESP_LOGW(TAG, "event helper not started: out of memory");
     }
+    return true;
 }
 
 // ── Snapshots ─────────────────────────────────────────────────────────────────
@@ -551,7 +575,7 @@ static bool log_cb(void *ctx, const mikrotik_row_t *r)
         }
     } else if (sscanf(m, "user %23s logged in from %39s via %15s", user, addr, via) == 3) {
         bool fresh = !combo_seen(combo_hash(user, addr, via));
-        if (fresh && !x->learn && x->events < MIKROTIK_WATCH_EVENTS) {
+        if (fresh && !x->learn && x->events < MIKROTIK_WATCH_EVENTS && !router_trip_syslog_live()) {
             char u[24], a[40], v[16];
             cut(u, sizeof(u), user); cut(a, sizeof(a), addr); cut(v, sizeof(v), via);
             event(x->k, "login as %s from %s via %s, a new address or service", u, a, v);
@@ -569,7 +593,7 @@ static bool active_cb(void *ctx, const mikrotik_row_t *r)
     cut(a, sizeof(a), mikrotik_row_get(r, "address"));
     cut(v, sizeof(v), mikrotik_row_get(r, "via"));
     bool fresh = !combo_seen(combo_hash(u, a, v));
-    if (fresh && !x->learn && x->events < MIKROTIK_WATCH_EVENTS) {
+    if (fresh && !x->learn && x->events < MIKROTIK_WATCH_EVENTS && !router_trip_syslog_live()) {
         event(x->k, "session %s from %s via %s, a new address or service", u, a, v);
         x->events++;
     }
@@ -592,7 +616,7 @@ static void run_check(int i)
             if (x.max_id < W->log_last) W->log_last = 0;          // the router rebooted: ids start again
             else W->log_last = x.max_id;
             W->log_learned = true;
-            if (W->fails >= MW_FAIL_BURST) event(k, "%u login failures since the last check (last: %s)", (unsigned)W->fails, W->fail_msg);
+            if (W->fails >= MW_FAIL_BURST && !router_trip_syslog_live()) event(k, "%u login failures since the last check (last: %s)", (unsigned)W->fails, W->fail_msg);
         }
         if (st == 200 && k->kind == K_ACTIVE) W->combos_learned = true;
         if (lock(1000)) {
@@ -654,8 +678,7 @@ void mikrotik_watch_load(void)
     if (W) return;
     W = heap_caps_calloc(1, sizeof(*W), MALLOC_CAP_SPIRAM);
     s_lock = xSemaphoreCreateMutex();
-    s_evq = xQueueCreateWithCaps(MW_EV_DEPTH, sizeof(attack_log_t), MALLOC_CAP_SPIRAM);
-    if (!W || !s_lock || !s_evq) { ESP_LOGE(TAG, "Not started: out of memory"); free(W); W = NULL; return; }
+    if (!W || !s_lock || !ev_queue()) { ESP_LOGE(TAG, "Not started: out of memory"); free(W); W = NULL; return; }
     nvs_blob_t b;
     size_t n = sizeof(b);
     nvs_handle_t h;

@@ -14,6 +14,7 @@
 
 #include "mikrotik.h"
 #include "mikrotik_watch.h"
+#include "router_trip.h"         // router_trip_list_tick(): the tripwire address-list check
 #include "settings.h"
 #include "wifi_manager.h"
 #include "log_store.h"
@@ -159,8 +160,8 @@ typedef struct {
     attack_log_t ev;
 } mt_state_t;
 
-typedef struct { uint8_t kind; uint32_t ip; } mt_req_t;
-enum { REQ_CONN = 1, REQ_TEST, REQ_KICK };
+typedef struct { uint8_t kind; uint8_t mac[6]; uint32_t ip; char host[MIKROTIK_NAME_LEN]; } mt_req_t;
+enum { REQ_CONN = 1, REQ_TEST, REQ_KICK, REQ_LEASE };
 
 static mt_state_t       *S;
 static SemaphoreHandle_t s_lock;            // hosts[front], slots
@@ -837,6 +838,31 @@ static void new_device_event(const mikrotik_host_t *h, uint32_t more)
     sd_log_line(line, (size_t)n);
 }
 
+// A DHCP assignment from the router's syslog (REQ_LEASE). Learning is the
+// lease poll's: before the first poll has seeded the set, the MAC is only
+// added, without an event.
+static void lease_note(const mt_req_t *r)
+{
+    if (known_has(r->mac)) { known_touch(r->mac); return; }
+    known_add(r->mac);
+    nvs_save_async("known", S->known, (size_t)S->n_known * 6);
+    if (!S->learned) return;
+    mikrotik_host_t *h = heap_caps_calloc(1, sizeof(*h), MALLOC_CAP_SPIRAM);
+    if (!h) return;
+    memcpy(h->mac, r->mac, 6);
+    h->ip = r->ip;
+    h->src = MIKROTIK_SRC_LEASE;
+    h->new_device = true;
+    copy_txt(h->hostname, sizeof(h->hostname), r->host);
+    strlcpy(h->lease_status, "bound", sizeof(h->lease_status));
+    new_device_event(h, 0);
+    free(h);
+    portENTER_CRITICAL(&s_mux);
+    s_stat.new_devices++;
+    s_stat.known = S->n_known;
+    portEXIT_CRITICAL(&s_mux);
+}
+
 static void check_new_devices(void)
 {
     uint8_t b = S->front ^ 1;
@@ -1453,6 +1479,7 @@ static void mikrotik_task(void *arg)
         portEXIT_CRITICAL(&s_mux);
         bool healthy = cur == MIKROTIK_ST_OK || cur == MIKROTIK_ST_STARTING;
 
+        if (got && r.kind == REQ_LEASE) lease_note(&r);
         if (got && r.kind == REQ_KICK) { backoff = 0; next_poll = now + 2; }
         if (got && r.kind == REQ_TEST && run_test() == 200 && !healthy) { backoff = 0; next_poll = now; }
         if (got && r.kind == REQ_CONN) {
@@ -1470,7 +1497,7 @@ static void mikrotik_task(void *arg)
         if (healthy) {
             uint32_t ip = watched_due(now);
             if (ip) conn_fetch(ip);
-            else mikrotik_watch_tick();         // router integrity: one menu when due
+            else if (!router_trip_list_tick()) mikrotik_watch_tick();   // tripwire list, else integrity
         }
 
         if (now < next_poll) {
@@ -1516,6 +1543,15 @@ static void mikrotik_task(void *arg)
                      (unsigned)uxTaskGetStackHighWaterMark(NULL), MIKROTIK_TASK_STACK);
         }
     }
+}
+
+bool mikrotik_note_lease(const uint8_t mac[6], uint32_t ip, const char *host)
+{
+    if (!s_running || !s_q || !mac) return false;
+    mt_req_t r = { .kind = REQ_LEASE, .ip = ip };
+    memcpy(r.mac, mac, 6);
+    strlcpy(r.host, host ? host : "", sizeof(r.host));
+    return xQueueSend(s_q, &r, 0) == pdTRUE;
 }
 
 bool mikrotik_running(void) { return s_running; }
