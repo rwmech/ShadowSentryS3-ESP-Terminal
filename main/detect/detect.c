@@ -131,8 +131,19 @@ static inline void post(const det_msg_t *m)
 
 // lwIP IPv4 input hook (ss_lwip_hooks.h). tcpip task, every inbound IPv4
 // packet, before lwIP has checked the header: bounded parse, one queue send.
+// Debug (POST /api/debug/hooks): true makes the IPv4 hook and the ARP tap pass
+// everything straight on, to split network latency.
+static volatile bool s_hooks_off;
+
+void detect_debug_hooks(bool on)
+{
+    s_hooks_off = !on;
+    ESP_LOGW(TAG, "IPv4 hook and ARP tap %s (debug)", on ? "on" : "bypassed");
+}
+
 int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
 {
+    if (s_hooks_off) return 0;
     if (!s_q || !p || !inp || !p->payload || p->len < 20) return 0;
     const uint8_t *b = (const uint8_t *)p->payload;
     unsigned hl  = (b[0] & 0x0fu) * 4u;
@@ -185,6 +196,7 @@ static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
 {
+    if (s_hooks_off) return s_orig_input(p, inp);
     if (p && p->payload && inp)
         discovery_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)));
     if (s_q && p && p->payload && p->len >= 42) {

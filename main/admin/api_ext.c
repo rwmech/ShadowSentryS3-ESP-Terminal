@@ -21,6 +21,7 @@
 #include "whatsapp.h"
 #include "notify.h"
 #include "ui.h"
+#include "wifi_monitor.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1133,24 +1134,28 @@ static void get_codes(int sock)
 // Stops the UI task running LVGL, so the panel neither refreshes nor uses the
 // SPI bus, to split network latency between the panel and the rest.
 
-static void post_debug_panel(int sock, const char *req, int req_len)
+// One debug toggle: reads {"<key>":bool}, calls set(), answers {"<key>":bool}.
+// Also POST /api/debug/promisc {"on":bool} (the Wi-Fi monitor's promiscuous
+// mode) and POST /api/debug/hooks {"on":bool} (detect's IPv4 hook and ARP tap).
+static void post_debug_toggle(int sock, const char *req, int req_len, const char *key, void (*set)(bool))
 {
     size_t blen = 0;
     const char *why = NULL;
     const char *status = read_body(sock, req, req_len, &blen, &why);
     if (status) { send_error(sock, status, why); return; }
     cJSON *root = cJSON_ParseWithLength(s_body, blen);
-    const cJSON *p = root ? cJSON_GetObjectItemCaseSensitive(root, "paused") : NULL;
+    const cJSON *p = root ? cJSON_GetObjectItemCaseSensitive(root, key) : NULL;
     if (!cJSON_IsBool(p)) {
         cJSON_Delete(root);
-        send_error(sock, "400 Bad Request", "need {\"paused\":true|false}");
+        send_error(sock, "400 Bad Request", "need one boolean field");
         return;
     }
-    ui_debug_pause(cJSON_IsTrue(p));
+    bool v = cJSON_IsTrue(p);
     cJSON_Delete(root);
+    set(v);
     jb_t j;
     jb_init(&j);
-    jb_printf(&j, "{\"paused\":%s}", ui_debug_paused() ? "true" : "false");
+    jb_printf(&j, "{\"%s\":%s}", key, v ? "true" : "false");
     send_json(sock, &j);
 }
 
@@ -1162,7 +1167,9 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (!parse_request_line(req, method, sizeof(method), path, sizeof(path), query, sizeof(query)))
         return false;
     bool get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
-    if (post && !strcmp(path, "/api/debug/panel")) { post_debug_panel(sock, req, req_len); return true; }
+    if (post && !strcmp(path, "/api/debug/panel"))   { post_debug_toggle(sock, req, req_len, "paused", ui_debug_pause); return true; }
+    if (post && !strcmp(path, "/api/debug/promisc")) { post_debug_toggle(sock, req, req_len, "on", wifi_monitor_debug_promisc); return true; }
+    if (post && !strcmp(path, "/api/debug/hooks"))   { post_debug_toggle(sock, req, req_len, "on", detect_debug_hooks); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
            R_DC_TEST, R_DC_STATUS, R_IGN_GET, R_IGN_POST, R_WA_TEST, R_WA_STATUS,

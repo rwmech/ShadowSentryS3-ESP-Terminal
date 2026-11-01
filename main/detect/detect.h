@@ -52,6 +52,9 @@ void detect_init(void);
 
 void detect_get_stats(detect_stats_t *out);
 
+// Debug (POST /api/debug/hooks): false bypasses the IPv4 hook and the ARP tap.
+void detect_debug_hooks(bool on);
+
 #ifdef __cplusplus
 }
 #endif

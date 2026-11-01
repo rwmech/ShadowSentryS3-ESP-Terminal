@@ -28,3 +28,7 @@
  * defaults if they are absent.
  */
 void wifi_monitor_task(void *arg);
+
+// Debug (fork, POST /api/debug/promisc): promiscuous mode off or back on.
+#include <stdbool.h>
+void wifi_monitor_debug_promisc(bool on);
