@@ -183,6 +183,14 @@ static portMUX_TYPE      s_tls_mux = portMUX_INITIALIZER_UNLOCKED;
 enum { CT_UNKNOWN, CT_ROUTER, CT_CLIENT };
 static uint8_t           s_ct_mode = CT_UNKNOWN;
 
+// The router's own interface MACs: published under s_mux; the task reads into
+// s_own_rd first. PSRAM.
+EXT_RAM_BSS_ATTR static uint8_t s_own[MIKROTIK_OWN_MAX][6];
+EXT_RAM_BSS_ATTR static uint8_t s_own_rd[MIKROTIK_OWN_MAX][6];
+static uint8_t           s_own_n, s_own_rd_n;
+static bool              s_own_known;
+static uint32_t          s_own_over;        // distinct MACs past MIKROTIK_OWN_MAX in the last read
+
 static int64_t up_s(void) { return esp_timer_get_time() / 1000000LL; }
 
 static bool lock(int ms)
@@ -867,6 +875,71 @@ static void check_new_devices(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
+// ── The router's own MACs ─────────────────────────────────────────────────────
+
+static bool own_cb(void *ctx, const mikrotik_row_t *r)
+{
+    (void)ctx;
+    static const uint8_t zero[6] = { 0 };
+    uint8_t mac[6];
+    if (!parse_mac(mikrotik_row_get(r, "mac-address"), mac) || !memcmp(mac, zero, 6)) return true;
+    for (int i = 0; i < s_own_rd_n; i++) if (!memcmp(s_own_rd[i], mac, 6)) return true;
+    if (s_own_rd_n < MIKROTIK_OWN_MAX) memcpy(s_own_rd[s_own_rd_n++], mac, 6);
+    else s_own_over++;
+    return true;
+}
+
+// GET /rest/interface for its mac-address fields (bridges, VLANs and ports
+// often share one MAC: kept once). True on a 200.
+static bool own_fetch(void)
+{
+    uint32_t rows = 0;
+    s_own_rd_n = 0;
+    s_own_over = 0;
+    int st = mikrotik_rest_get("/interface?.proplist=mac-address", own_cb, NULL, MT_LIST_BYTES, &rows);
+    if (st != 200) {
+        ESP_LOGW(TAG, "Router interfaces not read (status %d): MNDP and MAC-Telnet whitelist keeps %u router MACs",
+                 st, (unsigned)s_own_n);
+        return false;
+    }
+    bool changed;
+    portENTER_CRITICAL(&s_mux);
+    changed = !s_own_known || s_own_n != s_own_rd_n || memcmp(s_own, s_own_rd, (size_t)s_own_rd_n * 6);
+    memcpy(s_own, s_own_rd, (size_t)s_own_rd_n * 6);
+    s_own_n = s_own_rd_n;
+    s_own_known = true;
+    s_stat.own_macs = s_own_n;
+    s_stat.own_known = true;
+    portEXIT_CRITICAL(&s_mux);
+    if (changed)
+        ESP_LOGI(TAG, "Router's own MACs: %u from %lu interfaces%s; MNDP and MAC-Telnet from them are not reported",
+                 (unsigned)s_own_rd_n, (unsigned long)rows, s_own_over ? " (more not kept)" : "");
+    return true;
+}
+
+bool mikrotik_own_mac(const uint8_t mac[6])
+{
+    if (!mac) return false;
+    bool hit = false;
+    portENTER_CRITICAL(&s_mux);
+    for (int i = 0; i < s_own_n && !hit; i++) hit = !memcmp(s_own[i], mac, 6);
+    portEXIT_CRITICAL(&s_mux);
+    return hit;
+}
+
+int mikrotik_own_macs_state(uint16_t *n)
+{
+    bool known;
+    uint16_t k;
+    portENTER_CRITICAL(&s_mux);
+    known = s_own_known;
+    k = s_own_n;
+    portEXIT_CRITICAL(&s_mux);
+    if (n) *n = k;
+    if (!settings_mikrotik_enabled()) return -1;    // configured and on, even before the task starts
+    return known ? 1 : 0;
+}
+
 // One poll of the menus into the back table, then swap. Returns the first
 // failing status, or 200.
 static int poll_router(uint32_t n_poll)
@@ -1407,7 +1480,7 @@ static void mikrotik_task(void *arg)
 {
     (void)arg;
     uint32_t n_poll = 0, backoff = 0;
-    int64_t next_poll = up_s() + MT_FIRST_POLL_S, next_inc = 0;
+    int64_t next_poll = up_s() + MT_FIRST_POLL_S, next_inc = 0, next_own = 0;
     mikrotik_state_t logged = MIKROTIK_ST_STARTING;
     bool hw_logged = false;
     ESP_LOGI(TAG, "Started (%u B state in PSRAM, read only, poll every %d s)", (unsigned)sizeof(*S), MIKROTIK_POLL_S);
@@ -1481,6 +1554,7 @@ static void mikrotik_task(void *arg)
             continue;
         }
         n_poll++;
+        if (now >= next_own && own_fetch()) next_own = up_s() + MIKROTIK_OWN_EVERY_S;   // else at the next poll
         int st = poll_router(n_poll);
         mikrotik_state_t ns = state_of(st);
         uint32_t t = (uint32_t)time(NULL);

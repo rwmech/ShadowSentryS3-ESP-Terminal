@@ -26,6 +26,10 @@ extern "C" {
  *   /rest/caps-man/registration-table          mac-address, interface, ssid, rx-signal
  * (field names from the RouterOS 7.24 CLI reference; a menu the router does not
  * have, such as the Wi-Fi tables on a CCR, is skipped and probed again hourly).
+ * Before the first poll and then every MIKROTIK_OWN_EVERY_S: /rest/interface,
+ * mac-address (read-only in the 7.24 reference), the router's own MACs, for
+ * the MNDP and MAC-Telnet decoys' whitelist (RouterOS announces from each
+ * interface's own MAC, not only the one ARP gives for the gateway).
  *
  * On demand, at most once per MIKROTIK_CONN_MIN_S per device: one device's
  * connection tracking, /rest/ip/firewall/connection?src-address=<ip>, the
@@ -73,6 +77,8 @@ extern "C" {
 #define MIKROTIK_DNS_NAMES      128     // router DNS cache names kept (address to name)
 #define MIKROTIK_DNS_EVERY_S    120
 #define MIKROTIK_KNOWN_MAX      160     // MACs remembered for new-device detection (960 B of NVS, a 16 KB partition)
+#define MIKROTIK_OWN_MAX        32      // the router's own interface MACs kept (distinct)
+#define MIKROTIK_OWN_EVERY_S    3600    // and read again this often
 
 #define MIKROTIK_NAME_LEN       48
 #define MIKROTIK_IF_LEN         24
@@ -93,6 +99,17 @@ bool mikrotik_running(void);
 // Forget the fingerprint recorded on first use, so the next https connection
 // records the certificate it sees. Writes NVS: admin task.
 void mikrotik_cert_forget(void);
+
+// ── The router's own MACs ─────────────────────────────────────────────────────
+
+// True if mac is one of the router's interface MACs as last read. Safe from
+// any task (a copy under a spinlock).
+bool mikrotik_own_mac(const uint8_t mac[6]);
+
+// -1 the client is off (not configured or switched off), 0 the interfaces
+// have not been read yet (also before the task has started), 1 read.
+// *n (may be NULL): MACs held.
+int mikrotik_own_macs_state(uint16_t *n);
 
 // ── Host cache ────────────────────────────────────────────────────────────────
 
@@ -194,6 +211,8 @@ typedef struct {
     uint16_t known;             // MACs remembered
     bool     learned;           // the first lease poll has seeded the known set
     uint32_t new_devices;       // 60-02 events raised since boot
+    uint16_t own_macs;          // the router's own interface MACs held
+    bool     own_known;         // /rest/interface has been read
     uint32_t conn_fetches;
     char     tofu[65];          // fingerprint recorded on first use, "" none
     char     seen[65];          // last certificate presented, "" none

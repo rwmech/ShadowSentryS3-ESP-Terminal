@@ -337,7 +337,9 @@ static void get_status(int sock)
     static const char *const WT[3] = { "wifi", "wireless", "caps-man" };
     bool first = true;
     for (int i = 0; i < 3; i++) if (s->wifi_tables & (1u << i)) { jb_fmt(&j, "%s\"%s\"", first ? "" : ",", WT[i]); first = false; }
-    jb_fmt(&j, "],\"known\":%u,\"learned\":%s,\"new_devices\":%lu,\"conn_fetches\":%lu,"
+    if (s->own_known) jb_fmt(&j, "],\"own_macs\":%u,", (unsigned)s->own_macs);
+    else jb_lit(&j, "],\"own_macs\":null,");
+    jb_fmt(&j, "\"known\":%u,\"learned\":%s,\"new_devices\":%lu,\"conn_fetches\":%lu,"
                "\"cert\":{\"pin_set\":%s,\"tofu\":\"%s\",\"seen\":\"%s\"},",
            (unsigned)s->known, s->learned ? "true" : "false", (unsigned long)s->new_devices,
            (unsigned long)s->conn_fetches, s->pin_set ? "true" : "false", s->tofu, s->seen);

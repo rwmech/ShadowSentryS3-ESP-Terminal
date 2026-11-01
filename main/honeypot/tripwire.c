@@ -1,6 +1,7 @@
 // Tripwire listeners: log the first bytes of any connection and close. See tripwire.h.
 
 #include "tripwire.h"
+#include "mikrotik.h"           // main/admin: mikrotik_own_macs_state()
 #include "esp_attr.h"
 #include "trap_listen.h"
 #include "mt_decoy.h"           // MikroTik decoys: raw TCP listeners, datagram ring, readers
@@ -317,15 +318,34 @@ static void handle_tcp(const mt_tcp_result_t *r)
 
 // A whitelisted sender: counted; the first one is said on the console once,
 // so the gateway's own MNDP announcement can be seen being skipped.
-static void wl_note(const trip_svc_t *svc, const uint8_t mac[6])
+static void wl_note(const trip_svc_t *svc, const uint8_t mac[6], mt_wl_t why)
 {
     if (s_wl_hits++) return;
+    static const char *const WHY[] = { [MT_WL_NONE] = "?", [MT_WL_GATEWAY] = "the gateway",
+        [MT_WL_GATEWAY_IP] = "the gateway's IP", [MT_WL_ROUTER] = "a router interface",
+        [MT_WL_CONFIG] = "TRIPWIRE_MT_WHITELIST" };
     char ms[18];
-    uint8_t gw[6];
     wifi_manager_format_mac(mac, ms, sizeof(ms));
-    bool is_gw = mikrotik_gateway_mac(gw) && !memcmp(gw, mac, 6);
     ESP_LOGI(TAG, "%s from %s (%s): whitelisted, counted, not reported (said once)",
-             svc->name, ms, is_gw ? "the gateway" : "TRIPWIRE_MT_WHITELIST");
+             svc->name, ms, why <= MT_WL_CONFIG ? WHY[why] : "?");
+}
+
+// MNDP and MAC-Telnet wait in the ring until the whitelist is complete (the
+// gateway's MAC from ARP, the router's interface MACs from the MikroTik
+// client), MT_WL_BOOT_HOLD_S at most. Said once, when they are let through.
+static bool udp_released(void)
+{
+    static bool released;
+    if (released) return true;
+    if (!mikrotik_whitelist_ready()) return false;
+    released = true;
+    uint8_t gw[6];
+    uint16_t n = 0;
+    int st = mikrotik_own_macs_state(&n);
+    ESP_LOGI(TAG, "MNDP and MAC-Telnet read from %lu s after boot: gateway MAC %s, router MACs %s%u",
+             (unsigned long)(esp_timer_get_time() / 1000000), mikrotik_gateway_mac(gw) ? "known" : "unknown",
+             st < 0 ? "off, " : st == 0 ? "not read, " : "", (unsigned)n);
+    return true;
 }
 
 // Not inlined, so its buffer is not in handle_datagram()'s frame.
@@ -348,7 +368,8 @@ static void handle_datagram(const mt_dgram_t *d)
     size_t n = d->len <= TRIPWIRE_UDP_RX_MAX ? d->len : TRIPWIRE_UDP_RX_MAX;
     s_hex[0] = '\0';
 
-    if (mikrotik_whitelisted(d->mac)) { wl_note(svc, d->mac); return; }
+    mt_wl_t why = mikrotik_whitelist_why(d->mac, d->ip, svc->kind == TW_MNDP);
+    if (why != MT_WL_NONE) { wl_note(svc, d->mac, why); return; }
     if (svc->kind == TW_MNDP) {
         switch (mikrotik_mndp_parse(d->data, n, &s_mndp)) {
         case MT_MNDP_SOLICIT:
@@ -390,7 +411,7 @@ static void decoys_drain(void)
         memset(&r, 0, sizeof(r));
     }
     const mt_dgram_t *d;
-    for (int k = 0; k < MT_UDP_SLOTS && (d = mikrotik_udp_peek()) != NULL; k++) {
+    for (int k = 0; k < MT_UDP_SLOTS && udp_released() && (d = mikrotik_udp_peek()) != NULL; k++) {
         handle_datagram(d);
         mikrotik_udp_pop();
     }
