@@ -26,6 +26,8 @@
 #include "arp_monitor.h"
 #include "geoip.h"
 #include "wifi_monitor.h"
+#include "wifi_roam.h"
+#include "crash.h"
 #include "alarm.h"
 #include "ui.h"
 #include "buzzer.h"
@@ -220,6 +222,7 @@ void app_main(void)
     }
     notify_init();                  // reset reason (the SD boot line uses it), incident listener
     sd_log_init();
+    crash_init();                   // last run's crash record (RTC) to SPIFFS, then to the card
     oui_init();                     // vendor database cache (the file is read later, from the card)
     ui_start();
     cam_snap_init();                // waits on its own task for the touch I2C bus
@@ -330,6 +333,9 @@ void app_main(void)
     SPAWN(admin_panel_task, "admin",  STACK_ADMIN,    PRIO_ADMIN,    1);
     SPAWN(arp_monitor_task, "arpmon", STACK_ARPMON,   PRIO_ARPMON,   1);
     SPAWN(wifi_monitor_task,"wifimon",STACK_WIFIMON,  PRIO_WIFIMON,  1);
+    // Re-roam on a weak link: Wi-Fi driver calls, queues and logs, no flash
+    // (the Wi-Fi config storage is RAM), so the stack is PSRAM.
+    SPAWN_PSRAM(wifi_roam_task, "wifiroam", WIFI_ROAM_TASK_STACK, WIFI_ROAM_TASK_PRIO, 1);
 #if DISCOVERY_ENABLE
     SPAWN_PSRAM(discovery_task, "disco", DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
 #endif

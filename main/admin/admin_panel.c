@@ -9,6 +9,9 @@
 #include "api_oui.h"
 #include "api_devlog.h"
 #include "api_tasks.h"
+#include "api_crash.h"
+#include "crash.h"
+#include "wifi_roam.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -124,25 +127,51 @@ static void serve_status_json(int sock)
     alarm_info_t a;
     alarm_get(&a);
     // PSRAM, made once: the admin task serves one client at a time.
-    enum { ALARM_J = WS_ALARM_JSON_MAX, JSON_MAX = WS_ALARM_JSON_MAX + 384 };
-    static char *alarm_j, *json;
+    enum { ALARM_J = WS_ALARM_JSON_MAX, EXT_J = 512, JSON_MAX = WS_ALARM_JSON_MAX + EXT_J + 384 };
+    static char *alarm_j, *json, *ext_j;
     if (!alarm_j) alarm_j = heap_caps_malloc(ALARM_J, MALLOC_CAP_SPIRAM);
     if (!json)    json    = heap_caps_malloc(JSON_MAX, MALLOC_CAP_SPIRAM);
-    if (!alarm_j || !json) { send_404(sock); return; }
+    if (!ext_j)   ext_j   = heap_caps_malloc(EXT_J, MALLOC_CAP_SPIRAM);
+    if (!alarm_j || !json || !ext_j) { send_404(sock); return; }
     ws_format_alarm_json(&a, alarm_j, ALARM_J);
+
+    // Fork: the newest crash record (storage/crash.c) and the Wi-Fi link
+    // (wifi_roam.c), each string escaped.
+    {
+        char e1[128], e2[64];
+        int o = 0;
+        crash_summary_t c;
+        if (crash_last(&c)) {
+            json_escape_str(c.cause, e1, sizeof(e1));
+            json_escape_str(c.task, e2, sizeof(e2));
+            o = snprintf(ext_j, EXT_J,
+                ",\"last_crash\":{\"ts\":%lu,\"cause\":\"%s\",\"pc\":\"0x%08lx\",\"task\":\"%s\"}",
+                (unsigned long)c.ts, e1, (unsigned long)c.pc, e2);
+            if (o < 0 || o >= EXT_J) o = 0;
+        }
+        wifi_link_t w;
+        wifi_roam_link(&w);
+        char bssid[18] = "";
+        if (w.up) wifi_manager_format_mac(w.bssid, bssid, sizeof(bssid));
+        json_escape_str(w.ssid, e1, sizeof(e1));
+        int k = snprintf(ext_j + o, EXT_J - o,
+            ",\"wifi\":{\"ssid\":\"%s\",\"bssid\":\"%s\",\"channel\":%u,\"rssi\":%d,\"roams\":%lu}",
+            e1, bssid, (unsigned)w.channel, (int)w.rssi, (unsigned long)w.roams);
+        if (k < 0 || k >= EXT_J - o) ext_j[o] = '\0';
+    }
 
     // No serial console on the board any more: the reset reason and the
     // internal heap figures come from here instead.
     int len = snprintf(json, JSON_MAX,
         "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d,"
         "\"reset_reason\":\"%s\",\"internal_free\":%lu,\"internal_min\":%lu,"
-        "\"internal_after_boot\":%lu,\"alarm\":%s}",
+        "\"internal_after_boot\":%lu,\"alarm\":%s%s}",
         (unsigned long long)(esp_timer_get_time() / 1000000ULL),
         (unsigned long)esp_get_free_heap_size(),
         (int)rssi, notify_boot_reason(),
         (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-        (unsigned long)notify_boot_heap(), alarm_j);
+        (unsigned long)notify_boot_heap(), alarm_j, ext_j);
 
     char hdr[160];
     int hdr_len = snprintf(hdr, sizeof(hdr),
@@ -411,6 +440,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_oui_handle(sock, buf, len)) return;       // vendor database upload and status
     if (api_devlog_handle(sock, buf, len)) return;    // one device's log lines
     if (api_tasks_handle(sock, buf, len)) return;     // per-task CPU share (no console)
+    if (api_crash_handle(sock, buf, len)) return;     // crash records, debug crash
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);

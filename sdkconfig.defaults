@@ -92,3 +92,6 @@ CONFIG_CAMERA_PSRAM_DMA=y
 # GET /api/tasks: per-task CPU share and stack high-water (no serial console on the board)
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+# 802.11k/v (RRM and BTM): the AP may steer the station to a better BSS, on top
+# of wifi_manager.c's own RSSI re-roam (rm_enabled / btm_enabled in the STA config)
+CONFIG_ESP_WIFI_11KV_SUPPORT=y

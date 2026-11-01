@@ -14,6 +14,8 @@
 #   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
+#   storage/crash.c         - panic record in RTC memory, reported on the next boot
+#   wifi_roam.c             - re-roam to a stronger AP on a weak link
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
@@ -70,6 +72,9 @@ idf_component_register(
         "admin/api_devlog.c"
         "admin/api_tasks.c"
         "storage/oui.c"
+        "storage/crash.c"
+        "admin/api_crash.c"
+        "wifi_roam.c"
 
     INCLUDE_DIRS
         "."            # config.h, wifi_manager.h
@@ -134,6 +139,12 @@ idf_component_register(
 # main/config.h. -iquote dirs are searched before every -I dir, so ours wins
 # (joined form: SCons would read a separate path token as a library).
 target_compile_options(${COMPONENT_LIB} PRIVATE "-iquote${CMAKE_CURRENT_SOURCE_DIR}")
+# Crash capture (storage/crash.c): esp_system/port/panic_handler.c calls
+# esp_panic_handler() (esp_system/panic.c, a separate object), so --wrap sends
+# that one call to __wrap_esp_panic_handler, which saves a record in RTC memory
+# and calls __real_esp_panic_handler. Same mechanism as IDF's own wraps (heap,
+# lwip, cxx).
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
 # GCC 13+ (IDF 5.4) flags fake_shell.c's bounded snprintf as possible truncation;
 # the truncation is intended, keep it a warning.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=format-truncation)

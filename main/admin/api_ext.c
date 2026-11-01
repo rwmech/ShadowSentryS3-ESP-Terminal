@@ -1139,6 +1139,10 @@ static void get_codes(int sock)
 // mode) and POST /api/debug/hooks {"on":bool} (detect's IPv4 hook and ARP tap).
 static void post_debug_toggle(int sock, const char *req, int req_len, const char *key, void (*set)(bool))
 {
+    // These routes run before the dispatcher's bufs_ready(): without this, the
+    // first request after a boot being a toggle wrote the body through a NULL
+    // s_body (a StoreProhibited panic).
+    if (!bufs_ready()) { send_error(sock, "503 Service Unavailable", "out of memory"); return; }
     size_t blen = 0;
     const char *why = NULL;
     const char *status = read_body(sock, req, req_len, &blen, &why);
