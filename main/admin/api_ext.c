@@ -1033,8 +1033,8 @@ static void post_ignore(int sock, const char *req, int req_len)
 // POST /api/alarm/ack (alias /api/ack): RED -> YELLOW.
 // POST /api/alarm/resolve (alias /api/alarm/clear): RED or YELLOW -> GREEN.
 // POST /api/alarm/ignore {"scope":"error"|"device"}: ignore the incident's
-//   code from its source, or the whole source, and resolve the incident if
-//   that leaves nothing of it unignored.
+//   code from its source, or the whole source, then resolve the incident,
+//   whatever other codes it saw.
 // Each answers 200 {"alarm":{...}} (the /api/status shape) once the alarm
 // task has applied it, or after ALARM_WAIT_MS with the state as it stands;
 // 409 when there is nothing to act on. Logs and metrics are never touched.

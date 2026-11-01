@@ -24,7 +24,10 @@ extern "C" {
  *     - a SYN to a trap port (FTP, SSH, Telnet, HTTP, RTSP, Telnet 2323, SSH 2222,
  *       ADB 5555, HTTP 8080/8000/9000, the tripwire ports): one ATTACK_PROBE per
  *       source, port and minute, held 1.5 s so a scan that starts meanwhile
- *       folds it in; none while that source is scanning.
+ *       folds it in; none while that source is scanning. On the ports whose
+ *       service logs every connection (HTTP engine, ADB, tripwires) the hold
+ *       is 6 s and the service's detect_note_logged() drops it, so only a SYN
+ *       that never became a logged connection is a probe there.
  *     - arp_targets distinct who-has targets from one MAC within arp_window_s:
  *       one ATTACK_ARP_SWEEP, a summary after 60 s of quiet. The gateway and
  *       our own MAC are excluded.
@@ -51,6 +54,11 @@ typedef struct {
 void detect_init(void);
 
 void detect_get_stats(detect_stats_t *out);
+
+// A service that logs every connection it takes (HTTP engine, ADB, tripwires)
+// logged one from ip (network order) on port: drop the probe held for it, so
+// one connection is one event. Queues only; safe from any task.
+void detect_note_logged(uint32_t ip, uint16_t port);
 
 #ifdef __cplusplus
 }
