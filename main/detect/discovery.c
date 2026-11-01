@@ -12,6 +12,7 @@
 #include "discord.h"
 #include "alarm.h"
 #include "oui.h"
+#include "pihole.h"
 #include "wifi_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1549,7 +1550,12 @@ size_t discovery_devices_json(char *buf, size_t cap)
                 if (q) jraw(buf, lim, &o, ",");
                 jstr(buf, lim, &o, NULL, d->q[qi]);
             }
-            jraw(buf, lim, &o, "]}");
+            jraw(buf, lim, &o, "]");
+            if (o < lim) {      // ,"pihole":{...} when Pi-hole knows the device (main/admin/pihole.h)
+                size_t w = pihole_device_json(d->ip, d->mac_known ? d->mac : NULL, buf + o, lim - o, true);
+                o = w >= lim - o ? lim : o + w;
+            }
+            jraw(buf, lim, &o, "}");
             if (o >= lim) { o = mark; cut = true; break; }
             count++;
         }
@@ -1626,6 +1632,25 @@ int discovery_top_talkers(discovery_talker_t *out, int max)
     }
     xSemaphoreGive(s_mux);
     return n;
+}
+
+void discovery_name_hint(uint32_t ip, const uint8_t mac[6], const char *name)
+{
+    if (!S || !name || !name[0] || (!ip && !mac)) return;
+    bool mk = mac && (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]);
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    for (int i = 0; i < DISCOVERY_DEV_MAX; i++) {
+        disc_dev_t *d = &S->dev[i];
+        if (!d->used) continue;
+        if (mk && d->mac_known ? memcmp(d->mac, mac, 6) != 0 : (!ip || d->ip != ip)) continue;
+        if (d->label_score <= 1) {              // only the MAC vendor, or nothing
+            strlcpy(d->label, name, sizeof(d->label));
+            strlcpy(d->label_src, "pihole", sizeof(d->label_src));
+            d->label_score = 2;
+        }
+        break;
+    }
+    xSemaphoreGive(s_mux);
 }
 
 bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len)

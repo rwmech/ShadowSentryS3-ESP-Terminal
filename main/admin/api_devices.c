@@ -9,7 +9,8 @@
 #include <string.h>
 
 #define SEND_TIMEOUT_S  10              // a client that stops reading can't hold the admin task
-#define DEVICES_JSON_MAX (64 * 1024)    // 64 devices at about 0.9 KB each, worst case
+#define DEVICES_JSON_MAX (192 * 1024)   // 64 devices at about 0.9 KB each, plus up to about
+                                        // 2 KB of Pi-hole data each (PSRAM, per request)
 
 static bool send_all(int sock, const void *p, size_t n)
 {

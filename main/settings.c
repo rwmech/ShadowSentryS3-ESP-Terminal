@@ -46,6 +46,19 @@ _Static_assert(ATTACK_TYPE_COUNT <= 32, "alert_mask has a bit per type");
 #ifndef WHATSAPP_APIKEY
 #define WHATSAPP_APIKEY ""
 #endif
+// Pi-hole (main/admin/pihole.h): off unless an app password is configured.
+#ifndef PIHOLE_URL
+#define PIHOLE_URL "http://ph.local"
+#endif
+#ifndef PIHOLE_APP_PASSWORD
+#define PIHOLE_APP_PASSWORD ""
+#endif
+#ifndef PIHOLE_ENABLE
+#define PIHOLE_ENABLE (sizeof(PIHOLE_APP_PASSWORD) > 1 && sizeof(PIHOLE_URL) > 1)
+#endif
+_Static_assert(sizeof(PIHOLE_URL) <= 96, "PIHOLE_URL must be at most 95 characters");
+_Static_assert(sizeof(PIHOLE_APP_PASSWORD) <= 129, "PIHOLE_APP_PASSWORD must be at most 128 characters");
+_Static_assert((PIHOLE_ENABLE) == 0 || (PIHOLE_ENABLE) == 1, "PIHOLE_ENABLE must be 0 or 1");
 
 static settings_t        s_live;     // what is running now
 static settings_t        s_saved;    // what NVS holds: the next boot runs this
@@ -83,12 +96,15 @@ static void defaults(settings_t *s)
     s->admin_allow_n  = 0;
     strlcpy(s->whatsapp_phone, WHATSAPP_PHONE, sizeof(s->whatsapp_phone));
     strlcpy(s->whatsapp_apikey, WHATSAPP_APIKEY, sizeof(s->whatsapp_apikey));
+    strlcpy(s->pihole_url, PIHOLE_URL, sizeof(s->pihole_url));
+    strlcpy(s->pihole_password, PIHOLE_APP_PASSWORD, sizeof(s->pihole_password));
+    s->pihole_enabled = (PIHOLE_ENABLE) != 0;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
 {
     size_t n = len;
-    char tmp[168];                  // longest field: discord_webhook[160]
+    char tmp[168];                  // longest field: discord_webhook[160] (pihole_password 129)
     if (n > sizeof(tmp)) n = sizeof(tmp);
     if (nvs_get_str(h, key, tmp, &n) == ESP_OK) strlcpy(dst, tmp, len);
 }
@@ -160,6 +176,10 @@ void settings_init(void)
         get_allow(h, &s_live);
         get_str(h, "wa_phone", s_live.whatsapp_phone, sizeof(s_live.whatsapp_phone));
         get_str(h, "wa_key", s_live.whatsapp_apikey, sizeof(s_live.whatsapp_apikey));
+        get_str(h, "ph_url", s_live.pihole_url, sizeof(s_live.pihole_url));
+        get_str(h, "ph_pw", s_live.pihole_password, sizeof(s_live.pihole_password));
+        get_str(h, "ph_pin", s_live.pihole_tls_sha256, sizeof(s_live.pihole_tls_sha256));
+        get_bool(h, "ph_on", &s_live.pihole_enabled);
         nvs_close(h);
     }
     s_saved = s_live;
@@ -278,6 +298,46 @@ bool settings_whatsapp_enabled(void)
     return wa_ok(&s_live);
 }
 
+bool settings_pihole_url_parse(const char *u, bool *https, char *host, size_t host_cap, uint16_t *port)
+{
+    bool tls;
+    if (!strncmp(u, "http://", 7))       { tls = false; u += 7; }
+    else if (!strncmp(u, "https://", 8)) { tls = true;  u += 8; }
+    else return false;
+    size_t n = strspn(u, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-");
+    if (n == 0 || n > 63 || u[0] == '.' || u[0] == '-' || u[n - 1] == '.' || u[n - 1] == '-') return false;
+    for (size_t i = 1; i < n; i++) if (u[i] == '.' && u[i - 1] == '.') return false;
+    const char *h = u;
+    u += n;
+    unsigned long p = tls ? 443 : 80;
+    if (*u == ':') {
+        u++;
+        size_t d = strspn(u, "0123456789");
+        if (d == 0 || d > 5) return false;
+        p = strtoul(u, NULL, 10);
+        if (p == 0 || p > 65535) return false;
+        u += d;
+    }
+    if (*u == '/') u++;
+    if (*u) return false;                       // a path, query or anything else
+    if (https) *https = tls;
+    if (port) *port = (uint16_t)p;
+    if (host) {
+        if (host_cap <= n) return false;
+        memcpy(host, h, n);
+        host[n] = '\0';
+    }
+    return true;
+}
+
+static bool pihole_ok(const settings_t *s)
+{
+    return s->pihole_enabled && s->pihole_password[0] &&
+           settings_pihole_url_parse(s->pihole_url, NULL, NULL, 0, NULL);
+}
+
+bool settings_pihole_enabled(void) { return pihole_ok(&s_live); }
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -324,6 +384,16 @@ static const char *validate(const settings_t *s)
         return "WhatsApp phone: + and 7-15 digits, country code first, no spaces";
     if (!alnum_ok(s->whatsapp_apikey, ""))
                                        return "WhatsApp apikey: letters and digits only";
+    if (s->pihole_url[0] && !settings_pihole_url_parse(s->pihole_url, NULL, NULL, 0, NULL))
+        return "Pi-hole URL must be http://host or https://host, optionally :port, no path";
+    // Printable ASCII without spaces: v6 app passwords are base64 (+ / =).
+    if (!chars_ok(s->pihole_password, 0x21, 0x7e))
+                                       return "Pi-hole password must be printable ASCII, no spaces";
+    if (s->pihole_tls_sha256[0] &&
+        (strlen(s->pihole_tls_sha256) != 64 || strspn(s->pihole_tls_sha256, "0123456789abcdef") != 64))
+        return "Pi-hole certificate SHA-256 must be 64 hex digits";
+    if (s->pihole_enabled && (!s->pihole_url[0] || !s->pihole_password[0]))
+        return "Pi-hole needs a URL and an app password before it can be turned on";
     return NULL;
 }
 
@@ -359,6 +429,10 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     else nvs_erase_key(h, "admin_allow");
     SET(nvs_set_str(h, "wa_phone",   s->whatsapp_phone));
     SET(nvs_set_str(h, "wa_key",     s->whatsapp_apikey));
+    SET(nvs_set_str(h, "ph_url",     s->pihole_url));
+    SET(nvs_set_str(h, "ph_pw",      s->pihole_password));
+    SET(nvs_set_str(h, "ph_pin",     s->pihole_tls_sha256));
+    SET(nvs_set_u8(h,  "ph_on",      s->pihole_enabled));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.

@@ -25,7 +25,7 @@
 // WS httpd reserves is an lwIP socket taken from the shared pool that the 6
 // honeypot listeners + admin panel + Telegram/GeoIP clients also draw on.
 #ifndef ADMIN_WS_MAX_CLIENTS
-#define ADMIN_WS_MAX_CLIENTS  3
+#define ADMIN_WS_MAX_CLIENTS  2     // fork: was 3; the socket budget in CLAUDE.md
 #endif
 
 // Start the WebSocket push server and hook it into the log store and the alarm.

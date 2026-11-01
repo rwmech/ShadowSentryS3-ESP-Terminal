@@ -42,7 +42,7 @@ window.ssAnalysis=(function(){
   const DV_SAY=[[/MediaRenderer/i,'a DLNA media renderer'],[/MediaServer/i,'a DLNA media server'],[/dial/i,'a DIAL cast target'],
     [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
   const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
-    dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname'};
+    dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname',pihole:'Pi-hole\'s name for it'};
   const DV_CHATTY=360;      // packets an hour, all protocols: more than one every 10 s
   const DV_MIN_SPAN=600;    // seconds seen before a rate means anything
   function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}

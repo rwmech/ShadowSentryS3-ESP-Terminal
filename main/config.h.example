@@ -101,6 +101,32 @@
 #define WHATSAPP_PHONE              ""
 #define WHATSAPP_APIKEY             ""
 
+// ── Pi-hole (optional, read only) ────────────────────────────────────────────
+//
+// With a Pi-hole v6 on the LAN, the board reads what it knows about each
+// device (names, query and blocked counts, top domains) into the Devices tab.
+// Nothing is changed on the Pi-hole. Leave PIHOLE_APP_PASSWORD "" if you have
+// no Pi-hole: the feature stays off, with no task and no traffic.
+//
+// PIHOLE_URL is the base URL, without /admin: "http://ph.local",
+// "http://192.168.0.2" or "https://pi.hole" (https also needs the
+// certificate's SHA-256 in the dashboard's Settings, since Pi-hole's own
+// certificate is self-signed).
+//
+// PIHOLE_APP_PASSWORD is a secret. Create one in the Pi-hole web interface:
+// Settings, Web interface / API, switch to Expert, "Configure app password",
+// copy the password shown, then Enable new app password. An app password
+// can read everything but cannot change Pi-hole's configuration. Over http://
+// it crosses the LAN in the clear.
+//
+// The dashboard's Settings page can set, change or clear both at run time
+// (that overrides these). Pi-hole turns on by default when both are set;
+// define PIHOLE_ENABLE 0 to keep it off until it is switched on there.
+
+#define PIHOLE_URL                  "http://ph.local"
+#define PIHOLE_APP_PASSWORD         ""
+// #define PIHOLE_ENABLE            0
+
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
 // Dashboard is accessible at http://<device-ip>:ADMIN_PORT
@@ -329,6 +355,10 @@ _Static_assert(sizeof(WHATSAPP_PHONE) <= 17,
     "WHATSAPP_PHONE must be at most 16 characters (+ and up to 15 digits)");
 _Static_assert(sizeof(WHATSAPP_APIKEY) <= 33,
     "WHATSAPP_APIKEY must be at most 32 characters");
+_Static_assert(sizeof(PIHOLE_URL) <= 96,
+    "PIHOLE_URL must be at most 95 characters");
+_Static_assert(sizeof(PIHOLE_APP_PASSWORD) <= 129,
+    "PIHOLE_APP_PASSWORD must be at most 128 characters");
 
 _Static_assert(LOG_RING_SIZE >= 10 && LOG_RING_SIZE <= 500,
     "LOG_RING_SIZE must be 10–500  (500 entries ≈ 117 KB RAM)");

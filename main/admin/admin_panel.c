@@ -13,6 +13,7 @@
 #include "crash.h"
 #include "wifi_roam.h"
 #include "web_assets.h"
+#include "api_pihole.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -460,6 +461,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_devlog_handle(sock, buf, len)) return;    // one device's log lines
     if (api_tasks_handle(sock, buf, len)) return;     // per-task CPU share (no console)
     if (api_crash_handle(sock, buf, len)) return;     // crash records, debug crash
+    if (api_pihole_handle(sock, buf, len)) return;    // Pi-hole status, test, refresh, device
     if (web_assets_handle(sock, buf, len)) return;    // device page, analysis.js (gzip)
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {

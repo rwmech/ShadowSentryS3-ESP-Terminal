@@ -461,6 +461,12 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .dv-tools{margin-top:14px}
 .ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.cond{padding-left:16px;padding-right:16px}}
+/* Pi-hole (optional): a collapsed Settings section, hidden Devices columns */
+.ph-box{grid-column:1/-1;margin-top:12px}
+.ph-box>summary{cursor:pointer;font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--g)}
+.ph-box>summary span{text-transform:none;letter-spacing:0;color:var(--muted)}
+.ph-box>.form{margin-top:10px}
+.ph-top{font-size:14px;margin:2px 0;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -797,7 +803,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     </div>
     <div class="note" id="dv-note"></div>
     <div class="tbl-wrap"><table>
-      <thead><tr><th>Label</th><th>IP</th><th>MAC / Vendor</th><th>Protocols (packets)</th><th>Last seen</th><th>Last queries</th></tr></thead>
+      <thead><tr><th>Label</th><th>IP</th><th>MAC / Vendor</th><th>Protocols (packets)</th><th>Last seen</th><th>Last queries</th><th class="c-ph" hidden>Pi-hole name</th><th class="c-ph" hidden>DNS queries (24 h)</th></tr></thead>
       <tbody id="dv-body"></tbody>
     </table></div>
   </div>
@@ -834,6 +840,17 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <div class="hint" id="st-wa-hint"></div>
       <div></div>
       <div class="ctl"><button class="btn" type="button" id="st-watest" onclick="testWhatsApp()">Send test</button><span id="st-wares" class="muted"></span></div>
+      <details class="ph-box" id="st-ph"><summary>Pi-hole (optional, applies at once): <span id="st-ph-sum">off</span></summary>
+      <div class="form">
+      <label for="st-phon">Read device data from Pi-hole</label><input type="checkbox" id="st-phon">
+      <label for="st-phurl">Pi-hole URL</label><input id="st-phurl" maxlength="95" autocomplete="off" spellcheck="false" placeholder="http://ph.local">
+      <label for="st-phpw">App password</label><input type="password" id="st-phpw" maxlength="128" autocomplete="off" spellcheck="false">
+      <label for="st-phclr">Clear password (turn Pi-hole off)</label><input type="checkbox" id="st-phclr" onchange="$('st-phpw').disabled=this.checked">
+      <label for="st-phpin">Certificate SHA-256 (https only)</label><input id="st-phpin" maxlength="111" autocomplete="off" spellcheck="false">
+      <div class="hint" id="st-ph-hint"></div>
+      <div></div>
+      <div class="ctl"><button class="btn" type="button" id="st-phtest" onclick="testPihole()">Test connection</button><span id="st-phres" class="muted"></span></div>
+      </div></details>
       <h4>Time</h4>
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
@@ -1427,6 +1444,7 @@ setInterval(()=>{if(!$('page-devices').hidden)loadDevices();},10000);
 // ── Devices (LAN discovery, GET /api/devices) ──
 // Every string here came off the LAN: textContent only (el/td), never innerHTML.
 const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
+let _dvCols=6;     // 8 with the Pi-hole columns
 async function loadDevices(){
   let d;
   if(!$('dv-body').querySelector('tr.dv-row'))boxRow($('dv-body'),6,spinner('Loading the devices...'));
@@ -1439,6 +1457,10 @@ async function loadDevices(){
     (d.packets||0)+' packets'+(d.events_held?', '+d.events_held+' events held':'')+(d.sd_dropped?', '+d.sd_dropped+' log lines rate-limited':'')+'.';
   $('dv-count').textContent=(d.count||0)+' of '+(d.max||64)+(d.truncated?' (list cut)':'');
   const tb=$('dv-body'),devs=d.devices||[];
+  // Pi-hole columns only when Pi-hole is on and knows a device (the object is absent otherwise).
+  const ph=devs.some(x=>x.pihole&&typeof x.pihole==='object');
+  document.querySelectorAll('#page-devices th.c-ph').forEach(h=>h.hidden=!ph);
+  _dvCols=ph?8:6;
   if(!devs.length){emptyRow(tb,6,'No devices yet');return;}
   tb.replaceChildren(...devs.flatMap(x=>{
     const tr=el('tr','dv-row'),lab=td(x.label||'unknown');
@@ -1453,7 +1475,37 @@ async function loadDevices(){
     last.title=x.last_ts?'last '+fmt(x.last_ts)+(x.first_ts?', first '+fmt(x.first_ts):''):'first seen '+ago(x.first_ago_s);
     const q=td((x.queries||[]).join('\n'),'dev-q');
     tr.append(lab,td(x.ip||'','td-ip'),mac,td(pr+' ('+(x.total||0)+')'),last,q);
+    if(ph){
+      const p=x.pihole&&typeof x.pihole==='object'?x.pihole:null,nm=p&&Array.isArray(p.names)?p.names.map(S):[];
+      const qc=td(p&&p.queries!=null?String(p.queries):'');
+      if(p&&p.blocked)qc.append(el('div','dev-sub',p.blocked+' blocked'));
+      tr.append(td(nm.join('\n'),'dev-q'),qc);
+    }
     return dvRows(tr,x);}));
+}
+// Pi-hole's view of the device, in the analysis row (absent when Pi-hole is off).
+function dvPihole(x){
+  const p=x.pihole;
+  if(!p||typeof p!=='object')return null;
+  const box=el('div','an'),s=el('div');box.append(s);
+  s.append(el('h5','','Pi-hole'));
+  const line=t=>s.append(el('div','ph-top',t));
+  const nm=Array.isArray(p.names)?p.names.map(S).filter(Boolean):[];
+  if(nm.length)line('Names: '+nm.join(', '));
+  if(Array.isArray(p.ips)&&p.ips.length)line('Addresses: '+p.ips.map(S).join(', '));
+  if(p.vendor)line('Vendor (Pi-hole): '+S(p.vendor));
+  if(p.queries!=null)line('DNS queries, last 24 h: '+p.queries+(p.blocked!=null?', '+p.blocked+' blocked':''));
+  if(p.all_queries)line('All-time queries: '+p.all_queries);
+  if(p.first)line('First seen by Pi-hole: '+fmt(p.first));
+  if(p.last)line('Last query: '+fmt(p.last));
+  if(Array.isArray(p.top_domains)){
+    const t=el('div');t.append(el('div','ph-top','Top domains of its last '+(p.top_of||0)+' queries:'));
+    if(!p.top_domains.length)t.append(el('div','dev-sub','none'));
+    p.top_domains.forEach(e=>t.append(el('div','ph-top',S(e&&e.d)+'  x'+(e&&e.n||0))));
+    s.append(t);
+  }
+  if(p.as_of)s.append(el('div','dev-sub','as of '+fmt(p.as_of)));
+  return box;
 }
 // ── Device analysis (Devices tab, click a row) ──
 // The rules are in main/analysis.js (GET /analysis.js), shared with the device page.
@@ -1467,7 +1519,9 @@ const _dvOpen=new Set();
 function dvRows(tr,x){
   const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
   const ab=dvAnalysis(x);
-  c.colSpan=6;c.append(ab,dvAlerts(x),dvTools(x,ab._ai));an.append(c);
+  c.colSpan=_dvCols;c.append(ab);
+  const pb=dvPihole(x);if(pb)c.append(pb);
+  c.append(dvAlerts(x),dvTools(x,ab._ai));an.append(c);
   const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
   set(_dvOpen.has(k));
   tr.title='Click for the analysis';
@@ -1782,6 +1836,10 @@ async function loadSettings(){
     $('st-wakey').placeholder=s.whatsapp_apikey_set?'set; blank = unchanged':'not set';
     $('st-wa-hint').textContent='WhatsApp is '+(s.whatsapp_enabled?'on':'off')+
       '. Boot and incident messages (opened, acknowledged, closed) go to this number, at most 20 an hour and 10 s apart; the event log does not. Get the apikey from callmebot.com (free, personal use, your own number only). Send test uses the saved settings: save first. WhatsApp starts at boot: after setting it up for the first time, save and reboot.';
+    $('st-phurl').value=s.pihole_url||'';$('st-phpin').value=s.pihole_tls_sha256||'';
+    $('st-phon').checked=!!s.pihole_enabled;$('st-phclr').checked=false;$('st-phpw').disabled=false;$('st-phpw').value='';
+    $('st-phpw').placeholder=s.pihole_password_set?'set; blank = unchanged':'not set';
+    loadPiholeStatus(!!s.pihole_active);
     $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
     $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
     $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
@@ -1827,6 +1885,12 @@ async function saveSettings(ev){
   body.whatsapp_phone=$('st-waph').value.replace(/\s+/g,'');
   if($('st-waclr').checked)body.whatsapp_apikey_clear=true;
   else if($('st-wakey').value.trim())body.whatsapp_apikey=$('st-wakey').value.trim();
+  body.pihole_url=$('st-phurl').value.trim();body.pihole_tls_sha256=$('st-phpin').value.trim();
+  body.pihole_enabled=$('st-phon').checked;
+  if($('st-phclr').checked){body.pihole_password_clear=true;body.pihole_enabled=false;}
+  else if($('st-phpw').value.trim())body.pihole_password=$('st-phpw').value.trim();
+  if(body.pihole_enabled&&/^https:/i.test(body.pihole_url)&&!body.pihole_tls_sha256)
+    return showMsg('err','Pi-hole over https needs the certificate SHA-256 (Test connection shows the server\'s), or use http://.');
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
     let d={};try{d=await r.json();}catch{}
@@ -1966,6 +2030,46 @@ async function testWhatsApp(){
       if(Date.now()-t0<90000)setTimeout(poll,2000);else{res.textContent='No result after 90 s.';b.disabled=false;}
     };
     setTimeout(poll,2000);
+  }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
+}
+// ── Pi-hole (optional; GET /api/pihole/status, POST /api/pihole/test) ──
+async function loadPiholeStatus(active){
+  const sum=$('st-ph-sum'),hint=$('st-ph-hint');
+  let s={enabled:false};
+  try{const r=await fetch('/api/pihole/status',{cache:'no-store'});if(r.ok)s=await r.json();}catch{}
+  const base='Optional. With a Pi-hole v6 on the LAN, the Devices tab gains its names, DNS query and blocked counts and top domains; nothing is changed on the Pi-hole. '+
+    'Create an app password in Pi-hole (Settings, Web interface / API, Expert, Configure app password) and paste it here. '+
+    'Over http:// it crosses the LAN in the clear. Test connection uses the saved settings: save first.';
+  if(!s.enabled&&!s.running){sum.textContent=active?'on':'off';hint.textContent=base;return;}
+  const st=String(s.state||''),ago=s.last_ok_ago_s>=0?' '+dur(s.last_ok_ago_s)+' ago':'';
+  sum.textContent=!s.enabled?'off':st==='ok'?'on, '+(s.devices||0)+' devices'+(ago?', synced'+ago:''):
+    st==='error'||st==='v5'?'on, error':'on, starting';
+  let t=base+' Status: '+(s.enabled?st||'?':'off');
+  if(s.version)t+=', '+S(s.version);
+  if(s.ip)t+=', '+S(s.host)+' at '+S(s.ip);
+  if(s.last_ok_ts)t+=', last good sync '+fmt(s.last_ok_ts);
+  if(s.error)t+='. Error: '+S(s.error);
+  if(s.enabled&&s.next_in_s)t+='. Next try in '+dur(s.next_in_s);
+  hint.textContent=t+'.';
+}
+async function testPihole(){
+  const res=$('st-phres'),b=$('st-phtest');
+  res.textContent='Testing...';b.disabled=true;
+  try{
+    const r=await fetch('/api/pihole/test',POSTH);let d={};try{d=await r.json();}catch{}
+    if(!r.ok){res.textContent=String(d.error||('Failed ('+r.status+')'));b.disabled=false;return;}
+    const want=d.test,t0=Date.now();
+    const poll=async()=>{
+      try{
+        const s=await(await fetch('/api/pihole/status',{cache:'no-store'})).json();
+        if(s.test_done>=want){
+          res.textContent=(s.test_ok?'OK. ':'Failed'+(s.test_status>0?' (HTTP '+s.test_status+')':'')+': ')+S(s.test_msg);
+          b.disabled=false;loadPiholeStatus(!!s.enabled);return;
+        }
+      }catch{}
+      if(Date.now()-t0<60000)setTimeout(poll,1500);else{res.textContent='No result after 60 s.';b.disabled=false;}
+    };
+    setTimeout(poll,1500);
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
 async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}

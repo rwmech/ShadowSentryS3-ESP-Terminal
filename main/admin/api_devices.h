@@ -10,7 +10,9 @@
  *                       "packets","error"}],"mdns","devices":[{"mac","random_mac",
  *                       "vendor","ip","label","label_src","host","protos":{key:count},
  *                       "total","first_ts","last_ts","first_ago_s","last_ago_s",
- *                       "queries":[newest first]}],"count","truncated"}
+ *                       "queries":[newest first],"pihole":{...}}],"count","truncated"}
+ *                       "pihole" only when Pi-hole is on and knows the device
+ *                       (main/admin/api_pihole.h has its fields)
  *
  * A query string is ignored. Returns true when the request was this route and
  * has been answered.

@@ -18,6 +18,7 @@
 #   wifi_roam.c             - re-roam to a stronger AP on a weak link
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
+#   admin/pihole.c          - optional Pi-hole v6 client, read only (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
 #
 # EMBED_TXTFILES "index.html"
@@ -91,6 +92,8 @@ idf_component_register(
         "admin/api_devlog.c"
         "admin/web_assets.c"
         "admin/api_tasks.c"
+        "admin/pihole.c"
+        "admin/api_pihole.c"
         "storage/oui.c"
         "storage/crash.c"
         "admin/api_crash.c"

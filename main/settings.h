@@ -15,7 +15,8 @@ extern "C" {
  * the others) and survives OTA updates.
  *
  * Applied immediately: admin password, timezone, alarm timings, sounds,
- * brightness, Discord, WhatsApp. Applied after a reboot: Wi-Fi, Telegram.
+ * brightness, Discord, WhatsApp, Pi-hole. Applied after a reboot: Wi-Fi,
+ * Telegram.
  *
  * Wi-Fi safety net: if saved Wi-Fi credentials don't get an IP within
  * SETTINGS_WIFI_FALLBACK_S at boot, the saved Wi-Fi keys are erased and the
@@ -51,6 +52,11 @@ typedef struct {
     uint8_t  admin_allow_n;         // ports from anyone else are dropped. 0 = open to all
     char     whatsapp_phone[20];    // CallMeBot: "" = off, else +<country code><number>
     char     whatsapp_apikey[33];   // secret: CallMeBot apikey, letters and digits
+    // Pi-hole v6, read only (main/admin/pihole.h). Applied immediately.
+    char     pihole_url[96];        // "" or http(s)://host[:port], no path ("/admin" is stripped)
+    char     pihole_password[129];  // secret: an app password, printable ASCII, no spaces
+    char     pihole_tls_sha256[65]; // https only: the certificate's SHA-256, 64 lowercase hex digits
+    bool     pihole_enabled;        // needs a URL and a password
 } settings_t;
 
 // Load defaults, then NVS overrides. Call once, after nvs_flash_init().
@@ -88,6 +94,14 @@ bool settings_discord_enabled(void);
 
 // WhatsApp (CallMeBot) is configured: a phone number and an apikey.
 bool settings_whatsapp_enabled(void);
+
+// Pi-hole is switched on, with a well-formed URL and a password.
+bool settings_pihole_enabled(void);
+
+// Split a Pi-hole URL: http:// or https://, a host (letters, digits, '.' and
+// '-', at most 63), an optional :port (1-65535), an optional trailing '/' and
+// nothing else. False if it is not of that form. host may be NULL.
+bool settings_pihole_url_parse(const char *u, bool *https, char *host, size_t host_cap, uint16_t *port);
 
 // Register a callback run after every successful save (e.g. apply brightness).
 void settings_on_change(void (*cb)(void));
