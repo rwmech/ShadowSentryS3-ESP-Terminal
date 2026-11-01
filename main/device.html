@@ -98,6 +98,14 @@ progress{width:220px}
 .loading{color:var(--muted);font-size:14px;padding:6px 0}
 .loading.err{color:var(--red)}
 .loading .btn{margin-left:10px}
+/* Pi-hole and router sections (devpage) */
+.flags{display:flex;flex-direction:column;gap:10px;padding-left:0;list-style:none}
+.flags li{display:flex;gap:12px;align-items:baseline}
+.flags .fx{font-size:13px;color:var(--muted);margin-top:2px}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.sub{display:block;font-size:13px;color:var(--muted)}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.card h4{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--g);margin-top:6px}
 </style>
 </head>
 <body>
@@ -117,6 +125,22 @@ progress{width:220px}
     <div class="kv" id="id-kv"></div>
   </div>
   <div class="card"><div class="card-title">Analysis</div><div id="an"><div class="loading"><span class="spin"></span>Loading the device table...</div></div></div>
+  <div class="card" id="rt-card">
+    <div class="ctl" style="justify-content:space-between">
+      <div class="card-title">Router: what it is sending out</div>
+      <div class="ctl"><button class="btn" type="button" id="rt-ref" hidden>Refresh</button></div>
+    </div>
+    <div class="msg" id="rt-msg"></div>
+    <div id="rt-body"><div class="loading"><span class="spin"></span>Asking the board for the router's view...</div></div>
+  </div>
+  <div class="card" id="ph-card">
+    <div class="ctl" style="justify-content:space-between">
+      <div class="card-title">Pi-hole: what it looks up</div>
+      <div class="ctl"><button class="btn" type="button" id="ph-ref" hidden>Refresh from Pi-hole</button></div>
+    </div>
+    <div class="msg" id="ph-msg"></div>
+    <div id="ph-body"><div class="loading"><span class="spin"></span>Asking the board for Pi-hole's view...</div></div>
+  </div>
   <div class="card">
     <div class="card-title">Issue summary</div>
     <div class="tsub" id="sum-note"><span class="spin"></span>Loading the log...</div>
@@ -291,6 +315,228 @@ function ignToggle(code){
   cb.onchange=()=>toggleIgnore(code,!cb.checked,cb);
   l.append(cb,el('span','tsub',code&&all?'covered by "all"':on?'ignored':'alerting'));
   return l;
+}
+
+// ── Shared by the Pi-hole and router sections ──
+const IP_RE=/^\d{1,3}(\.\d{1,3}){3}$/;
+const devIp=()=>DEV.ip||(_dev&&IP_RE.test(S(_dev.ip))?S(_dev.ip):'');
+const devMac=()=>DEV.mac||(_dev&&isMac(_dev.mac)?S(_dev.mac).toLowerCase():'');
+function devQ(){const q=new URLSearchParams(),m=devMac(),i=devIp();if(m)q.set('mac',m);if(i)q.set('ip',i);return q.toString();}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const arr=a=>Array.isArray(a)?a.map(S).filter(Boolean):[];
+const obj=o=>o&&typeof o==='object'&&!Array.isArray(o)?o:null;
+function bytes(n){n=+n||0;
+  return n<1024?n+' B':n<1048576?(n/1024).toFixed(n<10240?1:0)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';}
+function kvBox(rows){const d=el('div','kv');d.append(...rows.flatMap(([k,v])=>[el('div','k',k),el('div','v',v)]));return d;}
+// GET a JSON route: null on 404 (older firmware without it), else the object; throws with the reason.
+async function getJson(url){
+  const r=await fetch(url,{cache:'no-store'});
+  if(r.status===404)return null;
+  let d=null;try{d=await r.json();}catch{}
+  if(!r.ok)throw new Error(S(d&&d.error)||'HTTP '+r.status);
+  if(!obj(d))throw new Error('unreadable reply');
+  return d;
+}
+
+// ── Pi-hole: GET /api/pihole/device, POST /api/pihole/refresh ──
+// {"enabled":false} hides the section; {"enabled":true,"found":false} says so;
+// else "pihole" holds names, ips, vendor, first, last, all_queries, queries and
+// blocked (Pi-hole's 24 h window), top_domains [{d,n}] over its last top_of queries.
+let _ph=null;
+async function loadPihole(){
+  $('ph-body').replaceChildren(spinner('Asking the board for Pi-hole\'s view...'));
+  let d;
+  try{d=await getJson('/api/pihole/device?'+devQ());}
+  catch(e){$('ph-body').replaceChildren(failBox('Pi-hole data unavailable: '+e.message,loadPihole));return;}
+  renderPihole(d);
+}
+function renderPihole(d){
+  if(!d||d.enabled!==true){$('ph-card').hidden=true;_ph=null;return;}
+  $('ph-card').hidden=false;$('ph-ref').hidden=!devIp();
+  const p=d.found===true?obj(d.pihole):null;_ph=p;
+  if(!p){$('ph-body').replaceChildren(el('div','muted','Pi-hole does not know this device.'+(devIp()?' Refresh from Pi-hole asks it again.':'')));return;}
+  const q=p.queries!=null?+p.queries:null,b=p.blocked!=null?+p.blocked:null;
+  const rows=[['Names',arr(p.names).join(', ')||'-'],['Addresses',arr(p.ips).join(', ')||'-'],['Vendor (Pi-hole)',S(p.vendor)||'-'],
+    ['Lookups, last 24 h',q==null?'not counted yet':q+(b!=null?', '+b+' blocked'+(q>0?' ('+Math.round(b*100/q)+' %)':''):'')],
+    ['All-time lookups',p.all_queries?S(p.all_queries):'-'],['First seen by Pi-hole',fmt(+p.first)],['Last lookup',fmt(+p.last)],
+    ['Pi-hole data as of',fmt(+p.as_of)]];
+  const out=[el('div','tsub','The names this device asked your Pi-hole to look up. "Blocked" are lookups Pi-hole refused (ads, trackers, block lists). A device can skip Pi-hole by using another DNS server; the router section shows that.'),kvBox(rows)];
+  if(Array.isArray(p.top_domains)){
+    const td=p.top_domains.map(obj).filter(Boolean);
+    out.push(el('h4','','Top domains of its last '+(+p.top_of||0)+' lookups'+(p.top_ts?', counted '+fmt(+p.top_ts):'')));
+    if(!td.length)out.push(el('div','muted','None'));
+    else{
+      const t=el('table'),hd=el('thead'),hr=el('tr'),tb=el('tbody');
+      hr.append(el('th','','Domain'),el('th','','Lookups'));hd.append(hr);
+      td.forEach(e=>{const tr=el('tr');tr.append(el('td','mono',S(e.d)),el('td','num',+e.n||0));tb.append(tr);});
+      t.append(hd,tb);const w=el('div','tbl-wrap');w.append(t);out.push(w);
+    }
+  }else out.push(el('div','muted','Pi-hole has not been asked for this device\'s lookups yet.'+(devIp()?' Refresh from Pi-hole asks it now.':'')));
+  $('ph-body').replaceChildren(...out);
+}
+const phStamp=p=>p?(+p.as_of||0)+':'+(+p.top_ts||0):'';
+async function phRefresh(){
+  const ip=devIp(),b=$('ph-ref'),m=$('ph-msg');
+  if(!ip||b.disabled)return;
+  b.disabled=true;m.textContent='Asking Pi-hole...';
+  const before=phStamp(_ph);
+  let r,d={};
+  try{r=await fetch('/api/pihole/refresh?ip='+encodeURIComponent(ip),{method:'POST',headers:{'X-ShadowSentry':'1'}});try{d=await r.json();}catch{}}
+  catch(e){m.textContent='Refresh failed: '+e.message;b.disabled=false;return;}
+  if(r.status===429){const s=Math.max(1,Math.min(600,+d.retry_after_s||30));
+    m.textContent='Pi-hole was asked a moment ago; it can be asked again in '+s+' s.';setTimeout(()=>{b.disabled=false;},s*1000);return;}
+  if(r.status===409){m.textContent='Pi-hole is switched off in Settings.';b.disabled=false;return;}
+  if(!r.ok){m.textContent='Refresh failed: '+(S(d.error)||'HTTP '+r.status);b.disabled=false;return;}
+  m.textContent='Pi-hole is being asked; the numbers update in a few seconds...';
+  for(let i=0;i<6;i++){
+    await sleep(3000);
+    let x;try{x=await getJson('/api/pihole/device?'+devQ());}catch{continue;}
+    const p=x&&x.enabled===true&&x.found===true?obj(x.pihole):null;
+    if(!x||x.enabled!==true||phStamp(p)!==before){renderPihole(x);m.textContent=x&&x.enabled===true?'Updated from Pi-hole.':'';b.disabled=false;return;}
+  }
+  m.textContent='No new data from Pi-hole yet: it may be slow or unreachable (see Settings, Pi-hole). Try again in a minute.';
+  b.disabled=false;
+}
+
+// ── Router: GET /api/device/intel (main/admin/api_mikrotik.c, main/detect/correlate.c) ──
+// mikrotik.identity (port or AP, SSID, signal, DHCP), mikrotik.conn (a snapshot of
+// the router's connection table: dst[] busiest first), flags [{key,reason}].
+// conn.pending: the board is asking the router now; ask again in about 3 s.
+// Rows may carry a "source" (the feed they came from); it gets a column.
+let _intel=null,_rtTries=0,_rtLan=false;
+const RT_TRIES=5;
+const MT_STATE={off:'off',starting:'starting up',ok:'answering',unreachable:'unreachable',auth_failed:'refusing the login',
+  cert_mismatch:'presenting a different certificate',http_error:'answering with an error'};
+const NAME_SRC={pihole:'Pi-hole',router_dns:'the router\'s DNS cache'};
+const SRC_NAME={conntrack:'connection table',ipfix:'flow records'};
+// Flag keys from correlate.c, worst first (r), with a short label (t) and what it means (x).
+const FLAG_INFO={
+  blocked_contact:{r:0,t:'Reached a blocked name',x:'Pi-hole blocks this name (ads, tracking or a known-bad site), yet the device reached it, so it looked it up some other way or has the address built in.'},
+  beaconing:{r:1,t:'Regular check-ins',x:'New connections to the same server at a steady interval with little data each time. Malware takes its orders like this; so do many apps checking for updates or messages. Who owns the address is the tell.'},
+  upload:{r:2,t:'Sends much more than it gets',x:'Large uploads to an outside server. Cameras, backups and cloud sync do this; so does data theft.'},
+  unusual_port:{r:3,t:'Unusual port',x:'Telnet, IRC, SMB, ADB and similar ports to the internet are rarely normal for a home device and are common in botnets.'},
+  dns_bypass:{r:4,t:'Skips Pi-hole for DNS',x:'It looks names up somewhere other than your Pi-hole, so Pi-hole can neither see nor block those lookups.'},
+  doh:{r:5,t:'Encrypted DNS',x:'DNS over HTTPS or TLS to a public resolver. Browsers and phones do this for privacy; it also hides the lookups from Pi-hole.'},
+  direct_ip:{r:6,t:'No DNS name',x:'It talks to outside addresses it never looked up. Addresses built into the firmware are common in IoT gear, and in malware.'},
+  fanout:{r:7,t:'Many outside hosts',x:'Talking to many internet hosts at once: normal for a browser, a console or a torrent client, odd for a plug or a camera.'}};
+const flagInfo=k=>FLAG_INFO[k]||{r:9,t:S(k).replace(/_/g,' '),x:''};
+const flagCls=r=>'tier-chip '+(r<=3?'tier-alert':r<=6?'tier-probe':'tier-info');
+const flagChip=k=>{const f=flagInfo(k);return el('span',flagCls(f.r),f.t);};
+function sortedFlags(d){return(Array.isArray(d&&d.flags)?d.flags:[]).map(obj).filter(Boolean).sort((a,b)=>flagInfo(a.key).r-flagInfo(b.key).r);}
+const dstTotal=t=>(+t.bytes_out||0)+(+t.bytes_in||0);
+function dstList(cn){return(Array.isArray(cn.dst)?cn.dst:[]).map(obj).filter(Boolean).sort((a,b)=>dstTotal(b)-dstTotal(a)||(+b.conns||0)-(+a.conns||0));}
+const protoOf=t=>S(t.proto)||(t.proto_num?'proto '+S(t.proto_num):'');
+const portText=t=>(+t.port?'port '+(+t.port)+' ':'')+protoOf(t);
+function owner(t){
+  const asn=(/^AS\d+/.exec(S(t.asn))||[''])[0];
+  return[S(t.org),asn?'('+asn+')':'',S(t.cc)].filter(Boolean).join(' ');
+}
+const beaconText=b=>obj(b)&&+b.every_s?'every '+(+b.every_s)+' s, '+(+b.times||0)+' times':'';
+function connectedBy(id){
+  if(id.wifi)return'Wi-Fi'+(id.ap?', access point '+S(id.ap):'');
+  if(id.port)return'Cable, switch port '+S(id.port)+(id.bridge?' on '+S(id.bridge):'');
+  if(id.arp_interface)return'Seen on the router\'s '+S(id.arp_interface)+' interface';
+  return'not known';
+}
+const sigWord=s=>s>=-60?'strong':s>=-70?'good':s>=-80?'fair':'weak';
+async function loadIntel(auto){
+  const b=$('rt-ref'),m=$('rt-msg');
+  if(!auto){_rtTries=0;if(!_intel)$('rt-body').replaceChildren(spinner('Asking the board for the router\'s view...'));}
+  b.disabled=true;
+  let d;
+  try{d=await getJson('/api/device/intel?'+devQ());}
+  catch(e){
+    if(_intel)m.textContent='Could not refresh: '+e.message;
+    else $('rt-body').replaceChildren(failBox('Router data unavailable: '+e.message,()=>loadIntel()));
+    b.disabled=false;return;
+  }
+  if(!d){$('rt-card').hidden=true;_intel=null;return;}       // firmware without the route
+  _intel=d;m.textContent='';renderIntel(d);
+  const cn=obj(obj(d.mikrotik)&&d.mikrotik.conn)||{};
+  if(cn.pending===true&&_rtTries<RT_TRIES){_rtTries++;setTimeout(()=>loadIntel(true),3000);return;}
+  if(cn.pending===true)m.textContent='The router has not answered yet; Refresh asks again.';
+  b.disabled=false;
+}
+function renderIntel(d){
+  const mt=obj(d.mikrotik)||{state:'off'};
+  if(mt.state==='off'){$('rt-card').hidden=true;return;}
+  $('rt-card').hidden=false;$('rt-ref').hidden=false;
+  const out=[];
+  if(mt.state!=='ok')out.push(el('div','msg','The router is '+(MT_STATE[mt.state]||S(mt.state))+(mt.as_of?'; this is what it said as of '+fmt(+mt.as_of):'')+'.'));
+  // Identity
+  const id=obj(mt.identity);
+  out.push(el('h4','','How it is connected'));
+  if(id){
+    const rows=[['Connected by',connectedBy(id)]];
+    if(id.ssid)rows.push(['SSID',S(id.ssid)]);
+    if(id.wifi&&+id.signal)rows.push(['Signal',(+id.signal)+' dBm ('+sigWord(+id.signal)+')']);
+    rows.push(['DHCP hostname',S(id.hostname)||'-']);
+    if(id.client_id)rows.push(['DHCP client ID',S(id.client_id)]);
+    rows.push(['Address lease',id.lease?(S(id.lease_status)||'?')+(id.last_seen?', last heard from '+S(id.last_seen)+' ago':''):'none from this router (a fixed address, or another DHCP server)']);
+    rows.push(['New device',id.new_device?'yes'+(+id.first_seen?': first seen on the network '+fmt(+id.first_seen):''):'no']);
+    rows.push(['Router data as of',fmt(+mt.as_of)]);
+    out.push(kvBox(rows));
+  }else out.push(el('div','muted',mt.state==='ok'?'The router does not list this device (no lease, ARP or switch entry).':'Nothing from the router yet.'));
+  // Flags, worst first
+  const cn=obj(mt.conn)||{},fl=sortedFlags(d);
+  out.push(el('h4','','Flags'));
+  if(!fl.length)out.push(el('div','muted',cn.state==='ok'?'None: nothing in the connections the router showed matched a rule.':'None yet (no connection data).'));
+  else{
+    const u=el('ul','flags');
+    fl.forEach(f=>{const li=el('li'),c=el('div');const fi=flagInfo(f.key);
+      c.append(el('div','',S(f.reason)));if(fi.x)c.append(el('div','fx',fi.x));
+      li.append(flagChip(f.key),c);u.append(li);});
+    out.push(u);
+  }
+  // Outbound
+  out.push(el('h4','','Outbound connections'));
+  out.push(el('div','tsub','What the router\'s connection table held for this device, busiest first. The board reads it when this page opens, then every 60 s for 15 minutes'+
+    (cn.as_of?'; this snapshot is from '+fmt(+cn.as_of):'')+'. A connection that opened and closed between two reads is missed, and the byte counts cover only the time the router tracked each connection. First and last seen are the reads that saw it.'));
+  const all=dstList(cn),ext=all.filter(t=>t.external===true),lan=all.length-ext.length;
+  if(cn.state==='ok'||all.length){
+    out.push(el('div','tsub',(+cn.total||0)+' connection'+(+cn.total===1?'':'s')+' in all, '+(+cn.external||0)+' to the internet, to '+(+cn.external_hosts||0)+' distinct internet host'+(+cn.external_hosts===1?'':'s')+
+      (cn.truncated?' (more than the board keeps; the quietest were left out)':'')+'.'));
+    const rows=_rtLan?all:ext;
+    if(lan){const l=el('label','dv-tog'),cb=el('input');cb.type='checkbox';cb.checked=_rtLan;
+      cb.onchange=()=>{_rtLan=cb.checked;renderIntel(_intel);};l.append(cb,el('span','','Show the '+lan+' destination'+(lan===1?'':'s')+' on your own network'));out.push(l);}
+    if(!rows.length)out.push(el('div','muted',ext.length||!lan?'None to the internet in this snapshot.':'None to the internet in this snapshot; tick the box for the local ones.'));
+    else out.push(dstTable(rows));
+  }
+  if(cn.pending===true)out.push(spinner('Asking the router for its connections...'));
+  else if(cn.state==='error')out.push(el('div','msg','The router did not give its connections'+(cn.as_of?'; the table above is from '+fmt(+cn.as_of):'')+'.'));
+  else if(cn.state!=='ok'&&!all.length)out.push(el('div','muted','No connection data yet. Refresh asks the router.'));
+  // The router itself: its configuration checks (mikrotik_watch).
+  const w=obj(d.integrity);
+  if(w){
+    const bad=(Array.isArray(w.checks)?w.checks:[]).map(obj).filter(c=>c&&(c.state==='changed'||c.state==='drift'));
+    out.push(el('h4','','This is the router: configuration checks'));
+    out.push(el('div','',w.armed?(bad.length?bad.length+' check'+(bad.length===1?'':'s')+' changed since the baseline of '+fmt(+w.armed_at)+':':'As armed '+fmt(+w.armed_at)+': nothing changed.'):'No baseline armed (Settings, MikroTik, Router baseline).'));
+    if(bad.length){const u=el('ul');bad.forEach(c=>u.append(el('li','',S(c.code)+' '+S(c.title)+(c.findings?': '+S(c.findings):''))));out.push(u);}
+  }
+  $('rt-body').replaceChildren(...out);
+}
+function dstTable(rows){
+  const src=rows.some(t=>t.source!=null&&t.source!=='');
+  const heads=['Destination','Port','Up','Down','Conns','First seen','Last seen','Owner','Flags'];
+  if(src)heads.push('Seen by');
+  const t=el('table'),hd=el('thead'),hr=el('tr'),tb=el('tbody');
+  heads.forEach(h=>hr.append(el('th','',h)));hd.append(hr);
+  rows.forEach(x=>{
+    const tr=el('tr'),dc=el('td');
+    dc.append(el('div','',S(x.name)||(x.external===true?'no name':'local')));
+    if(x.name&&x.name_src)dc.append(el('span','sub','name from '+(NAME_SRC[x.name_src]||S(x.name_src))));
+    dc.append(el('span','sub mono',S(x.ip)));
+    const pc=el('td','nw',portText(x));if(x.tcp_state)pc.append(el('span','sub',S(x.tcp_state)));
+    const fc=el('td'),ch=el('div','chips');
+    arr(x.flags).sort((a,b)=>flagInfo(a).r-flagInfo(b).r).forEach(k=>ch.append(flagChip(k)));
+    fc.append(ch);const bn=beaconText(x.beacon);if(bn)fc.append(el('span','sub','Beacon: '+bn));
+    tr.append(dc,pc,el('td','num',bytes(x.bytes_out)),el('td','num',bytes(x.bytes_in)),el('td','num',+x.conns||0),
+      el('td','nw',fmt(+x.first_seen)),el('td','nw',fmt(+x.last_seen)),
+      el('td','',x.external===true?owner(x)||'not looked up yet':'your network'),fc);
+    if(src)tr.append(el('td','',SRC_NAME[x.source]||S(x.source)));
+    tb.append(tr);
+  });
+  t.append(hd,tb);const w=el('div','tbl-wrap');w.append(t);return w;
 }
 
 // ── The log, in pages (GET /api/logs/device, cursor) ──
@@ -474,6 +720,32 @@ function renderSummary(){
 // ── Get AI advice: claude.ai in a new tab, the prompt copied too (the ?q=
 // prefill is undocumented). Device details leave the LAN only on this click. ──
 const AI_MAX=4000;
+// The router's and Pi-hole's view, most telling first (flags, destinations,
+// domains), whole lines only, within room characters.
+function aiNet(room){
+  const L=[],mt=obj(_intel&&_intel.mikrotik);
+  if(mt&&mt.state&&mt.state!=='off'){
+    const id=obj(mt.identity),cn=obj(mt.conn)||{};
+    L.push('Router (MikroTik) view');
+    if(id)L.push('- Connected by '+connectedBy(id)+(id.hostname?', DHCP hostname '+S(id.hostname):'')+(id.new_device?', new on the network':''));
+    sortedFlags(_intel).forEach(f=>L.push('- Flag '+flagInfo(f.key).t+': '+S(f.reason)));
+    if(cn.state==='ok'||(Array.isArray(cn.dst)&&cn.dst.length)){
+      L.push('- Connection snapshot '+fmt(+cn.as_of)+': '+(+cn.total||0)+' in all, '+(+cn.external||0)+' to the internet, '+(+cn.external_hosts||0)+' internet hosts');
+      dstList(cn).filter(t=>t.external===true).slice(0,8).forEach(t=>{const o=owner(t),b=beaconText(t.beacon),f=arr(t.flags);
+        L.push('- Out to '+(t.name?S(t.name)+' ':'')+S(t.ip)+' '+portText(t)+', up '+bytes(t.bytes_out)+', down '+bytes(t.bytes_in)+
+          ', '+(+t.conns||0)+' conn'+(o?', '+o:'')+(f.length?', flags '+f.join(' '):'')+(b?', beacon '+b:'')+(t.source?', from '+S(t.source):''));});
+    }
+  }
+  if(_ph){
+    L.push('Pi-hole view');
+    if(_ph.queries!=null)L.push('- '+(+_ph.queries)+' lookups in the last 24 h'+(_ph.blocked!=null?', '+(+_ph.blocked)+' blocked':''));
+    const td=(Array.isArray(_ph.top_domains)?_ph.top_domains:[]).map(obj).filter(Boolean).slice(0,10);
+    if(td.length)L.push('- Top domains of its last '+(+_ph.top_of||0)+' lookups: '+td.map(e=>S(e.d)+' x'+(+e.n||0)).join(', '));
+  }
+  let t='';
+  for(const l of L){if(t.length+l.length+1>room)break;t+=l+'\n';}
+  return t;
+}
 function aiPrompt(){
   const x=_dev||{mac:DEV.mac,ip:DEV.ip},ai=_ai||{id:[],beh:[],risk:[],rate:[],sug:'',qs:[]};
   const list=(h,a)=>h+'\n'+(a.length?a.map(t=>'- '+t).join('\n'):'- none')+'\n';
@@ -483,6 +755,8 @@ function aiPrompt(){
       ['Random MAC',x.random_mac?'yes':'no'],['Protocols',pr||'-'],['First seen',x.first_ts?fmt(x.first_ts):'-'],['Last seen',x.last_ts?fmt(x.last_ts):'-']])+'\n\n'+
     list('Identity',ai.id)+'\n'+list('Behaviour',ai.beh)+'\n'+list('Rates',ai.rate)+'\n'+list('Last queries',ai.qs)+'\n'+list('Risk notes',ai.risk)+
     '\nSuggestion from the dashboard\'s fixed rules: '+(ai.sug||'-')+'\n';
+  const net=aiNet(Math.min(1800,AI_MAX-p.length-500));
+  if(net)p+='\n'+net;
   const rows=[...$('sum-body').querySelectorAll('tr')].map(tr=>[...tr.children].slice(0,6).map(td=>td.textContent).join(' | ')).filter(t=>!/^Nothing|^Loading/.test(t));
   if(rows.length)p+='\nIssue summary of its log ('+_lines.length+' lines; code | name | tier | count | first | last)\n'+rows.map(t=>'- '+t).join('\n')+'\n';
   if(_lines.length){
@@ -500,10 +774,13 @@ $('ai-btn').onclick=()=>{
 $('older').onclick=()=>older(300);
 $('full').onclick=fullScan;
 $('ig-all').onchange=e=>toggleIgnore('',!e.target.checked,e.target);
+$('ph-ref').onclick=phRefresh;
+$('rt-ref').onclick=()=>loadIntel();
 
 // ── Start: the device table, the codes and the ignore list, then the newest page fast ──
 (async()=>{
-  if(!DEV.mac&&!DEV.ip){$('id-label').textContent='No device given';$('sum-note').textContent='Open this page from the Devices tab.';$('older').hidden=$('full').hidden=true;return;}
+  if(!DEV.mac&&!DEV.ip){$('id-label').textContent='No device given';$('sum-note').textContent='Open this page from the Devices tab.';$('older').hidden=$('full').hidden=true;
+    $('rt-card').hidden=$('ph-card').hidden=true;return;}
   const [dv]=await Promise.all([
     fetch('/api/devices',{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null),
     loadCodes(),
@@ -512,6 +789,9 @@ $('ig-all').onchange=e=>toggleIgnore('',!e.target.checked,e.target);
   const devs=(dv&&dv.devices)||[];
   _dev=devs.find(x=>DEV.mac&&S(x.mac).toLowerCase()===DEV.mac)||devs.find(x=>DEV.ip&&S(x.ip)===DEV.ip)||null;
   renderDevice();
+  // Each section loads on its own (the queue keeps 2 in flight): the router
+  // first, since its connection fetch takes a few seconds on the board.
+  loadIntel();loadPihole();
   await older(100);
 })();
 </script>
