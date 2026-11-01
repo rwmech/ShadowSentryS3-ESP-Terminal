@@ -179,6 +179,7 @@ main{flex:1;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
 .fb-adb   {background:rgba(61,220,132,.12); color:#3ddc84;  border:1px solid rgba(61,220,132,.28)}
 .fb-trip  {background:rgba(239,68,68,.12);  color:#ef4444;  border:1px solid rgba(239,68,68,.28)}
 .fb-disco {background:rgba(129,140,248,.12);color:#818cf8;  border:1px solid rgba(129,140,248,.28)}
+.fb-netdev{background:rgba(45,212,191,.12);color:#2dd4bf;  border:1px solid rgba(45,212,191,.28)}
 .dev-q{color:var(--muted);font-family:monospace;font-size:.68rem;white-space:pre-line;max-width:380px;overflow-wrap:anywhere}
 .dev-sub{color:var(--muted);font-size:.66rem}
 .ign-chip{font-size:.6rem;padding:1px 6px;margin-left:6px;border-radius:8px;color:var(--muted);border:1px dashed var(--muted)}
@@ -570,6 +571,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
           <circle id="arc-adb"    cx="70" cy="70" r="54" fill="none" stroke="#3ddc84" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-trip"   cx="70" cy="70" r="54" fill="none" stroke="#ef4444" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
           <circle id="arc-disco"  cx="70" cy="70" r="54" fill="none" stroke="#818cf8" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
+          <circle id="arc-netdev" cx="70" cy="70" r="54" fill="none" stroke="#2dd4bf" stroke-width="16" stroke-dasharray="0 340" stroke-linecap="round"/>
         </svg>
         <div class="donut-center">
           <div class="dc-val" id="dc-total">0</div>
@@ -660,6 +662,12 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
           <span class="lname">Discovery</span>
           <div class="lbar"><div class="lbar-fill" id="lb-disco" style="background:#818cf8;width:0%"></div></div>
           <span class="lval" id="lv-disco">0</span>
+        </div>
+        <div class="legend-item" data-ftype="14" onclick="setFilter(14)">
+          <div class="legend-dot" style="background:#2dd4bf"></div>
+          <span class="lname">New device</span>
+          <div class="lbar"><div class="lbar-fill" id="lb-netdev" style="background:#2dd4bf;width:0%"></div></div>
+          <span class="lval" id="lv-netdev">0</span>
         </div>
       </div>
     </div>
@@ -770,7 +778,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option><option>netdev</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <select id="lg-code" onchange="renderDay()" title="Filter by error code"><option value="">All codes</option></select>
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
@@ -831,6 +839,18 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <div class="hint" id="st-wa-hint"></div>
       <div></div>
       <div class="ctl"><button class="btn" type="button" id="st-watest" onclick="testWhatsApp()">Send test</button><span id="st-wares" class="muted"></span></div>
+      <h4>MikroTik router, read only (applies at once)</h4>
+      <label for="st-mton">Use the router</label><input type="checkbox" id="st-mton">
+      <label for="st-mturl">REST URL</label><input id="st-mturl" maxlength="95" autocomplete="off" spellcheck="false" placeholder="http://192.168.0.1:8080 or https://192.168.0.1" oninput="mtScheme()">
+      <label for="st-mtuser">User</label><input id="st-mtuser" maxlength="32" autocomplete="off" spellcheck="false">
+      <label for="st-mtpw">Password</label><input type="password" id="st-mtpw" maxlength="64" autocomplete="new-password">
+      <label for="st-mtclr">Clear password (turn the router off)</label><input type="checkbox" id="st-mtclr" onchange="$('st-mtpw').disabled=this.checked">
+      <label for="st-mtpin" class="mt-https">Certificate SHA-256 pin</label><input id="st-mtpin" class="mt-https" maxlength="99" autocomplete="off" spellcheck="false" placeholder="blank = trust on first use">
+      <div class="hint mt-https" id="st-mt-cert"></div>
+      <div class="ctl mt-https"><button class="btn" type="button" id="st-mtforget" onclick="forgetMikrotikCert()">Forget recorded certificate</button><span id="st-mtfres" class="muted"></span></div>
+      <div class="hint" id="st-mt-hint"></div>
+      <div></div>
+      <div class="ctl"><button class="btn" type="button" id="st-mttest" onclick="testMikrotik()">Test connection</button><span id="st-mtres" class="muted"></span></div>
       <h4>Time</h4>
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
@@ -932,16 +952,17 @@ function fmt(ts){
   return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 const BADGE=['<span class="feed-badge fb-rtsp">RTSP</span>','<span class="feed-badge fb-http">HTTP</span>','<span class="feed-badge fb-telnet">TELNET</span>','<span class="feed-badge fb-ssh">SSH</span>','<span class="feed-badge fb-ftp">FTP</span>','<span class="feed-badge fb-arp">ARP</span>','<span class="feed-badge fb-wifi">WIFI</span>','<span class="feed-badge fb-shell">SHELL</span>',
-  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>','<span class="feed-badge fb-trip">TRIPWIRE</span>','<span class="feed-badge fb-disco">DISCOVERY</span>'];
-const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;','&#128276;','&#128250;'];
+  '<span class="feed-badge fb-scan">SCAN</span>','<span class="feed-badge fb-probe">PROBE</span>','<span class="feed-badge fb-sweep">ARP SWEEP</span>','<span class="feed-badge fb-adb">ADB</span>','<span class="feed-badge fb-trip">TRIPWIRE</span>','<span class="feed-badge fb-disco">DISCOVERY</span>','<span class="feed-badge fb-netdev">NEW DEVICE</span>'];
+const ICON=['&#128249;','&#128760;','&#128187;','&#128273;','&#128193;','&#128376;','&#128225;','&#128026;','&#128269;','&#128682;','&#128225;','&#128241;','&#128276;','&#128250;','&#127381;'];
 const CIRC=2*Math.PI*54;
 // One entry per attack_type_t (main/storage/log_store.h), in order.
-const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery'];
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery','New device'];
 const TCOUNT=TNAME.length;
-const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies','UDP'];
+const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies','UDP','router'];
 const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured',
   'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL or JetDirect: any connection is the alert',
-  'A device seen on SSDP, WS-Discovery, LLMNR, NBNS, DHCP or a vendor broadcast (log only)'];
+  'A device seen on SSDP, WS-Discovery, LLMNR, NBNS, DHCP or a vendor broadcast (log only)',
+  'A DHCP lease on the router from a MAC never seen before (needs the MikroTik settings)'];
 const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
@@ -1106,7 +1127,7 @@ function setVal(id,val){
 }
 
 // donut chart, one arc per attack type (index = attack_type_t)
-const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb','trip','disco'];
+const DKEYS=['rtsp','http','telnet','ssh','ftp','arp','wifi','shell','scan','probe','sweep','adb','trip','disco','netdev'];
 function updateDonut(vals){
   vals=vals||[];const sum=vals.reduce((a,b)=>a+(b||0),0),tot=sum||1,gap=4,n=DKEYS.length;
   let off=0;
@@ -1520,12 +1541,69 @@ const _dvOpen=new Set();
 function dvRows(tr,x){
   const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
   const ab=dvAnalysis(x);
-  c.colSpan=6;c.append(ab,dvAlerts(x),dvMessages(x,k,ab._ai));an.append(c);
-  const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
+  const net=dvNetwork(x,k);
+  c.colSpan=6;c.append(ab,net,dvAlerts(x),dvMessages(x,k,ab._ai));an.append(c);
+  const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);if(open)net._load();};
   set(_dvOpen.has(k));
   tr.title='Click for the analysis';
   tr.onclick=()=>set(an.hidden);
   return [tr,an];
+}
+
+// ── Network (Devices tab, in the analysis row): GET /api/device/intel ──
+// The router's and Pi-hole's view: port or AP, hostname, external
+// connections, flags. Hidden when the router and Pi-hole are both off (or the
+// firmware has no route). Kept per device across the 10 s refresh; fetched
+// when the row opens and again after 30 s, or 3 s while a fetch is pending.
+const _dvNet=new Map();      // device key -> {d, t, err, busy}
+function dvNetwork(x,k){
+  const box=el('div','an dv-net'),s=el('div');box.append(s);box.hidden=true;
+  if(!_dvNet.has(k))_dvNet.set(k,{});
+  const st=_dvNet.get(k);
+  const show=()=>{
+    const d=st.d;
+    if(!d){box.hidden=true;return;}
+    const mt=d.mikrotik||{},ph=d.pihole||{},id=mt.identity,cn=mt.conn||{};
+    if(mt.state==='off'&&ph.state!=='ok'){box.hidden=true;return;}
+    box.hidden=false;s.replaceChildren(el('h5','','Network'));
+    const u=el('ul'),li=t=>u.append(el('li','',t));
+    if(mt.state!=='ok'&&mt.state!=='off')li('Router '+(MT_STATE[mt.state]||String(mt.state))+(mt.as_of?'; as of '+fmt(mt.as_of):''));
+    if(id){
+      if(id.port)li('Switch port: '+S(id.port)+(id.bridge?' ('+S(id.bridge)+')':''));
+      if(id.wifi)li('Wi-Fi: '+S(id.ap)+(id.ssid?', SSID '+S(id.ssid):'')+(+id.signal?', '+id.signal+' dBm':''));
+      if(id.hostname)li('Hostname (DHCP): '+S(id.hostname));
+      if(id.lease)li('Lease: '+S(id.lease_status||'?')+(id.last_seen?', last seen '+S(id.last_seen)+' ago':''));
+      if(id.new_device)li('New on the network since '+fmt(id.first_seen));
+      li('As of '+fmt(mt.as_of));
+    }else if(mt.state==='ok')li('Not in the router\'s leases, ARP or host tables');
+    if(cn.state==='ok')li(cn.external+' external connection'+(cn.external===1?'':'s')+' to '+cn.external_hosts+' host'+(cn.external_hosts===1?'':'s')+
+      ', '+cn.total+' in all'+(cn.truncated?' (more not read)':'')+', as of '+fmt(cn.as_of));
+    else if(cn.pending)li('Asking the router for its connections...');
+    else if(cn.state==='error')li('The router did not give its connections'+(cn.as_of?'; last good '+fmt(cn.as_of):''));
+    const ext=(cn.dst||[]).filter(t=>t.external).slice(0,8);
+    ext.forEach(t=>li('  '+S(t.ip)+':'+S(t.port)+' '+S(t.proto)+', '+kb((+t.bytes_out||0)+(+t.bytes_in||0))+(t.conns>1?', '+t.conns+' connections':'')+
+      (t.beacon?', every ~'+t.beacon.every_s+' s':'')));
+    if(ph.state==='ok')li('Pi-hole: '+ph.total+' lookups, '+ph.blocked+' blocked');
+    s.append(u);
+    const fl=d.flags||[];
+    s.append(el('h5','','Network flags'));
+    const f=el('ul');(fl.length?fl.map(z=>S(z.reason)):['None']).forEach(t=>f.append(el('li','',t)));s.append(f);
+  };
+  st.show=show;
+  box._load=async()=>{
+    if(st.busy||(st.t&&Date.now()-st.t<(st.d&&st.d.mikrotik&&st.d.mikrotik.conn&&st.d.mikrotik.conn.pending?3000:30000)))return;
+    st.busy=true;
+    try{
+      const q=new URLSearchParams();if(isMac(x.mac))q.set('mac',S(x.mac));if(x.ip)q.set('ip',S(x.ip));
+      const r=await fetch('/api/device/intel?'+q.toString(),{cache:'no-store'});
+      if(r.ok){st.d=await r.json();st.t=Date.now();}else if(r.status===404){st.d=null;st.t=Date.now();}
+    }catch{}
+    st.busy=false;st.show();
+    const p=st.d&&st.d.mikrotik&&st.d.mikrotik.conn&&st.d.mikrotik.conn.pending;
+    if(p&&_dvOpen.has(k))setTimeout(()=>box._load(),3000);
+  };
+  show();
+  return box;
 }
 
 // ── Alerts from this device (Devices tab, in the analysis row) ──
@@ -1823,6 +1901,9 @@ function logView(o){
   else if(kind==='discovery_summary'){v.type='hourly';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
     v.det=(o.label?S(o.label)+': ':'')+S(o.total)+' packets in '+Math.round((+o.period_s||0)/60)+' min ('+
       Object.entries(o.packets||{}).map(([a,b])=>S(a)+' '+S(b)).join(', ')+'), '+S(o.new_queries)+' new queries';}
+  else if(kind==='netdev'){v.type='New device';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
+    v.det=[o.hostname?'host '+S(o.hostname):'',o.port?'port '+S(o.port):'',o.ap?'AP '+S(o.ap):'',o.ssid?'SSID '+S(o.ssid):'',
+      +o.signal?S(o.signal)+' dBm':''].filter(Boolean).join(', ');}
   else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
   v.key=isDisco(o)?[kind,v.code,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
   v.n=1;v.t0=v.t1=v.ts;
@@ -1864,10 +1945,54 @@ const TZP=[['UTC','UTC0'],['US Eastern','EST5EDT,M3.2.0,M11.1.0'],['US Central',
 function syncTz(){const v=$('st-tz').value.trim();$('st-tzp').value=TZP.some(p=>p[1]===v)?v:'';}
 function showMsg(kind,text){const m=$('st-msg');m.className='msg '+kind;m.textContent=text;}
 TNAME.forEach((n,i)=>{const l=el('label'),c=el('input');c.type='checkbox';c.id='st-al-'+i;l.append(c,document.createTextNode(n));$('st-alerts').append(l);});
-let _clientIp='';
+let _clientIp='',_stLast=null;
+// ── MikroTik (GET /api/mikrotik/status, POST /api/mikrotik/test, /api/mikrotik/cert/forget) ──
+// The certificate fields only matter for https: hidden for http.
+function mtScheme(){const https=/^https:/i.test($('st-mturl').value.trim());document.querySelectorAll('.mt-https').forEach(e=>e.hidden=!https);}
+const MT_STATE={off:'off',starting:'starting',ok:'answering',unreachable:'unreachable',auth_failed:'refusing the login',
+  cert_mismatch:'presenting a different certificate',http_error:'answering with an error'};
+async function loadMikrotik(s){
+  const hint=$('st-mt-hint'),cert=$('st-mt-cert');
+  if(!s||!('mikrotik_url' in s)){hint.textContent='This firmware has no MikroTik client.';return;}
+  let m=null;try{const r=await fetch('/api/mikrotik/status',{cache:'no-store'});if(r.ok)m=await r.json();}catch{}
+  const st=m?MT_STATE[m.state]||String(m.state):'unknown';
+  hint.textContent='The router is '+(s.mikrotik_active?st:'off')+(m&&m.detail?' ('+String(m.detail)+')':'')+
+    (m&&m.last_ok?', last good poll '+fmt(m.last_ok):'')+(m&&m.hosts?', '+m.hosts+' devices ('+m.leases+' leases, '+m.bridge+' on switch ports, '+m.wifi+' on Wi-Fi)':'')+
+    '. Read only: DHCP leases, ARP, switch ports and Wi-Fi clients every 5 minutes, one device\'s connections when you open it on the Devices tab. '+
+    'Use a read-only user restricted to this board\'s address (README). Plain http sends the password in the clear on the LAN.';
+  if(m){
+    const c=m.cert||{};
+    cert.textContent=c.pin_set?'Pinned. Last certificate seen: '+(c.seen||'none yet')+'.':
+      c.tofu?'Trusted on first use: '+c.tofu+'. A different certificate is refused until you pin it or forget this one.':
+      'Nothing recorded yet: the first certificate seen will be recorded.';
+    if(m.state==='cert_mismatch'&&c.seen)cert.textContent+=' The router now presents '+c.seen+'.';
+  }
+}
+async function testMikrotik(){
+  const res=$('st-mtres'),b=$('st-mttest');
+  res.textContent='Testing...';b.disabled=true;
+  try{
+    const r=await fetch('/api/mikrotik/test',POSTH);let d={};try{d=await r.json();}catch{}
+    if(!r.ok){res.textContent=String(d.error||('Failed ('+r.status+')'));b.disabled=false;return;}
+    const want=d.test,t0=Date.now();
+    const poll=async()=>{
+      try{
+        const s=await(await fetch('/api/mikrotik/status',{cache:'no-store'})).json();
+        if(s.test_done>=want){res.textContent=(s.test_ok?'OK: ':'Failed: ')+String(s.test_text||s.test_status);b.disabled=false;loadMikrotik(_stLast);return;}
+      }catch{}
+      if(Date.now()-t0<45000)setTimeout(poll,1500);else{res.textContent='No result after 45 s.';b.disabled=false;}
+    };
+    setTimeout(poll,1500);
+  }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
+}
+async function forgetMikrotikCert(){
+  if(!confirm('Forget the recorded router certificate? The next https connection records whatever certificate it sees.'))return;
+  try{const r=await fetch('/api/mikrotik/cert/forget',POSTH);$('st-mtfres').textContent=r.ok?'Forgotten.':'Failed ('+r.status+').';loadMikrotik(_stLast);}
+  catch{$('st-mtfres').textContent='Failed: device unreachable.';}
+}
 async function loadSettings(){
   try{
-    const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();
+    const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();_stLast=s;
     $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
@@ -1881,6 +2006,10 @@ async function loadSettings(){
     $('st-wakey').placeholder=s.whatsapp_apikey_set?'set; blank = unchanged':'not set';
     $('st-wa-hint').textContent='WhatsApp is '+(s.whatsapp_enabled?'on':'off')+
       '. Boot and incident messages (opened, acknowledged, closed) go to this number, at most 20 an hour and 10 s apart; the event log does not. Get the apikey from callmebot.com (free, personal use, your own number only). Send test uses the saved settings: save first. WhatsApp starts at boot: after setting it up for the first time, save and reboot.';
+    $('st-mton').checked=s.mikrotik_enabled!==false;$('st-mturl').value=s.mikrotik_url||'';$('st-mtuser').value=s.mikrotik_user||'';
+    $('st-mtpw').value='';$('st-mtclr').checked=false;$('st-mtpw').disabled=false;
+    $('st-mtpw').placeholder=s.mikrotik_password_set?'set; blank = unchanged':'not set';
+    $('st-mtpin').value=s.mikrotik_cert_sha256||'';mtScheme();loadMikrotik(s);
     $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
     $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
     $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
@@ -1925,6 +2054,12 @@ async function saveSettings(ev){
   body.whatsapp_phone=$('st-waph').value.replace(/\s+/g,'');
   if($('st-waclr').checked)body.whatsapp_apikey_clear=true;
   else if($('st-wakey').value.trim())body.whatsapp_apikey=$('st-wakey').value.trim();
+  if('mikrotik_url' in (_stLast||{})){
+    body.mikrotik_enabled=$('st-mton').checked;body.mikrotik_url=$('st-mturl').value.trim();body.mikrotik_user=$('st-mtuser').value.trim();
+    body.mikrotik_cert_sha256=$('st-mtpin').value.trim();
+    if($('st-mtclr').checked)body.mikrotik_password_clear=true;
+    else if($('st-mtpw').value)body.mikrotik_password=$('st-mtpw').value;
+  }
   try{
     const r=await fetch('/api/settings',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
     let d={};try{d=await r.json();}catch{}

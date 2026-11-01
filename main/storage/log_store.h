@@ -19,7 +19,8 @@ typedef enum {
     ATTACK_ADB       = 11,  // Android Debug Bridge on 5555 (honeypot/adb_trap.c)
     ATTACK_TRIPWIRE  = 12,  // connection to a tripwire port (honeypot/tripwire.c)
     ATTACK_DISCOVERY = 13,  // LAN discovery: a new device, protocol or label (detect/discovery.c)
-    ATTACK_TYPE_COUNT       // number of types; size every per-type table with it
+    ATTACK_NEW_DEVICE = 14, // a DHCP lease from a MAC never seen before, from the router (admin/mikrotik.c)
+    ATTACK_TYPE_COUNT      // number of types; size every per-type table with it
 } attack_type_t;
 
 typedef struct {

@@ -22,6 +22,7 @@
 #include "telegram.h"
 #include "discord.h"
 #include "whatsapp.h"
+#include "mikrotik.h"
 #include "notify.h"
 #include "arp_monitor.h"
 #include "geoip.h"
@@ -281,6 +282,8 @@ void app_main(void)
              settings_discord_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  WhatsApp alerts: %s",
              settings_whatsapp_enabled() ? "enabled" : "NOT CONFIGURED");
+    ESP_LOGI(TAG, "  │  MikroTik router (read only): %s",
+             settings_mikrotik_enabled() ? "enabled" : "NOT CONFIGURED");
     ESP_LOGI(TAG, "  │  ARP-spoof / MITM monitor: active");
     ESP_LOGI(TAG, "  │  Threat-intel enrichment: ip-api.com");
     ESP_LOGI(TAG, "  │  Wi-Fi threat monitor: deauth/disassoc flood");
@@ -333,6 +336,9 @@ void app_main(void)
 #if DISCOVERY_ENABLE
     SPAWN_PSRAM(discovery_task, "disco", DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
 #endif
+    // MikroTik: only when configured (no task, no RAM otherwise); its stack is
+    // in PSRAM (HTTP(S) and RAM only). A Settings save can start it later.
+    mikrotik_start();
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();

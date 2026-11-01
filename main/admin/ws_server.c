@@ -6,6 +6,7 @@
 #include "wifi_manager.h"
 #include "ignore.h"
 #include "describe.h"
+#include "correlate.h"
 #include "config.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -121,6 +122,9 @@ static void on_attack(const attack_log_t *e)
 void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
 {
     char mac[WIFI_MAC_STR_LEN], code_j[2 * DESCRIBE_CODE_LEN], hl_j[2 * DESCRIBE_MAX], vend_j[128];
+    char intel[CORRELATE_SUMMARY_LEN], intel_j[2 * CORRELATE_SUMMARY_LEN];
+    correlate_summary(a->src_ip, a->src_mac, intel, sizeof(intel));     // RAM only, "" when nothing is known
+    jesc(intel, intel_j, sizeof(intel_j));
     wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
     jesc(a->code, code_j, sizeof(code_j));
     jesc(a->headline, hl_j, sizeof(hl_j));
@@ -129,13 +133,13 @@ void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
         "{\"state\":%d,\"cond\":\"%s\",\"code\":\"%s\",\"headline\":\"%s\","
         "\"id\":%lu,\"ip\":%lu,\"type\":%u,\"count\":%lu,"
         "\"first\":%lu,\"last\":%lu,\"mac\":\"%s\",\"vendor\":\"%s\","
-        "\"acked_by\":\"%s\",\"resolved_by\":\"%s\"}",
+        "\"acked_by\":\"%s\",\"resolved_by\":\"%s\",\"intel\":\"%s\"}",
         (int)a->state, alarm_cond_key(a->cond), code_j, hl_j,
         (unsigned long)a->id, (unsigned long)a->src_ip,
         (unsigned)a->type, (unsigned long)a->count,
         (unsigned long)a->first_ts, (unsigned long)a->last_ts,
         mac, vend_j,
-        alarm_by_key(a->acked_by), alarm_by_key(a->resolved_by));
+        alarm_by_key(a->acked_by), alarm_by_key(a->resolved_by), intel_j);
 }
 
 static void broadcast_text(const char *json)

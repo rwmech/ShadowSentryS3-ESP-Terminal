@@ -58,6 +58,7 @@ static const code_row_t CODES[] = {
     { "50-01", "ARP spoof",          TIER_SEV1, NULL },
     { "50-02", "Wi-Fi deauth",       TIER_SEV1, NULL },
     { "60-01", "LAN discovery",      TIER_SEV3, NULL },
+    { "60-02", "New device on network", TIER_SEV3, NULL },
 };
 #define CODE_N ((int)(sizeof(CODES) / sizeof(CODES[0])))
 
@@ -66,7 +67,7 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_SSH, C_TELNET, C_FTP, C_RTSP, C_SHELL_CMD, C_SHELL_SESSION,
     C_WEB_LOGIN, C_WEB_FIRST = C_WEB_LOGIN, C_WEB_UNCLASSIFIED = C_WEB_LOGIN + 8,
     C_ADB, C_TRIP_FIRST, C_TRIP_OTHER = C_TRIP_FIRST + 7,
-    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY, C_COUNT
+    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY, C_NEW_DEVICE, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
 
@@ -123,10 +124,11 @@ static const code_row_t *code_row(const attack_log_t *e)
     case ATTACK_ARP:       return &CODES[C_ARP_SPOOF];
     case ATTACK_WIFI:      return &CODES[C_WIFI_DEAUTH];
     case ATTACK_DISCOVERY: return &CODES[C_DISCOVERY];
+    case ATTACK_NEW_DEVICE: return &CODES[C_NEW_DEVICE];
     default:               return &UNKNOWN;
     }
 }
-_Static_assert(ATTACK_DISCOVERY + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
+_Static_assert(ATTACK_NEW_DEVICE + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
 
 const char *describe_code(const attack_log_t *e)
 {
@@ -378,6 +380,16 @@ static void discovery_detail(sb_t *s, const char *p)
     sb_fmt(s, "%s is searching the network", lab[0] ? lab : "a device");
 }
 
+static void new_device_detail(sb_t *s, const char *p)
+{
+    // "New device <name> on <where>" (admin/mikrotik.c); the router's text,
+    // so cleaned like attacker text.
+    char d[64];
+    const char *q = !strncmp(p, "New device ", 11) ? p + 11 : p;
+    clean(d, sizeof(d), q, strlen(q));
+    sb_fmt(s, "%s", d[0] ? d : "a device joined");
+}
+
 size_t describe_event(const attack_log_t *e, char *out, size_t len)
 {
     if (!out || !len) return 0;
@@ -470,6 +482,9 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
         break;
     case ATTACK_DISCOVERY:
         discovery_detail(&s, p);
+        break;
+    case ATTACK_NEW_DEVICE:
+        new_device_detail(&s, p);
         break;
     default:
         sb_fmt(&s, "type %d", (int)e->type);

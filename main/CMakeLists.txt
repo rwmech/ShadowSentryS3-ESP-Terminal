@@ -13,6 +13,8 @@
 #   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
 #   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
+#   detect/correlate.c      - device intelligence: honeypot, router and Pi-hole views merged
+#   admin/mikrotik.c        - MikroTik RouterOS REST client, read only (Core 1)
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
@@ -69,6 +71,9 @@ idf_component_register(
         "admin/api_oui.c"
         "admin/api_devlog.c"
         "admin/api_tasks.c"
+        "admin/mikrotik.c"
+        "admin/api_mikrotik.c"
+        "detect/correlate.c"
         "storage/oui.c"
 
     INCLUDE_DIRS

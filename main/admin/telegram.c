@@ -45,6 +45,7 @@ static char *s_notice_title, *s_notice_text, *s_notice_msg;   // PSRAM, task onl
 #define EMOJI_ADB    "\xF0\x9F\x93\xB1"   // U+1F4F1: Android Debug Bridge
 #define EMOJI_TRIP   "\xF0\x9F\x94\x94"   // U+1F514: tripwire port
 #define EMOJI_DISCO  "\xF0\x9F\x93\xBA"   // U+1F4FA: LAN discovery (device seen)
+#define EMOJI_NEWDEV "\xF0\x9F\x86\x95"   // U+1F195: new device on the network (router lease)
 
 // Convert a 2-letter ISO country code into its flag emoji (two regional-
 // indicator code points, 8 UTF-8 bytes + NUL). Writes "" for an invalid code.
@@ -66,10 +67,10 @@ static void cc_flag(const char *cc, char *out)
 
 static const char *s_type_label[] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell",
                                      "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire",
-                                     "Discovery"};
+                                     "Discovery", "New device"};
 static const char *s_type_emoji[] = {EMOJI_RTSP, EMOJI_HTTP, EMOJI_TELNET, EMOJI_SSH, EMOJI_FTP, EMOJI_ARP, EMOJI_WIFI, EMOJI_SHELL,
                                      EMOJI_SCAN, EMOJI_SCAN, EMOJI_SCAN, EMOJI_ADB, EMOJI_TRIP,
-                                     EMOJI_DISCO};
+                                     EMOJI_DISCO, EMOJI_NEWDEV};
 _Static_assert(sizeof(s_type_label) / sizeof(s_type_label[0]) == ATTACK_TYPE_COUNT, "s_type_label: one per attack_type_t");
 _Static_assert(sizeof(s_type_emoji) / sizeof(s_type_emoji[0]) == ATTACK_TYPE_COUNT, "s_type_emoji: one per attack_type_t");
 

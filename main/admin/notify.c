@@ -168,7 +168,8 @@ static const char *type_name(uint8_t t)
                                         "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
                                         "Interactive shell", "Port scan", "Probe", "ARP sweep",
                                         "ADB (Android Debug Bridge)",
-                                        "Tripwire port", "LAN discovery (device seen)"};
+                                        "Tripwire port", "LAN discovery (device seen)",
+                                        "New device on the network (router lease)"};
     _Static_assert(sizeof(NAMES) / sizeof(NAMES[0]) == ATTACK_TYPE_COUNT, "NAMES: one per attack_type_t");
     return t < ATTACK_TYPE_COUNT ? NAMES[t] : "other attack";
 }

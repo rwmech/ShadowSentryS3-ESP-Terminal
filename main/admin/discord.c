@@ -14,6 +14,7 @@
 #include "wifi_manager.h"
 #include "ignore.h"
 #include "describe.h"
+#include "correlate.h"
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,6 +55,7 @@ static const char *TAG = "DISCORD";
 #define DC_KEYS             64      // dedup table entries, PSRAM
 #define DC_SUMMARY_LEN      64
 #define DC_RECENT           8       // recent events kept for the incident-open embed
+#define DC_INTEL_WAIT_MS    6000    // the opened post waits this long at most for the router's view
 #define DC_REMIND_MIN_S     30
 #define DC_DRAIN_MAX        128     // events handled per loop before checking the rest
 #define DC_DIGEST_QUEUE     2       // discovery digests (char * owned by us once queued)
@@ -121,12 +123,13 @@ static int64_t mono_s(void) { return esp_timer_get_time() / 1000000LL; }
 
 static const char *const TYPE_SHORT[] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell",
                                          "Scan", "Probe", "Sweep", "ADB", "Tripwire",
-                                         "Discovery"};
+                                         "Discovery", "New device"};
 static const char *const TYPE_LONG[]  = {"RTSP login", "HTTP request", "Telnet login", "SSH login",
                                          "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
                                          "Interactive shell", "Port scan", "Probe", "ARP sweep",
                                          "ADB (Android Debug Bridge)",
-                                         "Tripwire port", "LAN discovery (device seen)"};
+                                         "Tripwire port", "LAN discovery (device seen)",
+                                         "New device on the network (router lease)"};
 _Static_assert(sizeof(TYPE_SHORT) / sizeof(TYPE_SHORT[0]) == ATTACK_TYPE_COUNT, "TYPE_SHORT: one per attack_type_t");
 _Static_assert(sizeof(TYPE_LONG) / sizeof(TYPE_LONG[0]) == ATTACK_TYPE_COUNT, "TYPE_LONG: one per attack_type_t");
 static const char *type_short(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_SHORT[t] : "?"; }
@@ -550,6 +553,13 @@ static void post_opened(const alarm_info_t *a, bool escalated)
     char dev[64];
     device_str(dev, sizeof(dev));
 
+    // The router's and Pi-hole's view of the source, when there is one: asks
+    // the router for its connections and waits up to DC_INTEL_WAIT_MS (at
+    // once when the router is off or the source is not on the LAN).
+    char net_raw[CORRELATE_SUMMARY_LEN], net[CORRELATE_SUMMARY_LEN];
+    correlate_incident_summary(a->src_ip, a->src_mac, net_raw, sizeof(net_raw), DC_INTEL_WAIT_MS);
+    clean(net, sizeof(net), net_raw, sizeof(net_raw));
+
     // The incident's headline (the alarm worked it out from the event).
     char desc[DESCRIBE_MAX];
     clean(desc, sizeof(desc), a->headline, sizeof(a->headline));
@@ -562,6 +572,7 @@ static void post_opened(const alarm_info_t *a, bool escalated)
     field(&j, &first, "Attack", type_long(a->type), true, false);
     if (user[0]) field(&j, &first, "Username", user, true, true);
     if (pay[0])  field(&j, &first, "Payload", pay, false, true);
+    if (net[0])  field(&j, &first, "Network", net, false, false);
     field(&j, &first, "Device", dev, false, false);
     embed_end(&j, a->first_ts);
     dc_send(&j);

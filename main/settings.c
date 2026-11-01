@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -30,9 +31,10 @@ static const char *TAG = "SETTINGS";
 #define DET_ARP_TARGETS    10
 #define DET_ARP_WINDOW_S   10
 // Alert switches. Every type opens an incident by default, except LAN
-// discovery, which is background noise (logged, no incident). Bits past the
+// discovery, which is background noise (logged, no incident), and a new
+// device on the network (SEV3, logged and posted, no incident). Bits past the
 // known types stay set, so a type added later alerts unless listed here.
-#define ALERT_DEFAULT_OFF   (1u << ATTACK_DISCOVERY)
+#define ALERT_DEFAULT_OFF   ((1u << ATTACK_DISCOVERY) | (1u << ATTACK_NEW_DEVICE))
 #define ALERT_MASK_DEFAULT  (0xFFFFFFFFu & ~ALERT_DEFAULT_OFF)
 // A saved mask records how many types its firmware knew (NVS "alert_known").
 // Bits from there up were set by the rule above, not by a choice, so on load
@@ -45,6 +47,18 @@ _Static_assert(ATTACK_TYPE_COUNT <= 32, "alert_mask has a bit per type");
 #endif
 #ifndef WHATSAPP_APIKEY
 #define WHATSAPP_APIKEY ""
+#endif
+#ifndef MIKROTIK_URL
+#define MIKROTIK_URL ""
+#endif
+#ifndef MIKROTIK_USER
+#define MIKROTIK_USER ""
+#endif
+#ifndef MIKROTIK_PASSWORD
+#define MIKROTIK_PASSWORD ""
+#endif
+#ifndef MIKROTIK_CERT_SHA256
+#define MIKROTIK_CERT_SHA256 ""
 #endif
 
 static settings_t        s_live;     // what is running now
@@ -83,6 +97,11 @@ static void defaults(settings_t *s)
     s->admin_allow_n  = 0;
     strlcpy(s->whatsapp_phone, WHATSAPP_PHONE, sizeof(s->whatsapp_phone));
     strlcpy(s->whatsapp_apikey, WHATSAPP_APIKEY, sizeof(s->whatsapp_apikey));
+    strlcpy(s->mikrotik_url, MIKROTIK_URL, sizeof(s->mikrotik_url));
+    strlcpy(s->mikrotik_user, MIKROTIK_USER, sizeof(s->mikrotik_user));
+    strlcpy(s->mikrotik_password, MIKROTIK_PASSWORD, sizeof(s->mikrotik_password));
+    if (!settings_sha256_norm(MIKROTIK_CERT_SHA256, s->mikrotik_cert_sha256)) s->mikrotik_cert_sha256[0] = 0;
+    s->mikrotik_enabled = true;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
@@ -160,6 +179,11 @@ void settings_init(void)
         get_allow(h, &s_live);
         get_str(h, "wa_phone", s_live.whatsapp_phone, sizeof(s_live.whatsapp_phone));
         get_str(h, "wa_key", s_live.whatsapp_apikey, sizeof(s_live.whatsapp_apikey));
+        get_str(h, "mt_url", s_live.mikrotik_url, sizeof(s_live.mikrotik_url));
+        get_str(h, "mt_user", s_live.mikrotik_user, sizeof(s_live.mikrotik_user));
+        get_str(h, "mt_pw", s_live.mikrotik_password, sizeof(s_live.mikrotik_password));
+        get_str(h, "mt_pin", s_live.mikrotik_cert_sha256, sizeof(s_live.mikrotik_cert_sha256));
+        get_bool(h, "mt_on", &s_live.mikrotik_enabled);
         nvs_close(h);
     }
     s_saved = s_live;
@@ -278,6 +302,67 @@ bool settings_whatsapp_enabled(void)
     return wa_ok(&s_live);
 }
 
+// "" or http(s)://host[:port] with an optional trailing '/': no path, no
+// user info. Host: letters, digits, '.', '-', or an [IPv6] literal. The
+// client appends /rest/..., so nothing else may follow.
+static bool mikrotik_url_ok(const char *u)
+{
+    if (!u[0]) return true;
+    const char *h;
+    if (!strncmp(u, "http://", 7)) h = u + 7;
+    else if (!strncmp(u, "https://", 8)) h = u + 8;
+    else return false;
+    size_t n = 0;
+    if (h[0] == '[') {
+        n = 1;
+        while (h[n] && (isxdigit((unsigned char)h[n]) || h[n] == ':' || h[n] == '.')) n++;
+        if (h[n] != ']' || n < 3) return false;
+        n++;
+    } else {
+        while (h[n] && (isalnum((unsigned char)h[n]) || h[n] == '.' || h[n] == '-')) n++;
+        if (!n) return false;
+    }
+    const char *p = h + n;
+    if (*p == ':') {
+        p++;
+        size_t d = strspn(p, "0123456789");
+        if (d < 1 || d > 5 || atoi(p) < 1 || atoi(p) > 65535) return false;
+        p += d;
+    }
+    if (*p == '/') p++;
+    return *p == '\0';
+}
+
+// "" or exactly 64 lowercase hex digits (api_ext.c normalises the input).
+static bool sha256_hex_ok(const char *s)
+{
+    if (!s[0]) return true;
+    if (strlen(s) != 64) return false;
+    for (; *s; s++) if (!((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f'))) return false;
+    return true;
+}
+
+bool settings_sha256_norm(const char *in, char out[65])
+{
+    size_t n = 0;
+    for (; *in; in++) {
+        char c = *in;
+        if (c == ':' || c == ' ' || c == '-') continue;
+        if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) || n >= 64) { out[0] = 0; return false; }
+        out[n++] = c;
+    }
+    out[n] = 0;
+    if (n && n != 64) { out[0] = 0; return false; }
+    return true;
+}
+
+bool settings_mikrotik_enabled(void)
+{
+    return s_live.mikrotik_enabled && s_live.mikrotik_url[0] && mikrotik_url_ok(s_live.mikrotik_url) &&
+           s_live.mikrotik_user[0] && s_live.mikrotik_password[0];
+}
+
 static const char *validate(const settings_t *s)
 {
     if (strlen(s->admin_password) < 8) return "admin password must be at least 8 characters";
@@ -324,6 +409,15 @@ static const char *validate(const settings_t *s)
         return "WhatsApp phone: + and 7-15 digits, country code first, no spaces";
     if (!alnum_ok(s->whatsapp_apikey, ""))
                                        return "WhatsApp apikey: letters and digits only";
+    if (!mikrotik_url_ok(s->mikrotik_url))
+        return "MikroTik URL: http://host[:port] or https://host[:port], no path";
+    // Basic auth: the user can't hold ':', and both go into a header.
+    if (!chars_ok(s->mikrotik_user, 0x20, 0x7e) || strchr(s->mikrotik_user, ':'))
+        return "MikroTik user: printable ASCII, no ':'";
+    if (!chars_ok(s->mikrotik_password, 0x20, 0x7e))
+        return "MikroTik password must be printable ASCII";
+    if (!sha256_hex_ok(s->mikrotik_cert_sha256))
+        return "MikroTik certificate pin: 64 hex digits (SHA-256), or empty";
     return NULL;
 }
 
@@ -359,6 +453,11 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     else nvs_erase_key(h, "admin_allow");
     SET(nvs_set_str(h, "wa_phone",   s->whatsapp_phone));
     SET(nvs_set_str(h, "wa_key",     s->whatsapp_apikey));
+    SET(nvs_set_str(h, "mt_url",     s->mikrotik_url));
+    SET(nvs_set_str(h, "mt_user",    s->mikrotik_user));
+    SET(nvs_set_str(h, "mt_pw",      s->mikrotik_password));
+    SET(nvs_set_str(h, "mt_pin",     s->mikrotik_cert_sha256));
+    SET(nvs_set_u8(h,  "mt_on",      s->mikrotik_enabled));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.
