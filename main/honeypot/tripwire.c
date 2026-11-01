@@ -1,6 +1,8 @@
 // Tripwire listeners: log the first bytes of any connection and close. See tripwire.h.
 
 #include "tripwire.h"
+#include "mikrotik.h"           // main/admin: mikrotik_own_macs_state()
+#include "esp_attr.h"
 #include "trap_listen.h"
 #include "mt_decoy.h"           // MikroTik decoys: raw TCP listeners, datagram ring, readers
 #include "log_store.h"
@@ -114,7 +116,7 @@ typedef struct {
     uint8_t  used;
 } hold_t;
 
-static hold_t s_hold[TRIPWIRE_HOLD_SLOTS];
+EXT_RAM_BSS_ATTR static hold_t s_hold[TRIPWIRE_HOLD_SLOTS];     // PSRAM
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -145,10 +147,11 @@ static bool hold_check(uint32_t ip, uint8_t svc, uint32_t now, uint32_t hold_s, 
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
-static uint8_t      s_rx[TRIPWIRE_RX_MAX];
-static char         s_hex[TRIPWIRE_RX_MAX * 2 + 1];
-static char         s_lead[128];            // readable part of the payload, before any hex
-static attack_log_t s_ev;
+// In PSRAM (EXT_RAM_BSS_ATTR): this task's SPIFFS writes copy them first.
+EXT_RAM_BSS_ATTR static uint8_t      s_rx[TRIPWIRE_RX_MAX];
+EXT_RAM_BSS_ATTR static char         s_hex[TRIPWIRE_RX_MAX * 2 + 1];
+EXT_RAM_BSS_ATTR static char         s_lead[128];    // readable part of the payload, before any hex
+EXT_RAM_BSS_ATTR static attack_log_t s_ev;
 static uint32_t     s_stack_low = UINT32_MAX;
 
 static void hex_of(const uint8_t *b, size_t n, char *out)
@@ -181,7 +184,8 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     else if (ip) wifi_manager_lookup_mac(ip, s_ev.src_mac);
     if (user && user[0]) strlcpy(s_ev.username, user, sizeof(s_ev.username));
 
-    char held_s[16] = "";
+    EXT_RAM_BSS_ATTR static char held_s[16], ips[16];   // this task only: off the stack, under log_store_append()
+    held_s[0] = '\0';
     if (held) snprintf(held_s, sizeof(held_s), " (+%u held)", (unsigned)held);
     int o = snprintf(s_ev.payload, sizeof(s_ev.payload), "%s on %u%s: %s",
                      svc->name, (unsigned)svc->port, held_s, lead);
@@ -193,7 +197,6 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     memcpy(s_ev.payload + o, hex, fit * 2);
     s_ev.payload[o + fit * 2] = '\0';
 
-    char ips[16];
     ip_text(ip, ips, sizeof(ips));
     ESP_LOGW(TAG, "[%s] %s on %u%s: %s%s", ips, svc->name, (unsigned)svc->port, held_s, lead, hex);
     log_store_append(&s_ev);
@@ -206,18 +209,23 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     }
 }
 
+// A held connection's console line. Not inlined, so its buffer is not in
+// report()'s frame, which sits under emit() and log_store_append().
+static void __attribute__((noinline)) say_held(int idx, uint32_t ip, int n)
+{
+    char ips[16];
+    ip_text(ip, ips, sizeof(ips));
+    ESP_LOGI(TAG, "[%s] %s on %u, %d B (held, not logged): %s%s",
+             ips, SVC[idx].name, (unsigned)SVC[idx].port, n, s_lead, s_hex);
+}
+
 // The rate limit, then the event or a console line for a held one.
 static void report(int idx, uint32_t ip, const uint8_t *mac, uint32_t hold_s, int n,
                    const char *user, bool quiet_when_held)
 {
     uint16_t held = 0;
     if (!hold_check(ip, (uint8_t)idx, now_ms(), hold_s, &held)) {
-        if (!quiet_when_held) {
-            char ips[16];
-            ip_text(ip, ips, sizeof(ips));
-            ESP_LOGI(TAG, "[%s] %s on %u, %d B (held, not logged): %s%s",
-                     ips, SVC[idx].name, (unsigned)SVC[idx].port, n, s_lead, s_hex);
-        }
+        if (!quiet_when_held) say_held(idx, ip, n);
         return;
     }
     emit(idx, ip, mac, held, user, s_lead, s_hex);
@@ -310,15 +318,43 @@ static void handle_tcp(const mt_tcp_result_t *r)
 
 // A whitelisted sender: counted; the first one is said on the console once,
 // so the gateway's own MNDP announcement can be seen being skipped.
-static void wl_note(const trip_svc_t *svc, const uint8_t mac[6])
+static void wl_note(const trip_svc_t *svc, const uint8_t mac[6], mt_wl_t why)
 {
     if (s_wl_hits++) return;
+    static const char *const WHY[] = { [MT_WL_NONE] = "?", [MT_WL_GATEWAY] = "the gateway",
+        [MT_WL_GATEWAY_IP] = "the gateway's IP", [MT_WL_ROUTER] = "a router interface",
+        [MT_WL_CONFIG] = "TRIPWIRE_MT_WHITELIST" };
     char ms[18];
-    uint8_t gw[6];
     wifi_manager_format_mac(mac, ms, sizeof(ms));
-    bool is_gw = mikrotik_gateway_mac(gw) && !memcmp(gw, mac, 6);
     ESP_LOGI(TAG, "%s from %s (%s): whitelisted, counted, not reported (said once)",
-             svc->name, ms, is_gw ? "the gateway" : "TRIPWIRE_MT_WHITELIST");
+             svc->name, ms, why <= MT_WL_CONFIG ? WHY[why] : "?");
+}
+
+// MNDP and MAC-Telnet wait in the ring until the whitelist is complete (the
+// gateway's MAC from ARP, the router's interface MACs from the MikroTik
+// client), MT_WL_BOOT_HOLD_S at most. Said once, when they are let through.
+static bool udp_released(void)
+{
+    static bool released;
+    if (released) return true;
+    if (!mikrotik_whitelist_ready()) return false;
+    released = true;
+    uint8_t gw[6];
+    uint16_t n = 0;
+    int st = mikrotik_own_macs_state(&n);
+    ESP_LOGI(TAG, "MNDP and MAC-Telnet read from %lu s after boot: gateway MAC %s, router MACs %s%u",
+             (unsigned long)(esp_timer_get_time() / 1000000), mikrotik_gateway_mac(gw) ? "known" : "unknown",
+             st < 0 ? "off, " : st == 0 ? "not read, " : "", (unsigned)n);
+    return true;
+}
+
+// Not inlined, so its buffer is not in handle_datagram()'s frame.
+static void __attribute__((noinline)) say_other_session(const mt_mactelnet_t *m)
+{
+    char dm[18];
+    wifi_manager_format_mac(m->dst, dm, sizeof(dm));
+    ESP_LOGI(TAG, "MAC-Telnet %s for %s, not this device: counted, not reported (said once)",
+             mikrotik_mactelnet_ptype(m->ptype), dm);
 }
 
 // A datagram from the ring (mt_decoy.c's frame tap); d->mac is the frame's source.
@@ -332,7 +368,8 @@ static void handle_datagram(const mt_dgram_t *d)
     size_t n = d->len <= TRIPWIRE_UDP_RX_MAX ? d->len : TRIPWIRE_UDP_RX_MAX;
     s_hex[0] = '\0';
 
-    if (mikrotik_whitelisted(d->mac)) { wl_note(svc, d->mac); return; }
+    mt_wl_t why = mikrotik_whitelist_why(d->mac, d->ip, svc->kind == TW_MNDP);
+    if (why != MT_WL_NONE) { wl_note(svc, d->mac, why); return; }
     if (svc->kind == TW_MNDP) {
         switch (mikrotik_mndp_parse(d->data, n, &s_mndp)) {
         case MT_MNDP_SOLICIT:
@@ -350,18 +387,13 @@ static void handle_datagram(const mt_dgram_t *d)
             break;
         }
     } else {
-        mt_mactelnet_t m;
+        EXT_RAM_BSS_ATTR static mt_mactelnet_t m;   // this task only: off the stack
         if (!mikrotik_mactelnet_parse(d->data, n, &m)) {
             snprintf(s_lead, sizeof(s_lead), "other, %u B: ", (unsigned)d->full_len);
             hex_of(d->data, n < UDP_HEX_MAX ? n : UDP_HEX_MAX, s_hex);
         } else if (memcmp(m.dst, s_my_mac, 6)) {
             // Someone else's session (mactelnet broadcasts them): counted only.
-            if (s_mt_other++ == 0) {
-                char dm[18];
-                wifi_manager_format_mac(m.dst, dm, sizeof(dm));
-                ESP_LOGI(TAG, "MAC-Telnet %s for %s, not this device: counted, not reported (said once)",
-                         mikrotik_mactelnet_ptype(m.ptype), dm);
-            }
+            if (s_mt_other++ == 0) say_other_session(&m);
             return;
         } else {
             snprintf(s_lead, sizeof(s_lead), "%s to this device, %u B",
@@ -379,7 +411,7 @@ static void decoys_drain(void)
         memset(&r, 0, sizeof(r));
     }
     const mt_dgram_t *d;
-    for (int k = 0; k < MT_UDP_SLOTS && (d = mikrotik_udp_peek()) != NULL; k++) {
+    for (int k = 0; k < MT_UDP_SLOTS && udp_released() && (d = mikrotik_udp_peek()) != NULL; k++) {
         handle_datagram(d);
         mikrotik_udp_pop();
     }
@@ -400,8 +432,8 @@ static void decoys_drain(void)
 void tripwire_task(void *arg)
 {
     (void)arg;
-    int      sock[SVC_N];
-    static char list[320];          // startup line only: off the stack
+    EXT_RAM_BSS_ATTR static int sock[SVC_N];    // off the stack, which log_store_append() needs
+    EXT_RAM_BSS_ATTR static char list[320];     // startup line only: off the stack, in PSRAM
     size_t   lo = 0;
     int      open = 0;
 

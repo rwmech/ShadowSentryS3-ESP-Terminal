@@ -7,6 +7,7 @@
 // incident tracking and the one HTTPS sender. Big buffers are PSRAM.
 
 #include "discord.h"
+#include "esp_attr.h"
 #include "notify.h"
 #include "alarm.h"
 #include "log_store.h"
@@ -103,7 +104,7 @@ static settings_t   *s_set;
 static dc_key_t     *s_keys;
 static dc_recent_t  *s_recent;
 static int           s_recent_next;
-static attack_log_t  s_ev;
+EXT_RAM_BSS_ATTR static attack_log_t s_ev;     // PSRAM
 static int           s_resp_len;
 static int           s_hdr_retry_ms, s_rl_remaining, s_rl_reset_ms;
 static TickType_t    s_next_ok;                 // pacing: no post before this tick
@@ -1005,7 +1006,7 @@ void discord_task(void *arg)
         dc_alarm_msg_t m;
         while (xQueueReceive(s_alq, &m, 0) == pdTRUE) handle_alarm(&m, now);
 
-        static notify_msg_t nm;      // task only; off the stack
+        EXT_RAM_BSS_ATTR static notify_msg_t nm;     // task only; off the stack, in PSRAM
         while (s_ntq && xQueueReceive(s_ntq, &nm, 0) == pdTRUE) post_notice(&nm);
         char *dg;
         while (s_dgq && xQueueReceive(s_dgq, &dg, 0) == pdTRUE) post_digest(dg);

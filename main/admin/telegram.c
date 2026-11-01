@@ -1,4 +1,5 @@
 #include "telegram.h"
+#include "esp_attr.h"
 #include "json_esc.h"
 #include "wifi_manager.h"
 #include "geoip.h"
@@ -304,7 +305,7 @@ void telegram_task(void *arg)
     // with the firmware version and the reset reason, on s_notice_queue.
 
     attack_log_t entry;
-    static notify_msg_t notice;     // task only; off the stack
+    EXT_RAM_BSS_ATTR static notify_msg_t notice;     // task only; off the stack, in PSRAM
     while (1) {
         while (s_notice_queue && xQueueReceive(s_notice_queue, &notice, 0) == pdTRUE) {
             if (!settings_telegram_enabled()) continue;

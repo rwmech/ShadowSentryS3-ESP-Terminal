@@ -51,8 +51,14 @@
  *                 destination MAC, then session fields, 22 bytes in all.
  *
  * Whitelist: the gateway's MAC (wifi_manager_get_gateway() and the ARP cache,
- * looked up again every 60 s) and the MACs in TRIPWIRE_MT_WHITELIST. A real
- * MikroTik router announces itself by MNDP every 60 s; that is not an event.
+ * looked up again every 60 s), the router's own interface MACs when the
+ * MikroTik client runs (mikrotik_own_mac(), /rest/interface), the MACs in
+ * TRIPWIRE_MT_WHITELIST, and for MNDP any datagram whose IP source is the
+ * gateway's: RouterOS announces from each interface's own MAC, which need not
+ * be the one ARP gives for the gateway. A real MikroTik router announces
+ * itself by MNDP every 60 s; that is not an event. Datagrams wait in the ring
+ * for the first MT_WL_BOOT_HOLD_S after boot, until the gateway's MAC and
+ * (with the client on) the router's MACs are known.
  */
 
 #define MT_LABEL_LEN        33      // identity, version, board: 32 characters
@@ -61,6 +67,7 @@
 #define MT_API_WORDS_MAX    8       // words read per sentence
 #define MT_MNDP_TLV_MAX     32      // records read per datagram
 #define MT_WHITELIST_MAX    8       // MACs from TRIPWIRE_MT_WHITELIST
+#define MT_WL_BOOT_HOLD_S   60      // MNDP and MAC-Telnet wait at most this long after boot for the whitelist
 #define MT_MACTELNET_HDR    22      // header bytes
 #define MT_RAW_CONN_MAX     2       // TCP decoy connections open at once
 #define MT_POLL_TICKS       1       // tcp_poll interval, in lwIP's 500 ms ticks
@@ -146,8 +153,22 @@ void mikrotik_frame_tap(const uint8_t *frame, size_t len, uint32_t our_ip, uint3
 // Parse TRIPWIRE_MT_WHITELIST; returns how many MACs it holds.
 int mikrotik_whitelist_init(void);
 
-// True for the gateway's MAC and the configured ones. Tripwire task only.
-bool mikrotik_whitelisted(const uint8_t mac[6]);
+// Why a sender is not reported, MT_WL_NONE if it is. ip is the IPv4 source
+// (network order); mndp true lets the gateway's IP count as the router's.
+// Tripwire task only.
+typedef enum {
+    MT_WL_NONE = 0,
+    MT_WL_GATEWAY,          // the gateway's MAC (ARP)
+    MT_WL_GATEWAY_IP,       // MNDP from the gateway's IP, another MAC
+    MT_WL_ROUTER,           // one of the router's interface MACs (MikroTik client)
+    MT_WL_CONFIG,           // TRIPWIRE_MT_WHITELIST
+} mt_wl_t;
+mt_wl_t mikrotik_whitelist_why(const uint8_t mac[6], uint32_t ip, bool mndp);
+
+// True once the gateway's MAC and, with the MikroTik client on, the router's
+// interface MACs are known, and always from MT_WL_BOOT_HOLD_S after boot.
+// Tripwire task only.
+bool mikrotik_whitelist_ready(void);
 
 // The gateway's MAC as last looked up, false if unknown. Tripwire task only.
 bool mikrotik_gateway_mac(uint8_t mac[6]);

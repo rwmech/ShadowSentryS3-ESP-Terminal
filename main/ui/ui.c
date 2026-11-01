@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "esp_attr.h"
 #include "display.h"
 #include "alarm.h"
 #include "buzzer.h"
@@ -744,7 +745,7 @@ static void ignore_ask_cb(lv_event_t *ev)
     s_ign.id = s_alarm.id;
 
     char who[96], what[DESCRIBE_MAX];
-    static char body[DESCRIBE_MAX + 192];
+    EXT_RAM_BSS_ATTR static char body[DESCRIBE_MAX + 192];
     fmt_who(&s_alarm, who, sizeof(who));
     if (kind == IGN_ERROR) {
         fmt_what(&s_alarm, what, sizeof(what));
@@ -861,7 +862,7 @@ typedef struct {
 
 static lv_obj_t  *s_idle;                   // the green view: everything below the light
 static lv_obj_t  *s_tile_val[4];
-static dash_row_t s_off[DASH_ROWS], s_talk[DASH_ROWS];
+EXT_RAM_BSS_ATTR static dash_row_t s_off[DASH_ROWS], s_talk[DASH_ROWS];    // PSRAM, as LVGL's heap
 static lv_obj_t  *s_off_empty, *s_talk_empty, *s_foot;
 static bool       s_off_dirty = true;
 static uint32_t   s_slow_at;
@@ -870,8 +871,8 @@ static bool       s_slow_done;
 typedef struct { uint32_t ip; uint8_t mac[6]; uint32_t n; } kpi_src_t;
 
 // Today's counts, in RAM: seeded from the flash ring at boot, then one per
-// event; reset at local midnight.
-static struct {
+// event; reset at local midnight. PSRAM.
+EXT_RAM_BSS_ATTR static struct {
     uint32_t day;                           // local YYYY*1000+yday, 0 = clock not set
     uint32_t tier[3];                       // alerts, probes, discovery
     uint32_t scans;

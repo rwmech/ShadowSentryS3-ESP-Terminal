@@ -1,4 +1,5 @@
 #include "sd_log.h"
+#include "esp_attr.h"
 #include "json_esc.h"
 #include "board.h"
 #include "config.h"
@@ -567,7 +568,7 @@ static void sd_task(void *arg)
                     uxQueueMessagesWaiting(s_q) < SD_QUEUE_DEPTH / 2; i++)
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-    static char line[1024];
+    EXT_RAM_BSS_ATTR static char line[1024];     // PSRAM; the FAT write copies it
     char path[48];
     int64_t last_space_us = 0;
     // The day file stays open between lines and is synced at most every

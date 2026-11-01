@@ -8,6 +8,7 @@
 #include "tripwire.h"           // TRIPWIRE_MNDP_PORT, TRIPWIRE_MACTELNET_PORT, TRIPWIRE_MT_WHITELIST
 #include "wifi_manager.h"
 #include "detect.h"             // detect_note_logged()
+#include "mikrotik.h"           // main/admin: mikrotik_own_mac(), the router's interface MACs
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -367,15 +368,26 @@ bool mikrotik_gateway_mac(uint8_t mac[6])
     return s_gw_ok;
 }
 
-bool mikrotik_whitelisted(const uint8_t mac[6])
+mt_wl_t mikrotik_whitelist_why(const uint8_t mac[6], uint32_t ip, bool mndp)
 {
     static const uint8_t zero[6] = { 0 };
-    if (!mac || !memcmp(mac, zero, 6)) return false;
     gw_refresh();
-    if (s_gw_ok && !memcmp(mac, s_gw_mac, 6)) return true;
-    for (int i = 0; i < s_wl_n; i++)
-        if (!memcmp(mac, s_wl[i], 6)) return true;
-    return false;
+    if (mac && memcmp(mac, zero, 6)) {
+        if (s_gw_ok && !memcmp(mac, s_gw_mac, 6)) return MT_WL_GATEWAY;
+        if (mikrotik_own_mac(mac)) return MT_WL_ROUTER;
+        for (int i = 0; i < s_wl_n; i++)
+            if (!memcmp(mac, s_wl[i], 6)) return MT_WL_CONFIG;
+    }
+    uint32_t gw;
+    if (mndp && ip && wifi_manager_get_gateway(&gw) && gw == ip) return MT_WL_GATEWAY_IP;
+    return MT_WL_NONE;
+}
+
+bool mikrotik_whitelist_ready(void)
+{
+    if (esp_timer_get_time() >= (int64_t)MT_WL_BOOT_HOLD_S * 1000000) return true;
+    gw_refresh();
+    return s_gw_ok && mikrotik_own_macs_state(NULL) != 0;      // -1 client off, 1 read
 }
 
 // ── RouterOS API ──────────────────────────────────────────────────────────────

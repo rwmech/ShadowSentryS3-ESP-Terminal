@@ -139,7 +139,12 @@
 #define TRIPWIRE_HOLD_S         30      // one event per source and service
 #define TRIPWIRE_HOLD_SLOTS     32      // sources x services remembered
 #define TRIPWIRE_BACKLOG        2       // per port
-#define TRIPWIRE_TASK_STACK     3072    // internal; high-water logged on each new low
+// Internal (log_store_append() writes SPIFFS). The deepest path is an event:
+// the task's own frames (about 400 B since the MikroTik decoys) under
+// log_store_append(), its listeners and the SPIFFS append (about 2.1 KB measured
+// on the board, more when SPIFFS garbage-collects). 3072 left 432 B free after an
+// MNDP event; 4096 leaves about 1.6 KB on that path. High-water logged on each new low.
+#define TRIPWIRE_TASK_STACK     4096
 #define TRIPWIRE_FRAME_MAX      2048    // Winbox: bytes of the first burst counted
 #define TRIPWIRE_UDP_HOLD_S     300     // MNDP and MAC-Telnet: one event per source
 #define TRIPWIRE_UDP_RX_MAX     512     // bytes kept per datagram (PSRAM ring)
