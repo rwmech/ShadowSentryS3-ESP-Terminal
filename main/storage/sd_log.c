@@ -61,6 +61,7 @@ typedef struct {                    // SDM_LINE: a whole JSON line; the writer f
 typedef struct {
     sdm_kind_t kind;
     bool       ignored;        // SDM_ATTACK: source on the ignore list when it was logged
+    uint8_t    aev;            // SDM_ALARM: what happened (AEV_*)
     union {
         attack_log_t e;
         alarm_info_t a;
@@ -112,15 +113,21 @@ static void on_attack(const attack_log_t *e)
     if (xQueueSend(s_q, &m, 0) != pdTRUE) s_status.dropped++;
 }
 
+enum { AEV_CLOSED, AEV_OPENED, AEV_ACKED, AEV_ESCALATED, AEV_RESOLVED };
+
 static void on_alarm(const alarm_info_t *a)
 {
     // Only transitions are worth a line; count-only updates arrive every second.
     static alarm_state_t last_state = (alarm_state_t)-1;
     static uint32_t      last_id    = 0;
     if (a->state == last_state && a->id == last_id) return;
+    bool same = a->id == last_id;
+    uint8_t ev = a->state == ALARM_IDLE ? (a->resolved_by ? AEV_RESOLVED : AEV_CLOSED)
+               : a->state == ALARM_ACTIVE ? (same && last_state == ALARM_ACKED ? AEV_ESCALATED : AEV_OPENED)
+               : (same && last_state == ALARM_ACTIVE ? AEV_ACKED : AEV_OPENED);
     last_state = a->state;
     last_id    = a->id;
-    sdm_t m = { .kind = SDM_ALARM };
+    sdm_t m = { .kind = SDM_ALARM, .aev = ev };
     m.a = *a;
     if (xQueueSend(s_q, &m, 0) != pdTRUE) s_status.dropped++;
 }
@@ -247,21 +254,28 @@ static int format_line(const sdm_t *m, char *buf, size_t len, uint32_t *ts_out)
         return snprintf(buf, len,
             "{\"kind\":\"attack\",\"ts\":%lu,\"ip\":\"%s\",\"type\":%u,\"tname\":\"%s\","
             "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\",\"mac\":\"%s\",\"vendor\":\"%s\"%s%s,"
-            "\"headline\":\"%s\",\"tier\":\"%s\"}\n",
+            "\"headline\":\"%s\",\"tier\":\"%s\",\"code\":\"%s\"}\n",
             (unsigned long)*ts_out, ip, t, t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?",
             user_j, pass_j, pay_j, mac, wifi_manager_mac_vendor(e->src_mac), cat_j,
-            m->ignored ? ",\"ignored\":true" : "", hl_j, describe_tier_key(describe_tier(e)));
+            m->ignored ? ",\"ignored\":true" : "", hl_j, describe_tier_key(describe_tier(e)),
+            describe_code(e));
     }
     case SDM_ALARM: {
         const alarm_info_t *a = &m->a;
-        static const char *STATE[] = { "closed", "opened", "acknowledged" };
+        static const char *EVENT[] = { "closed", "opened", "acknowledged", "escalated", "resolved" };
+        char code_j[2 * DESCRIBE_CODE_LEN], hl_j[2 * DESCRIBE_MAX];
+        jesc(a->code, code_j, sizeof(code_j));
+        jesc(a->headline, hl_j, sizeof(hl_j));
         fmt_ip(a->src_ip, ip, sizeof(ip));
         *ts_out = (uint32_t)time(NULL);
         return snprintf(buf, len,
             "{\"kind\":\"alarm\",\"ts\":%lu,\"event\":\"%s\",\"id\":%lu,\"ip\":\"%s\","
-            "\"type\":%u,\"count\":%lu}\n",
-            (unsigned long)*ts_out, a->state <= 2 ? STATE[a->state] : "?",
-            (unsigned long)a->id, ip, (unsigned)a->type, (unsigned long)a->count);
+            "\"type\":%u,\"count\":%lu,\"cond\":\"%s\",\"code\":\"%s\",\"headline\":\"%s\","
+            "\"acked_by\":\"%s\",\"resolved_by\":\"%s\"}\n",
+            (unsigned long)*ts_out, m->aev < 5 ? EVENT[m->aev] : "?",
+            (unsigned long)a->id, ip, (unsigned)a->type, (unsigned long)a->count,
+            alarm_cond_key(a->cond), code_j, hl_j,
+            alarm_by_key(a->acked_by), alarm_by_key(a->resolved_by));
     }
     case SDM_SNAP: {
         const sdm_snap_t *s = &m->s;

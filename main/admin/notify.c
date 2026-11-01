@@ -13,6 +13,7 @@
 #include "config.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "nvs.h"
 #include "lwip/ip4_addr.h"
 #include <stdio.h>
@@ -172,12 +173,20 @@ static const char *type_name(uint8_t t)
     return t < ATTACK_TYPE_COUNT ? NAMES[t] : "other attack";
 }
 
-static void post_closed(const alarm_info_t *a, const char *why)
+// "Code 17-01 ARP sweep: incident #N <what>", the code first so a cut keeps it
+static void inc_title(char *out, size_t len, const alarm_info_t *a, const char *what)
+{
+    const char *name = describe_code_name(a->code);
+    snprintf(out, len, "Code %s%s%s: incident #%lu %s",
+             a->code[0] ? a->code : "?", name ? " " : "", name ? name : "", (unsigned long)a->id, what);
+}
+
+static void post_closed(const alarm_info_t *a, const char *what, const char *why)
 {
     char title[NOTIFY_TITLE_MAX], text[160], ip[16];
     ip4_addr_t addr = { .addr = a->src_ip };
     ip4addr_ntoa_r(&addr, ip, sizeof(ip));
-    snprintf(title, sizeof(title), "Incident #%lu closed", (unsigned long)a->id);
+    inc_title(title, sizeof(title), a, what);
     snprintf(text, sizeof(text), "%s\nSource: %s\nEvents: %lu",
              why, ip, (unsigned long)a->count);
     notify_send(NOTIFY_INCIDENT_CLOSED, title, text, NOTIFY_INFO);
@@ -188,31 +197,42 @@ static void on_alarm(const alarm_info_t *a)
     // Transitions only: count-only updates arrive every second.
     if (a->state == s_prev.state && a->id == s_prev.id) { s_prev = *a; return; }
 
-    char title[NOTIFY_TITLE_MAX], text[160], ip[16];
+    static char *text;                  // alarm task only, PSRAM: off its stack
+    if (!text) text = heap_caps_malloc(NOTIFY_TEXT_MAX, MALLOC_CAP_SPIRAM);
+    if (!text) { s_prev = *a; return; }
+    char title[NOTIFY_TITLE_MAX], ip[16];
     ip4_addr_t addr = { .addr = a->src_ip };
     ip4addr_ntoa_r(&addr, ip, sizeof(ip));
 
-    if (a->state == ALARM_ACTIVE) {
-        // An acked incident is closed implicitly when another source opens a new one.
-        if (s_prev.state == ALARM_ACKED && s_prev.id && s_prev.id != a->id) {
+    if (a->state != ALARM_IDLE && a->id != s_prev.id) {
+        // A YELLOW incident is closed implicitly when a new one opens.
+        if (s_prev.state != ALARM_IDLE && s_prev.id) {
             char why[64];
-            snprintf(why, sizeof(why), "New incident #%lu from another source.", (unsigned long)a->id);
-            post_closed(&s_prev, why);
+            snprintf(why, sizeof(why), "New incident #%lu.", (unsigned long)a->id);
+            post_closed(&s_prev, "closed, GREEN", why);
         }
-        snprintf(title, sizeof(title), "Incident #%lu opened", (unsigned long)a->id);
-        snprintf(text, sizeof(text), "Attack: %s\nSource: %s", type_name(a->type), ip);
+        bool red = a->state == ALARM_ACTIVE;
+        inc_title(title, sizeof(title), a, red ? "opened, RED" : "opened, YELLOW");
+        snprintf(text, NOTIFY_TEXT_MAX, "%s\nAttack: %s\nSource: %s", a->headline, type_name(a->type), ip);
+        notify_send(NOTIFY_INCIDENT_OPENED, title, text, red ? NOTIFY_ALERT : NOTIFY_WARN);
+    } else if (a->state == ALARM_ACTIVE && s_prev.state == ALARM_ACKED) {
+        inc_title(title, sizeof(title), a, "escalated to RED");
+        snprintf(text, NOTIFY_TEXT_MAX, "%s\nSource: %s\nEvents so far: %lu", a->headline, ip, (unsigned long)a->count);
         notify_send(NOTIFY_INCIDENT_OPENED, title, text, NOTIFY_ALERT);
     } else if (a->state == ALARM_ACKED && s_prev.state == ALARM_ACTIVE) {
-        snprintf(title, sizeof(title), "Incident #%lu acknowledged", (unsigned long)a->id);
-        snprintf(text, sizeof(text), "Source: %s\nEvents so far: %lu", ip, (unsigned long)a->count);
+        inc_title(title, sizeof(title), a, "acknowledged, YELLOW");
+        snprintf(text, NOTIFY_TEXT_MAX, "Acknowledged %s.\nSource: %s\nEvents so far: %lu",
+                 a->acked_by == ALARM_BY_DASHBOARD ? "from the dashboard" : "on the front panel",
+                 ip, (unsigned long)a->count);
         notify_send(NOTIFY_INCIDENT_ACKED, title, text, NOTIFY_WARN);
     } else if (a->state == ALARM_IDLE && s_prev.state != ALARM_IDLE) {
         char why[64];
-        if (alarm_closed_by_rearm())
-            snprintf(why, sizeof(why), "Re-armed.");
+        if (a->resolved_by)
+            snprintf(why, sizeof(why), "Resolved %s.",
+                     a->resolved_by == ALARM_BY_DASHBOARD ? "from the dashboard" : "on the front panel");
         else
             snprintf(why, sizeof(why), "Quiet for %lu s.", (unsigned long)settings_get()->alarm_quiet_s);
-        post_closed(a, why);
+        post_closed(a, a->resolved_by ? "resolved, GREEN" : "closed, GREEN", why);
     }
     s_prev = *a;
 }
