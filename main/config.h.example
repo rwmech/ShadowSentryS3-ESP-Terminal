@@ -264,6 +264,17 @@
 #define WIFI_MON_DEAUTH_THRESHOLD      3     // broadcast deauth/disassoc within the span
 #define WIFI_MON_COOLDOWN_S            60    // min seconds between Wi-Fi alerts
 
+// ── Panel camera (OV2640) ─────────────────────────────────────────────────────
+//
+// The panel photographs whoever presses ACKNOWLEDGE, or confirms IGNORE ERROR
+// or IGNORE DEVICE. With CAM_FLASH_ENABLE 1 the screen turns full white and
+// the backlight full on for under a second first, to light the face, and the
+// camera lets its exposure settle on that light for CAM_FLASH_SETTLE_MS
+// (200..1500) before it captures. 0: no flash, the photo is taken at once.
+// main/camera/cam.h has the defaults for a config.h without these.
+#define CAM_FLASH_ENABLE            1
+#define CAM_FLASH_SETTLE_MS         500
+
 // ── Front panel and incident alarm (CrowPanel 3.5") ──────────────────────────
 //
 // DISPLAY_TZ is a POSIX TZ string for the panel clock and event times, e.g.
@@ -351,3 +362,7 @@ _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT
 // Discovery: on or off (its ports are UDP and fixed by the protocols)
 _Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
 _Static_assert(DISCOVERY_DHCP == 0 || DISCOVERY_DHCP == 1, "DISCOVERY_DHCP must be 0 or 1");
+
+// Panel camera flash
+_Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");
+_Static_assert(CAM_FLASH_SETTLE_MS >= 200 && CAM_FLASH_SETTLE_MS <= 1500, "CAM_FLASH_SETTLE_MS must be 200..1500");

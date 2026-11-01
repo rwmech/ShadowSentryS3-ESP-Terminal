@@ -150,6 +150,26 @@ size_t discovery_devices_json(char *buf, size_t cap);
 // *first_up_s. Either pointer may be NULL. Any task; takes the table lock.
 int discovery_summary(char *label, size_t len, uint32_t *first_up_s);
 
+// For the front panel's LAN talkers: up to max devices with the most packets
+// an hour (all protocols, over first to last seen, at least
+// DISCOVERY_RATE_MIN_S), busiest first, into out. Returns how many. label is
+// the device's best label and vendor its MAC vendor, "" if none. Any task;
+// takes the table lock.
+#define DISCOVERY_VENDOR_LEN    41      // OUI_NAME_MAX
+#define DISCOVERY_RATE_MIN_S    600
+typedef struct {
+    uint32_t ip;                        // network order, 0 = unknown
+    uint8_t  mac[6];
+    uint32_t per_hour;
+    char     label[DISCOVERY_LABEL_LEN];
+    char     vendor[DISCOVERY_VENDOR_LEN];
+} discovery_talker_t;
+int discovery_top_talkers(discovery_talker_t *out, int max);
+
+// The best label of the device with this MAC (if not NULL and known) or IP,
+// into buf. False, and buf "", if there is none. Any task; takes the lock.
+bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif
