@@ -80,13 +80,6 @@ header{
 }
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,210,160,.6)}50%{box-shadow:0 0 0 5px rgba(0,210,160,0)}}
 .pill-device{color:var(--muted);border-color:rgba(100,116,139,.2);background:rgba(100,116,139,.06)}
-.alarm-banner{display:none;position:relative;z-index:2;margin:0 0 14px;padding:14px 18px;border-radius:10px;
-  background:rgba(127,29,29,.92);border:1px solid var(--red);color:#fff;align-items:center;gap:16px}
-.alarm-banner.on{display:flex}
-.alarm-banner .ab-title{font-weight:700;font-size:1.05rem}
-.alarm-banner .ab-sub{font-size:.8rem;color:#fecaca;margin-top:2px}
-.alarm-banner button{margin-left:auto;padding:10px 22px;border-radius:8px;border:0;background:#fff;color:#7f1d1d;font-weight:700;cursor:pointer}
-.alarm-banner.acked{background:rgba(120,53,15,.92);border-color:var(--amber)}
 .clear-btn{
   background:transparent;border:1px solid rgba(248,113,113,.25);
   color:var(--red);padding:5px 14px;border-radius:6px;cursor:pointer;
@@ -324,9 +317,6 @@ html,body{font-size:15px;line-height:1.5}
 .brand h1{font-size:17px}
 .brand p,.pill,.clear-btn{font-size:13px}
 .tab{font-size:15px;padding:7px 16px}
-.alarm-banner .ab-title{font-size:17px}
-.alarm-banner .ab-sub{font-size:14px}
-.alarm-banner button{font-size:15px}
 .stat-card .label{font-size:13px}
 .stat-card .sub{font-size:13px;opacity:1}
 .card-title{font-size:13px}
@@ -418,6 +408,58 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
   .form{grid-template-columns:minmax(0,1fr)}
   .form .hint{grid-column:1}
 }
+/* Condition banner (alert-web): the panel's condition, CSS only. Red is the big
+   one, yellow smaller, green a slim line. */
+.cond{position:relative;z-index:2;display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0;padding:14px 28px;
+  border-bottom:1px solid var(--border);color:#fff}
+.cond-emb{width:44px;height:44px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.cond-main{flex:1;min-width:260px}
+.cond-title{font-weight:800;letter-spacing:1.5px}
+.cond-hl{font-size:16px;font-weight:600;margin-top:4px;overflow-wrap:anywhere}
+.cond-meta{font-size:14px;margin-top:3px;overflow-wrap:anywhere}
+.cond-btns{display:flex;flex-wrap:wrap;gap:8px}
+.cond-btns button{padding:9px 16px;border-radius:7px;cursor:pointer;font:700 14px var(--font);letter-spacing:.6px;
+  background:rgba(0,0,0,.25);color:#fff;border:1px solid rgba(255,255,255,.55)}
+.cond-btns button:hover{background:rgba(0,0,0,.4)}
+.cond-btns button:disabled{opacity:.5;cursor:wait}
+.cond-btns .cb-ack{background:#fff;color:#7f1d1d;border-color:#fff}
+.cond-err{flex-basis:100%;font-size:14px;font-weight:600;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px}
+.cond-red{background:linear-gradient(90deg,#991b1b,#b91c1c 55%,#7f1d1d);border-bottom:2px solid #ff3b3b;box-shadow:0 4px 24px rgba(255,59,59,.35)}
+.cond-red .cond-emb{color:#fff}
+.cond-red .cond-title{font-size:24px}
+.cond-red .cond-meta{color:#fee2e2}
+.cond-yellow{background:rgba(120,83,15,.92);border-bottom:2px solid #ffc400;padding:10px 28px}
+.cond-yellow .cond-emb{width:30px;height:30px;color:#ffc400}
+.cond-yellow .cond-title{font-size:17px;color:#ffe08a}
+.cond-yellow .cond-meta{color:#fde68a}
+.cond-green{padding:4px 28px;background:rgba(0,210,160,.08);border-bottom:1px solid rgba(34,255,154,.35)}
+.cond-green .cond-emb,.cond-green .cond-btns{display:none}
+.cond-green .cond-title{font-size:13px;font-weight:600;letter-spacing:.5px;color:#22ff9a}
+/* Codes and tiers (alert-web) */
+.code-chip{display:inline-block;margin-right:8px;padding:0 7px;border-radius:6px;font:700 13px var(--mono);
+  background:rgba(255,255,255,.08);color:var(--text);border:1px solid rgba(255,255,255,.22);white-space:nowrap}
+.tier-chip{display:inline-block;margin-left:6px;padding:1px 9px;border-radius:10px;font-size:13px;font-weight:700;vertical-align:middle}
+.tier-alert{background:rgba(255,59,59,.15);color:#fca5a5;border:1px solid rgba(255,59,59,.4)}
+.tier-probe{background:rgba(255,196,0,.12);color:#fde68a;border:1px solid rgba(255,196,0,.35)}
+.tier-info{background:rgba(129,140,248,.15);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
+.detail-row .dv.muted{color:var(--muted);font-style:italic}
+.m-btn.ipcopy{flex:none;display:inline-block;margin-left:8px;padding:2px 10px;font-size:13px;font-style:normal}
+.m-btn.copy-fail{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.45);color:var(--red)}
+.dv-alerts{margin-top:14px}
+.dv-tog{display:flex;align-items:center;gap:6px;font-size:14px;margin:4px 0;cursor:pointer}
+.dv-tog input{width:16px;height:16px}
+.dv-msg{font-size:14px;color:var(--amber);min-height:1em}
+/* Device drill-in and AI advice (alert-web) */
+.dv-msgs{margin-top:14px}
+.dv-list{max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:8px}
+.dv-list details{border-bottom:1px solid rgba(255,255,255,.06);padding:6px 10px}
+.dv-list details:last-child{border-bottom:none}
+.dv-list summary{cursor:pointer;font-size:14px;overflow-wrap:anywhere}
+.dv-list summary .td-ts{margin-right:8px}
+.dv-list summary .tsub{margin-right:8px}
+.dv-list pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px var(--mono);color:var(--muted);margin-top:6px}
+.ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.cond{padding-left:16px;padding-right:16px}}
 </style>
 </head>
 <body>
@@ -443,13 +485,21 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
   <button class="clear-btn" onclick="clearLogs()">&#128465; Clear Logs</button>
 </header>
 
-<div class="alarm-banner" id="alarm-banner">
-  <div>
-    <div class="ab-title" id="ab-title">&#9888; Attack in progress</div>
-    <div class="ab-sub" id="ab-sub"></div>
+<!-- Fork: condition banner, the panel's alarm state 1:1 (GET /api/status "alarm", WebSocket alarm push). -->
+<div class="cond" id="cond" hidden>
+  <svg class="cond-emb" viewBox="0 0 40 40" aria-hidden="true"><path d="M7 21 20 9 33 21"/><path d="M7 32 20 20 33 32"/></svg>
+  <div class="cond-main">
+    <div class="cond-title" id="cond-title"></div>
+    <div class="cond-hl" id="cond-hl"></div>
+    <div class="cond-meta" id="cond-meta"></div>
   </div>
-  <button id="ab-ack" onclick="ackAlarm()">Acknowledge</button>
-  <button id="ab-rearm" onclick="rearmAlarm()" hidden>Re-arm</button>
+  <div class="cond-btns">
+    <button type="button" class="cb-ack" id="cond-ack" onclick="ackAlarm()">ACKNOWLEDGE</button>
+    <button type="button" id="cond-res" onclick="resolveAlarm()">RESOLVE</button>
+    <button type="button" id="cond-ige" onclick="ignoreAlarm('error')">IGNORE ERROR</button>
+    <button type="button" id="cond-igd" onclick="ignoreAlarm('device')">IGNORE DEVICE</button>
+  </div>
+  <div class="cond-err" id="cond-err" hidden></div>
 </div>
 
 <main id="page-dash">
@@ -722,13 +772,14 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
         <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
+        <select id="lg-code" onchange="renderDay()" title="Filter by error code"><option value="">All codes</option></select>
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
         <a class="btn" id="lg-dl" href="#" download>Download</a>
       </div>
     </div>
     <div class="note" id="lg-note"></div>
     <div class="tbl-wrap"><table id="lg-table" class="no-cred">
-      <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Source IP</th><th>Vendor (MAC)</th><th class="c-cred">Username</th><th class="c-cred">Password</th><th>Details</th></tr></thead>
+      <thead><tr><th>Time</th><th>Kind</th><th>Type</th><th>Code</th><th>Source IP</th><th>Vendor (MAC)</th><th class="c-cred">Username</th><th class="c-cred">Password</th><th>Details</th></tr></thead>
       <tbody id="lg-body"></tbody>
     </table></div>
   </div>
@@ -817,12 +868,13 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="msg" id="ig-msg"></div>
     <div class="hint muted" style="margin-bottom:8px">Ignored sources are still logged (flagged "ignored") but never open an incident or send an alert. The panel's IGNORE SOURCE adds here; only this page removes.</div>
     <div class="tbl-wrap"><table>
-      <thead><tr><th>IP</th><th>Vendor (MAC)</th><th>Note</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>IP</th><th>Vendor (MAC)</th><th>Code</th><th>Note</th><th>Added</th><th></th></tr></thead>
       <tbody id="ig-body"></tbody>
     </table></div>
     <form class="ctl" style="margin-top:10px" onsubmit="addIgnore(event)" autocomplete="off">
       <input id="ig-ip" maxlength="15" placeholder="IP, e.g. 192.168.0.50">
       <input id="ig-mac" maxlength="17" placeholder="MAC, optional">
+      <select id="ig-code" title="Which alerts to ignore"><option value="">All alerts from this device</option></select>
       <input id="ig-note" maxlength="39" placeholder="Note">
       <button class="btn" type="submit">Add</button>
     </form>
@@ -856,7 +908,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="modal-body" id="d-body"></div>
     <div class="modal-foot">
       <button class="m-btn" id="d-copy" onclick="copyDetail()">&#128203; Copy details</button>
+      <button class="m-btn" id="d-ai" onclick="eventAdvice()" title="Opens claude.ai in a new tab with this report; nothing is sent until you click">Get AI advice</button>
     </div>
+    <div class="ai-msg" id="d-aimsg" hidden></div>
   </div>
 </div>
 
@@ -893,58 +947,147 @@ const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no a
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
   ?String.fromCodePoint(...[...c.toUpperCase()].map(x=>0x1F1E6+x.charCodeAt(0)-65)):'';
 
+// ── Fork: error codes, tiers, trap ports (alert-web) ──
+// Event and device strings only reach the DOM through textContent (mk below).
+function mk(tag,cls,text){const x=document.createElement(tag);if(cls)x.className=cls;if(text!==undefined&&text!==null)x.textContent=String(text);return x;}
+// "NN-NN" from the event, the alarm or a log line; '' from older firmware,
+// which sends none (the type name stands in everywhere then).
+function codeOf(x){const c=x&&x.code;return typeof c==='string'&&/^[0-9A-Za-z]{1,4}-[0-9A-Za-z]{1,4}$/.test(c)?c:'';}
+// code -> name and code -> tier, from GET /api/codes (describe.c's table),
+// loaded at start (loadCodes below). Empty with older firmware.
+const CODES={},CODE_TIER={};
+// 00-00: an event no code covers (counted as a probe).
+function codeName(c,type){return c==='00-00'?'Unclassified':(c&&CODES[c])||TNAME[type]||'Event';}
+const TIERS={alert:'Alert',probe:'Probe',info:'Info'};
+const tierKey=t=>TIERS[t]?t:t===1?'alert':t===2?'probe':t===3?'info':'';
+// The event's tier ("alert", "probe" or "info", from describe.c), else its
+// code's, else a guess by type (older firmware; HTTP is per event: probe here).
+function tierOf(e){
+  return(e&&tierKey(e.tier))||(e&&CODE_TIER[codeOf(e)])||(e&&e.type===13?'info':e&&(e.type===9||e.type===1)?'probe':'alert');
+}
+// "Code NN-NN" as a chip, then the headline. Headlines from firmware with
+// codes already start "Code NN-NN <name> | ...": that prefix becomes the chip.
+function codeLead(x,c,hl){
+  if(c){
+    x.append(mk('span','code-chip','Code '+c));
+    if(hl.startsWith('Code '+c+' '))hl=hl.slice(c.length+6);
+    if(c==='00-00'&&hl.startsWith('Event | '))hl='Unclassified'+hl.slice(5);   // the table's "Event"
+  }
+  x.append(document.createTextNode(hl));
+  return x;
+}
+// The trap port the event hit. Taken from the event when it carries one ("port",
+// or the port in its payload's fixed prefix or suffix), else the type's port.
+const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
+  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z]{2,12} on (\d{1,5})\b/};
+function trapPort(e){
+  const ok=n=>Number.isInteger(n)&&n>0&&n<65536;
+  if(ok(+e.port))return +e.port;
+  const re=PORT_RE[e.type],m=re&&re.exec(String(e.payload||''));
+  if(m&&ok(+m[1]))return +m[1];
+  return ok(TPORT[e.type])?TPORT[e.type]:0;
+}
+// Copy to the clipboard. navigator.clipboard needs a secure context (https or
+// localhost), and the dashboard is plain http on the LAN, so fall back to a
+// hidden textarea and execCommand('copy'). Resolves true or false.
+async function copyText(text){
+  if(window.isSecureContext&&navigator.clipboard&&navigator.clipboard.writeText){
+    try{await navigator.clipboard.writeText(text);return true;}catch{}
+  }
+  const ta=document.createElement('textarea'),f=document.activeElement;
+  ta.value=text;ta.setAttribute('readonly','');
+  ta.style.cssText='position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,text.length);
+  let ok=false;try{ok=document.execCommand('copy');}catch{}
+  ta.remove();if(f&&f.focus)try{f.focus();}catch{}
+  return ok;
+}
+// A copy button's feedback: "Copied" or "Copy failed", then its own label again.
+async function copyBtn(b,text,label){
+  const ok=await copyText(text);
+  b.classList.toggle('copied',ok);b.classList.toggle('copy-fail',!ok);
+  b.textContent=ok?'✓ Copied':'Copy failed';
+  clearTimeout(b._t);b._t=setTimeout(()=>{b.classList.remove('copied','copy-fail');b.textContent=label;},2500);
+}
+// Rows as aligned plain text: "Label    value", continuation lines indented.
+function textRows(rows){
+  const w=Math.max(...rows.map(r=>r[0].length))+2;
+  return rows.map(([k,v])=>k.padEnd(w)+String(v).split('\n').join('\n'+' '.repeat(w))).join('\n');
+}
+
 // ── Detail modal ──
 let _entries=[];
 let _detailText='';
+const evKey=x=>`${x.ts}-${x.ip}-${x.type}`;
+// The popup's title: "Code NN-NN <name>" and the tier. Without a code (older
+// firmware) the type name, and "attack" only for the alert tier.
+function eventTitle(e){
+  const c=codeOf(e),t=tierOf(e),n=TNAME[e.type]||'Event';
+  return c?'Code '+c+' '+codeName(c,e.type):n+(t==='alert'?' attack':t==='probe'?' probe':' event');
+}
 function showDetailKey(key){
-  const e=_entries.find(x=>`${x.ts}-${x.ip}-${x.type}`===key);
+  const e=_entries.find(x=>evKey(x)===key);
   if(!e)return;
-  const ip=ip4(e.ip), name=TNAME[e.type]||'?';
+  const ip=ip4(e.ip),name=TNAME[e.type]||'?',port=trapPort(e),tier=tierOf(e),c=codeOf(e);
   const mac=e.mac&&e.mac!=='unknown'?e.mac:null;
   const sameIp=_entries.filter(x=>x.ip===e.ip).length;
   const sameMac=mac?_entries.filter(x=>x.mac===e.mac).length:0;
-  document.getElementById('d-icon').innerHTML=ICON[e.type]||'?';
-  document.getElementById('d-title').textContent=name+' attack';
-  document.getElementById('d-sub').textContent=`Port ${TPORT[e.type]||'?'} · ${TDESC[e.type]||''}`;
-  const v=s=>s?esc(s):'<span class="muted">—</span>';
-  const geoStr=(e.country||e.org)
-    ? `${flagOf(e.cc)} ${esc(e.country||'')}${e.org?' · '+esc(e.org):''}`
-      +`${e.asn?' <span class="muted">('+esc(e.asn)+')</span>':''}`
-      +`${e.geotag?' <span class="vendor-chip">'+esc(e.geotag)+'</span>':''}`
-    : '';
-  const rows=[
-    ['Time', esc(fmt(e.ts))],
-    ['Protocol', `${esc(name)} <span class="muted">· port ${TPORT[e.type]||'?'}</span>`],
-    ['Source IP', `${flagOf(e.cc)} ${esc(ip)}`.trim()],
-    ['Location', geoStr||'<span class="muted">—</span>'],
-    ['MAC', mac?esc(mac):'<span class="muted">unknown</span>'],
-    ['Vendor', v(e.vendor)],
-    ['Username', v(e.user)],
-    ['Password', v(e.pass)],
-    ['Payload', v(e.payload)],
-    ['Alerting', e.ign?'ignored source: logged, no alarm':'<span class="muted">normal</span>'],
-    ['From this IP', `${sameIp} event(s) <span class="muted">in current window</span>`],
-  ];
-  if(mac)rows.push(['From this MAC', `${sameMac} event(s) <span class="muted">in current window</span>`]);
-  document.getElementById('d-body').innerHTML=rows.map(([k,val])=>
-    `<div class="detail-row"><div class="dk">${k}</div><div class="dv">${val}</div></div>`).join('');
-  _detailText=
-    `ShadowSentry S3 — ${name} attack\n`+
-    `Time:     ${fmt(e.ts)}\n`+
-    `Protocol: ${name} (port ${TPORT[e.type]||'?'})\n`+
-    `IP:       ${ip}\n`+
-    `Location: ${(e.country||e.org)?`${e.country||''}${e.org?' · '+e.org:''}${e.asn?' ('+e.asn+')':''}${e.geotag?' ['+e.geotag+']':''}`:'-'}\n`+
-    `MAC:      ${mac||'unknown'}${e.vendor?' ('+e.vendor+')':''}\n`+
-    `Creds:    ${e.user||'-'} : ${e.pass||'-'}\n`+
-    `Payload:  ${e.payload||'-'}`;
-  const cb=document.getElementById('d-copy');cb.classList.remove('copied');cb.innerHTML='&#128203; Copy details';
+  document.getElementById('d-icon').innerHTML=ICON[e.type]||'?';   // constant entities, no event data
+  const title=eventTitle(e),h=document.getElementById('d-title');
+  h.replaceChildren(document.createTextNode(title+' '),mk('span','tier-chip tier-'+tier,TIERS[tier]));
+  const sub=`Port ${port||TPORT[e.type]||'?'} · ${TDESC[e.type]||''}`;
+  document.getElementById('d-sub').textContent=sub;
+  const geo=(e.country||e.org)?`${flagOf(e.cc)} ${e.country||''}${e.org?' · '+e.org:''}${e.asn?' ('+e.asn+')':''}${e.geotag?' ['+e.geotag+']':''}`.trim():'';
+  const dash='—';
+  // [label, value]; the same rows make the screen and the copied report.
+  const rows=[];
+  if(c)rows.push(['Code',c+' '+codeName(c,e.type)]);
+  if(e.headline)rows.push(['Headline',e.headline]);
+  rows.push(['Tier',TIERS[tier]],
+    ['Time',fmt(e.ts)],
+    ['Protocol',`${name} · port ${port||TPORT[e.type]||'?'}`],
+    ['Source IP',`${flagOf(e.cc)} ${ip}`.trim()+(port?' (port '+port+')':'')],
+    ['Location',geo||dash],
+    ['MAC',mac||'unknown'],
+    ['Vendor',e.vendor||dash],
+    ['Username',e.user||dash],
+    ['Password',e.pass||dash],
+    ['Payload',e.payload||dash],
+    ['Alerting',e.ign?'ignored source: logged, no alarm':'normal'],
+    ['From this IP',`${sameIp} event(s) in current window`]);
+  if(mac)rows.push(['From this MAC',`${sameMac} event(s) in current window`]);
+  document.getElementById('d-body').replaceChildren(...rows.map(([k,val])=>{
+    const r=mk('div','detail-row'),v=mk('div','dv',val);
+    if(val===dash||val==='unknown'||val==='normal')v.classList.add('muted');
+    if(k==='Source IP'){
+      const lbl=port?'Copy ip:port':'Copy IP',b=mk('button','m-btn ipcopy',lbl);
+      b.type='button';b.title='Copy '+(port?ip+':'+port:ip);
+      b.onclick=()=>copyBtn(b,port?ip+':'+port:ip,lbl);
+      v.append(' ',b);
+    }
+    r.append(mk('div','dk',k),v);return r;}));
+  _detailText='ShadowSentry S3 event report\n'+title+' ('+TIERS[tier]+')\n'+sub+'\n\n'+textRows(rows)+'\n';
+  const cb=document.getElementById('d-copy');cb.classList.remove('copied','copy-fail');cb.textContent='\u{1F4CB} Copy details';
+  document.getElementById('d-aimsg').hidden=true;
   document.getElementById('detail-modal').classList.add('open');
 }
 function closeDetail(){document.getElementById('detail-modal').classList.remove('open');}
-function copyDetail(){
-  navigator.clipboard?.writeText(_detailText).then(()=>{
-    const cb=document.getElementById('d-copy');cb.classList.add('copied');cb.innerHTML='&#10003; Copied';
-  }).catch(()=>{});
+function copyDetail(){copyBtn(document.getElementById('d-copy'),_detailText,'\u{1F4CB} Copy details');}
+// ── Get AI advice (alert-web) ──
+// Opens claude.ai in a new tab with the prompt in ?q= and copies the same
+// prompt, since that prefill is undocumented and has broken before. Device or
+// event details leave the LAN only on this click.
+const AI_MAX=4000;
+const AI_HEAD='I run a home-network honeypot. Analyse this ';
+function aiAdvice(prompt,msg){
+  if(prompt.length>AI_MAX)prompt=prompt.slice(0,AI_MAX-6)+'\n[cut]';
+  const cp=copyText(prompt);          // first, while the click still counts as a user gesture
+  window.open('https://claude.ai/new?q='+encodeURIComponent(prompt),'_blank','noopener');
+  msg.hidden=false;msg.textContent='Opening claude.ai...';
+  cp.then(ok=>{msg.textContent=ok?'Prompt copied; paste it if Claude doesn\'t pre-fill.':'Copy failed: the prompt is only in the claude.ai link.';});
+}
+function eventAdvice(){
+  aiAdvice(AI_HEAD+'event and tell me if it\'s a risk and what to do:\n\n'+_detailText,document.getElementById('d-aimsg'));
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
 
@@ -1006,17 +1149,19 @@ function updateFeed(entries){
   const empty=feed.querySelector('.feed-empty');
   if(empty)feed.innerHTML='';
   entries.slice(0,15).forEach(e=>{
-    const key=`${e.ts}-${e.ip}-${e.type}`;
+    const key=evKey(e);
     if(_seen.has(key))return;_seen.add(key);
-    const cred=e.user?`${esc(e.user)}:${esc(e.pass)}`:'—';
-    const div=document.createElement('div');
-    div.className='feed-item';
-    div.setAttribute('onclick',`showDetailKey('${e.ts}-${e.ip}-${e.type}')`);
-    const vchip=e.vendor?`<span class="vendor-chip">${esc(e.vendor)}</span>`:'';
-    const fl=flagOf(e.cc);
-    div.innerHTML=`<span class="feed-icon">${ICON[e.type]||'?'}</span>`+
-      `<div class="feed-info">${e.headline?`<div class="fi-hl">${esc(e.headline)}</div>`:''}<div class="fi-ip">${fl?fl+' ':''}${ip4(e.ip)}${vchip}</div><div class="fi-cred">${cred}</div></div>`+
-      `${BADGE[e.type]||''}${e.ign?IGN:''}<span class="feed-time">${fmt(e.ts).split(' ')[1]||''}</span>`;
+    // Event data through textContent only; ICON, BADGE and IGN are constants.
+    const div=mk('div','feed-item'),ic=mk('span','feed-icon'),info=mk('div','feed-info');
+    div.onclick=()=>showDetailKey(key);
+    ic.innerHTML=ICON[e.type]||'?';
+    const hl=hlCell('fi-hl',e);if(hl)info.append(hl);
+    const fl=flagOf(e.cc),ipd=mk('div','fi-ip',(fl?fl+' ':'')+ip4(e.ip));
+    if(e.vendor)ipd.append(mk('span','vendor-chip',e.vendor));
+    info.append(ipd,mk('div','fi-cred',e.user?e.user+':'+(e.pass||''):'—'));
+    div.append(ic,info);
+    div.insertAdjacentHTML('beforeend',(BADGE[e.type]||'')+(e.ign?IGN:''));
+    div.append(mk('span','feed-time',fmt(e.ts).split(' ')[1]||''));
     feed.insertBefore(div,feed.firstChild);
   });
   while(feed.children.length>40)feed.removeChild(feed.lastChild);
@@ -1027,15 +1172,25 @@ function updateTable(entries){
   const tb=document.getElementById('tbody');
   document.getElementById('tbl-count').textContent=entries.length?`Showing ${entries.length} most recent`:'';
   if(!entries.length){tb.innerHTML='<tr class="empty-row"><td colspan="7">&#10003; No attacks recorded yet</td></tr>';return;}
-  tb.innerHTML=entries.map(e=>`<tr onclick="showDetailKey('${e.ts}-${e.ip}-${e.type}')">
-    <td class="td-ts">${fmt(e.ts)}</td>
-    <td class="td-ip">${flagOf(e.cc)?flagOf(e.cc)+' ':''}${ip4(e.ip)}</td>
-    <td class="td-mac">${macCell(e)}</td>
-    <td>${BADGE[e.type]||e.type}${e.ign?IGN:''}</td>
-    <td class="td-cred">${e.user?esc(e.user):'—'}</td>
-    <td class="td-cred">${e.pass?esc(e.pass):'—'}</td>
-    <td class="td-payload" title="${esc(e.payload||'')}">${e.headline?esc(e.headline)+`<div class="td-raw">${esc(e.payload||'')}</div>`:esc(e.payload||'')}</td>
-  </tr>`).join('');
+  tb.replaceChildren(...entries.map(e=>{
+    const tr=mk('tr'),key=evKey(e),fl=flagOf(e.cc);
+    tr.onclick=()=>showDetailKey(key);
+    const mc=mk('td','td-mac',e.mac&&e.mac!=='unknown'?e.mac:'—');
+    if(e.vendor)mc.append(mk('span','vendor-chip',e.vendor));
+    const pc=mk('td');pc.innerHTML=(BADGE[e.type]||String(+e.type))+(e.ign?IGN:'');   // constants only
+    const dc=hlCell('td-payload',e,'td')||mk('td','td-payload',e.payload||'');
+    dc.title=String(e.payload||'');
+    tr.append(mk('td','td-ts',fmt(e.ts)),mk('td','td-ip',(fl?fl+' ':'')+ip4(e.ip)),mc,pc,
+      mk('td','td-cred',e.user||'—'),mk('td','td-cred',e.pass||'—'),dc);
+    return tr;}));
+}
+// "Code NN-NN" and the headline, with the raw payload under it (feed, table).
+// Null when the event has neither, so the caller falls back to the payload.
+function hlCell(cls,e,tag){
+  const c=codeOf(e);if(!c&&!e.headline)return null;
+  const x=codeLead(mk(tag||'div',cls),c,String(e.headline||codeName(c,e.type)));
+  if(tag==='td')x.append(mk('div','td-raw',e.payload||''));
+  return x;
 }
 
 // online indicator
@@ -1098,29 +1253,89 @@ async function loadStatus(){
     if(d.alarm)renderAlarm(d.alarm);
   }catch{if(!beat)heartbeat(false);}
 }
-// incident alarm: state 0 idle, 1 active (unacknowledged), 2 acknowledged
+// ── Condition banner (fork, alert-web) ──
+// The panel's condition, as the firmware reports it: "cond" green, yellow or
+// red. Older firmware sends only the numeric state (0 idle, 1 active and not
+// acknowledged, 2 acknowledged), read as green, red and yellow.
+let _alarm=null;
+function condOf(a){
+  if(a&&(a.cond==='green'||a.cond==='yellow'||a.cond==='red'))return a.cond;
+  const s=a&&a.state;
+  return s===1||s==='active'?'red':s===2||s==='acked'?'yellow':'green';
+}
+const COND_TITLE={red:'ALERT / CONDITION: RED',yellow:'CONDITION: YELLOW',green:'Condition green'};
+// "14:02:11" today, "2026-10-31 14:02:11" otherwise.
+function whenOf(s){if(!(s>1600000000))return'--';const f=fmt(s),n=fmt(Date.now()/1000);return f.slice(0,10)===n.slice(0,10)?f.slice(11):f;}
+function alarmSource(a){
+  const ip=typeof a.ip==='string'?a.ip:a.ip?ip4(a.ip):'',mac=isMacA(a.mac)?String(a.mac):'',v=a.vendor?String(a.vendor):'';
+  return{ip,mac,v,text:[ip,v&&mac?v+' ('+mac+')':v||mac].filter(Boolean).join(', ')||'unknown source'};
+}
+const isMacA=m=>!!m&&m!=='unknown'&&m!=='00:00:00:00:00:00';
 function renderAlarm(a){
-  const b=document.getElementById('alarm-banner');
-  if(a.state!==1&&a.state!==2){b.classList.remove('on');return;}
-  const t=s=>s>1600000000?new Date(s*1000).toLocaleTimeString():'--',ack=a.state===2;
-  b.classList.toggle('acked',ack);
-  document.getElementById('ab-ack').hidden=ack;
-  document.getElementById('ab-rearm').hidden=!ack;
-  document.getElementById('ab-title').innerHTML=ack?`Incident #${a.id} acknowledged`:`&#9888; Attack in progress &nbsp;#${a.id}`;
-  document.getElementById('ab-sub').textContent=
-    `${TNAME[a.type]||'?'} from ${ip4(a.ip)} ${a.mac} ${a.vendor} | ${a.count} event${a.count===1?'':'s'} | first ${t(a.first)} | last ${t(a.last)}`;
-  b.classList.add('on');
+  a=a||{};_alarm=a;
+  const b=document.getElementById('cond'),c=condOf(a),g=id=>document.getElementById(id);
+  b.className='cond cond-'+c;b.hidden=false;
+  g('cond-title').textContent=COND_TITLE[c]+(c==='green'&&a.id&&a.resolved_by?' · incident #'+a.id+' resolved from the '+String(a.resolved_by):'');
+  const open=c!=='green',code=codeOf(a);
+  g('cond-hl').hidden=g('cond-meta').hidden=!open;
+  if(open){
+    const hl=g('cond-hl');hl.replaceChildren();
+    const src=alarmSource(a);
+    codeLead(hl,code,a.headline?String(a.headline):(TNAME[a.type]||'Incident')+' from '+(src.ip||'an unknown source'));
+    const n=+a.count||0,meta=[];
+    if(a.id)meta.push('Incident #'+a.id);
+    meta.push('Source '+src.text,n+' event'+(n===1?'':'s'),'first '+whenOf(a.first),'last '+whenOf(a.last));
+    if(a.acked_by)meta.push('acknowledged by '+String(a.acked_by));
+    g('cond-meta').textContent=meta.join(' · ');
+  }
+  g('cond-ack').hidden=c!=='red';
+  g('cond-res').hidden=!open;
+  g('cond-ige').hidden=!open||!code;          // needs a code: firmware with codes only
+  g('cond-igd').hidden=!open;
+  if(!open)condErr('');
 }
-async function ackAlarm(){
-  try{await fetch('/api/ack',POSTH);setTimeout(loadStatus,300);}
-  catch{alert('Acknowledge failed');}
+function condErr(t){const e=document.getElementById('cond-err');e.textContent=t;e.hidden=!t;}
+function condBusy(on){document.querySelectorAll('.cond-btns button').forEach(x=>x.disabled=on);}
+// POST the new route; on 404 (older firmware) the old one, when there is one.
+async function alarmPost(path,old,body){
+  const opt=body?{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)}:POSTH;
+  let r=await fetch(path,opt);
+  if(r.status===404&&old)r=await fetch(old,POSTH);
+  return alarmReply(r);
 }
-// re-arm: ends the acknowledged incident so the next event alarms again; logs are kept
-async function rearmAlarm(){
-  try{const r=await fetch('/api/alarm/clear',POSTH);
-    if(r.ok)document.getElementById('alarm-banner').classList.remove('on');
-    else alert('Re-arm failed: '+((await r.json().catch(()=>({}))).error||r.status));}
-  catch{alert('Re-arm failed');}
+// 200 {"alarm":{...}}: the state after the alarm task applied it, shown at
+// once; 204 (older firmware): the status poll shows it. 409: nothing to act on.
+async function alarmReply(r){
+  let d={};try{d=await r.json();}catch{}
+  if(d&&d.alarm&&typeof d.alarm==='object')renderAlarm(d.alarm);
+  if(r.status===409)throw new Error('nothing to act on'+(d.error?' ('+String(d.error)+')':''));
+  if(!r.ok)throw new Error(String(d.error||('HTTP '+r.status)));
+}
+async function alarmAction(what,fn){
+  condBusy(true);condErr('');
+  try{await fn();}catch(e){condErr(what+' failed: '+(e.message||'device unreachable'));}
+  condBusy(false);setTimeout(loadStatus,300);
+}
+function ackAlarm(){alarmAction('Acknowledge',()=>alarmPost('/api/alarm/ack','/api/ack'));}
+// Resolve ends the incident (the dashboard is the only place to); logs are kept.
+// Older firmware: the re-arm route, which only ends an acknowledged incident.
+function resolveAlarm(){alarmAction('Resolve',()=>alarmPost('/api/alarm/resolve','/api/alarm/clear'));}
+// Ignore the incident's error (its code from this device) or the whole device.
+// The confirm names exactly what goes on the ignore list.
+function ignoreAlarm(scope){
+  const a=_alarm||{},code=codeOf(a),src=alarmSource(a);
+  const dev=[src.ip&&'IP '+src.ip,src.mac&&'MAC '+src.mac,src.v&&'('+src.v+')'].filter(Boolean).join(', ')||'this source';
+  const what=scope==='error'?'Code '+code+' '+codeName(code,a.type)+' from '+dev:'every alert from '+dev;
+  if(!confirm('Ignore '+what+'?\n\nIts events are still logged but will not alarm again. Undo it on Settings, Ignore list.'))return;
+  alarmAction(scope==='error'?'Ignore error':'Ignore device',async()=>{
+    const r=await fetch('/api/alarm/ignore',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify({scope})});
+    if(r.status===404&&scope==='device'){        // older firmware: the ignore list itself
+      const r2=await fetch('/api/ignore',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},
+        body:JSON.stringify({action:'add',ip:src.ip,mac:src.mac,note:'banner, incident #'+(a.id||'?')})});
+      if(!r2.ok)throw new Error('HTTP '+r2.status);return;
+    }
+    await alarmReply(r);
+  });
 }
 load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
 
@@ -1143,6 +1358,7 @@ function connectWS(){
   let ws;
   try{ws=new WebSocket(`ws://${location.hostname}:9998/ws`);}
   catch{return void setTimeout(connectWS,5000);}
+  ws.onopen=()=>loadStatus();                      // resync the banner after a reconnect
   ws.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.alarm)renderAlarm(d.alarm);else applyEntry(d);}catch{}};
   ws.onclose=()=>setTimeout(connectWS,3000);       // auto-reconnect
   ws.onerror=()=>{try{ws.close();}catch{}};
@@ -1180,8 +1396,10 @@ setInterval(()=>{if(!$('page-devices').hidden)loadDevices();},10000);
 const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
 async function loadDevices(){
   let d;
+  const ig=fetch('/api/ignore',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(j)_ign=j.entries||[];}).catch(()=>{});
   try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw 0;d=await r.json();}
   catch{$('dv-note').textContent='Devices unavailable';return;}
+  await ig;
   const ls=(d.listeners||[]).map(l=>String(l.name)+' '+l.port+(l.open?'':' ('+(l.error||'closed')+')'));
   $('dv-note').textContent='Listening, log only: '+ls.join(', ')+'. mDNS: '+String(d.mdns||'')+'. '+
     (d.packets||0)+' packets'+(d.events_held?', '+d.events_held+' events held':'')+(d.sd_dropped?', '+d.sd_dropped+' log lines rate-limited':'')+'.';
@@ -1190,6 +1408,7 @@ async function loadDevices(){
   if(!devs.length){emptyRow(tb,6,'No devices yet');return;}
   tb.replaceChildren(...devs.flatMap(x=>{
     const tr=el('tr','dv-row'),lab=td(x.label||'unknown');
+    if(x.headline||codeOf(x))lab.append(codeLead(el('div','dev-sub'),codeOf(x),S(x.headline)||codeName(codeOf(x),13)));
     if(x.label_src)lab.append(el('div','dev-sub','from '+x.label_src));
     if(x.host&&x.host!==x.label)lab.append(el('div','dev-sub','host '+x.host));
     const mac=td(x.mac&&x.mac!=='unknown'?x.mac:'','td-mac');
@@ -1292,6 +1511,7 @@ function dvAnalysis(x){
   const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
   const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
   box.append(el('div','an-foot','Worked out in this page from the table above, by fixed rules. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
+  box._ai={id,beh,risk,rate,sug:sug[0],qs};
   return box;
 }
 // A device row and its analysis row under it; a click opens or closes it, and
@@ -1299,12 +1519,160 @@ function dvAnalysis(x){
 const _dvOpen=new Set();
 function dvRows(tr,x){
   const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
-  c.colSpan=6;c.append(dvAnalysis(x));an.append(c);
+  const ab=dvAnalysis(x);
+  c.colSpan=6;c.append(ab,dvAlerts(x),dvMessages(x,k,ab._ai));an.append(c);
   const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
   set(_dvOpen.has(k));
   tr.title='Click for the analysis';
   tr.onclick=()=>set(an.hidden);
   return [tr,an];
+}
+
+// ── Alerts from this device (Devices tab, in the analysis row) ──
+// One toggle per code seen from the device, plus "all". On = an ignore entry
+// for this device and that code ("" for all); off removes it. The ignore list
+// matches IP or MAC, so an entry for either counts.
+function dvCodes(x){
+  const out=new Set();
+  const add=c=>{c=codeOf({code:typeof c==='object'&&c?c.code:c});if(c)out.add(c);};
+  (Array.isArray(x.codes)?x.codes:[]).forEach(add);add(x.code);
+  const ip=S(x.ip),mac=isMac(x.mac)?S(x.mac).toLowerCase():'';
+  _entries.forEach(e=>{if((ip&&ip4(e.ip)===ip)||(mac&&S(e.mac).toLowerCase()===mac))add(e.code);});
+  return[...out].sort();
+}
+function dvIgn(x,code){
+  const ip=S(x.ip),mac=isMac(x.mac)?S(x.mac).toLowerCase():'';
+  return(_ign||[]).filter(g=>ignCode(g)===code&&((ip&&S(g.ip)===ip)||(mac&&S(g.mac).toLowerCase()===mac)));
+}
+function dvAlerts(x){
+  const box=el('div','an dv-alerts'),s=el('div');box.append(s);
+  s.append(el('h5','','Alerts from this device'));
+  if(!_ign){s.append(el('div','muted','Ignore list unavailable'));return box;}
+  const msg=el('div','dv-msg'),all=dvIgn(x,'').length>0,codes=dvCodes(x);
+  const row=(code,label)=>{
+    const l=el('label','dv-tog'),cb=el('input'),on=dvIgn(x,code).length>0;
+    cb.type='checkbox';cb.checked=!on;
+    const st=el('span','tsub',code&&all?'covered by "all"':on?'ignored':'alerting');
+    if(code&&all)cb.disabled=true;
+    cb.onchange=()=>dvToggle(x,code,!cb.checked,cb,msg);
+    l.append(cb,document.createTextNode(' '+label+' '),st);return l;
+  };
+  s.append(row('','All alerts from this device'));
+  codes.forEach(c=>s.append(row(c,codeText(c))));
+  if(!codes.length)s.append(el('div','tsub','No codes seen from it yet'+(_entries.length?' in the recent events':'')+'. "All" covers every code.'));
+  s.append(msg,el('div','tsub','Ticked: alerts. Unticked: on the ignore list, still logged, no alarm. Undo here or on Settings, Ignore list.'));
+  return box;
+}
+async function dvToggle(x,code,ignore,cb,msg){
+  const what=codeText(code)+' from '+(S(x.label)||S(x.ip)||S(x.mac));
+  if(!confirm((ignore?'Ignore ':'Alert again on ')+what+'?'))return void(cb.checked=!cb.checked);
+  cb.disabled=true;msg.textContent='Saving...';
+  try{
+    if(ignore){
+      const b={action:'add',ip:S(x.ip),mac:isMac(x.mac)?S(x.mac):'',note:(S(x.label)||'Devices tab').slice(0,39)};
+      if(code)b.code=code;
+      await postIgnore(b);
+    }else{
+      // Remove each matching entry; indices move after a removal, so re-match each time.
+      for(let i=0;i<IGNORE_MAX_JS;i++){const g=dvIgn(x,code)[0];if(!g)break;await postIgnore(ignRemoveBody(g));}
+    }
+    msg.textContent='';
+  }catch(e){msg.textContent='Failed: '+e.message;}
+  loadDevices();
+}
+const IGNORE_MAX_JS=32;   // IGNORE_MAX in main/detect/ignore.h
+
+// ── Device drill-in: every logged line for one device (GET /api/logs/device) ──
+// Loaded on request (it scans the card), kept per device across the 10 s
+// refresh. Every value through textContent.
+const _dvMsg=new Map();      // device key -> {days, lines, meta, err}
+const DV_DAYS=[1,2,3,7];
+function dvMessages(x,k,ai){
+  const box=el('div','an dv-msgs'),s=el('div');box.append(s);
+  s.append(el('h5','','Messages from this device'));
+  if(!_dvMsg.has(k))_dvMsg.set(k,{days:2});
+  const st=_dvMsg.get(k),ctl=el('div','ctl'),sel=el('select'),go=el('button','btn',st.lines?'Refresh':'Load messages');
+  DV_DAYS.forEach(d=>{const o=el('option','',d===1?'today':'last '+d+' days');o.value=String(d);sel.append(o);});
+  sel.value=String(st.days);go.type='button';
+  const aib=el('button','btn','Get AI advice'),info=el('span','muted'),list=el('div','dv-list'),amsg=el('div','tsub');
+  aib.type='button';aib.title='Opens claude.ai in a new tab with this device\'s details; nothing is sent until you click';
+  amsg.hidden=true;
+  ctl.append(sel,go,aib,info);
+  s.append(ctl,amsg,el('div','tsub','From the microSD day logs, newest first, matched by MAC or IP. Discovery is logged per new observation (a new device, protocol, label or query), not per packet.'),list);
+  const show=()=>{
+    go.disabled=!!st.loading;go.textContent=st.lines?'Refresh':'Load messages';
+    if(st.loading){info.textContent='Reading the card...';return;}
+    if(st.err){info.textContent=st.err;list.hidden=true;return;}
+    if(!st.lines){info.textContent='';list.hidden=true;return;}
+    const m=st.meta||{};
+    info.textContent=st.lines.length+' line'+(st.lines.length===1?'':'s')+' from '+(+m.files||0)+' day file'+(+m.files===1?'':'s')+
+      (m.truncated?' (cut by the '+(m.timed_out?'3 s time box':'limit of '+(+m.limit||0))+')':'')+
+      (m.long_skipped?', '+m.long_skipped+' over-long skipped':'')+(st.bad?', '+st.bad+' unreadable':'');
+    list.hidden=!st.lines.length;
+    list.replaceChildren(...st.lines.map(dvMsgRow));
+  };
+  // The 10 s refresh rebuilds this row, so the newest build's show() paints the result.
+  st.show=show;
+  go.onclick=async()=>{
+    st.days=+sel.value||2;st.loading=true;show();
+    try{Object.assign(st,await dvLoadLog(x,st.days),{err:''});}
+    catch(e){st.err=e.message;st.lines=null;}
+    st.loading=false;st.show();
+  };
+  aib.onclick=()=>aiAdvice(dvPrompt(x,ai,st.lines),amsg);
+  show();
+  return box;
+}
+async function dvLoadLog(x,days){
+  const q=new URLSearchParams();
+  if(isMac(x.mac))q.set('mac',S(x.mac));
+  if(x.ip)q.set('ip',S(x.ip));
+  q.set('days',String(days));q.set('limit','300');
+  const r=await fetch('/api/logs/device?'+q.toString(),{cache:'no-store'});
+  if(r.status===404)throw new Error('This firmware has no device log route.');
+  if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(String(d.error||('Could not read the log (HTTP '+r.status+').')));}
+  const lines=[];let meta=null,bad=0;
+  for(const ln of (await r.text()).split('\n')){
+    if(!ln.trim())continue;
+    try{const o=JSON.parse(ln);
+      if(!o||typeof o!=='object'||Array.isArray(o)){bad++;continue;}
+      if(o.kind==='meta'&&!meta){meta=o;continue;}
+      lines.push(o);}catch{bad++;}
+  }
+  return{lines,meta,bad};
+}
+// One line: time, kind and type, code, headline (or details); the raw line underneath.
+function dvMsgRow(o){
+  const v=logView(o),d=el('details'),sm=el('summary');
+  sm.append(el('span','td-ts',fmt(v.ts)),el('span','tsub',[v.kind,v.type].filter(Boolean).join(' ')));
+  codeLead(sm,v.code,v.hl||v.det);
+  d.append(sm);
+  if(v.hl&&v.det)d.append(el('div','td-raw',v.det));
+  const raw=Object.assign({},o);delete raw._raw;
+  d.append(el('pre','',JSON.stringify(raw,null,1)));
+  return d;
+}
+// The device prompt: identity, behaviour, rates, last queries, risk notes and
+// the rule table's suggestion, then the newest log lines while they fit.
+function dvPrompt(x,ai,lines){
+  ai=ai||{id:[],beh:[],risk:[],rate:[],sug:'',qs:[]};
+  const pr=Object.entries(x.protos||{}).map(([k,v])=>k+' '+v).join(', ');
+  const head=textRows([['Label',S(x.label)||'unknown'],['IP',S(x.ip)||'-'],['MAC',isMac(x.mac)?S(x.mac):'unknown'],
+    ['Vendor',S(x.vendor)||'unknown'],['Random MAC',x.random_mac?'yes':'no'],['Protocols',pr?pr+' ('+(+x.total||0)+' packets)':'-'],
+    ['First seen',x.first_ts?fmt(x.first_ts):ago(x.first_ago_s)],['Last seen',x.last_ts?fmt(x.last_ts):ago(x.last_ago_s)]]);
+  const list=(h,a)=>h+'\n'+(a.length?a.map(t=>'- '+t).join('\n'):'- none')+'\n';
+  let p=AI_HEAD+'device and tell me if it\'s a risk and what to do:\n\nDevice\n'+head+'\n\n'+
+    list('Identity',ai.id)+'\n'+list('Behaviour',ai.beh)+'\n'+list('Rates',ai.rate)+'\n'+list('Last queries',ai.qs)+'\n'+
+    list('Risk notes',ai.risk)+'\nSuggestion from the dashboard\'s fixed rules: '+ai.sug+'\n';
+  if(lines&&lines.length){
+    p+='\nRecent log lines, newest first\n';
+    for(const o of lines){
+      const v=logView(o),t='- '+fmt(v.ts)+' '+[v.kind,v.type].filter(Boolean).join(' ')+': '+(v.hl&&v.hl.startsWith('Code ')?v.hl:(v.code?'Code '+v.code+' ':'')+(v.hl||v.det))+'\n';
+      if(p.length+t.length>AI_MAX-40)break;
+      p+=t;
+    }
+  }
+  return p;
 }
 
 // ── Summary metrics ──
@@ -1375,6 +1743,15 @@ function renderSummary(d){
 let _days=[],_lines=[],_tail=262144,_loaded=null;
 TNAME.forEach((n,i)=>{const o=el('option','',n);o.value=String(i);$('lg-type').append(o);});
 function note(t){$('lg-note').textContent=t;}
+// The code filter lists the codes in the loaded file, then every code in the
+// table, each with its name; the current choice is kept.
+function fillCodeFilter(){
+  const sel=$('lg-code'),cur=sel.value,seen=new Set(_lines.map(codeOf).filter(Boolean));
+  const all=[...new Set([...seen].sort().concat(Object.keys(CODES).sort()))];
+  const o0=el('option','','All codes');o0.value='';
+  sel.replaceChildren(o0,...all.map(c=>{const o=el('option','','Code '+c+' '+codeName(c,-1)+(seen.has(c)?'':' (none here)'));o.value=c;return o;}));
+  if(all.includes(cur))sel.value=cur;
+}
 function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
 async function loadDays(){
   const sel=$('lg-day'),cur=sel.value;
@@ -1384,7 +1761,7 @@ async function loadDays(){
     sel.replaceChildren(..._days.map(f=>{const o=el('option','',String(f.name).replace('.jsonl','')+'  ('+kb(+f.size||0)+')');o.value=String(f.name);return o;}));
     if(cur&&_days.some(f=>f.name===cur))sel.value=cur;
     updDl();
-    if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),8,'No lines');}
+    if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),9,'No lines');}
     else if(!_loaded)loadDay();
   }catch{note('Could not list the log files.');}
 }
@@ -1402,6 +1779,7 @@ async function loadDay(){
     }
     _lines=out.reverse();
     _loaded={name,cut:!full&&(+f.size||0)>_tail,bad};
+    fillCodeFilter();
     renderDay();
   }catch{note('Could not load '+name+'.');}
 }
@@ -1414,17 +1792,17 @@ try{$('lg-disco').checked=localStorage.getItem(LS_DISCO)==='1';}catch{}
 function setShowDisco(on){try{localStorage.setItem(LS_DISCO,on?'1':'0');}catch{}renderDay();}
 function renderDay(){
   if(!_loaded)return;
-  const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value;
-  const disco=$('lg-disco').checked||k==='discovery'||(t!==''&&+t===DISCO_T);
+  const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value,cf=$('lg-code').value;
+  const disco=$('lg-disco').checked||k==='discovery'||(t!==''&&+t===DISCO_T)||!!cf;
   let hid=0;
   const rows=_lines.filter(o=>{
-    if((k&&o.kind!==k)||(t!==''&&o.type!==+t)||(q&&!o._raw.includes(q)))return false;
+    if((k&&o.kind!==k)||(t!==''&&o.type!==+t)||(cf&&codeOf(o)!==cf)||(q&&!o._raw.includes(q)))return false;
     if(!disco&&isDisco(o)){hid++;return false;}
     return true;});
   const vs=groupViews(rows.map(logView)),shown=vs.slice(0,MAXROWS),tb=$('lg-body');
   // Username and Password only when a row on screen has one.
   $('lg-table').classList.toggle('no-cred',!shown.some(v=>v.user||v.pass));
-  if(!shown.length)emptyRow(tb,8,_lines.length?'No matching lines':'No lines');
+  if(!shown.length)emptyRow(tb,9,_lines.length?'No matching lines':'No lines');
   else{const fr=document.createDocumentFragment();shown.forEach(v=>fr.append(logRow(v)));tb.replaceChildren(fr);}
   note(_loaded.name+': '+_lines.length+' lines'+(_loaded.cut?' (last '+kb(_tail)+' only; tick "whole file" for all)':'')+
     (_loaded.bad?', '+_loaded.bad+' unreadable':'')+'. '+rows.length+' matching in '+vs.length+' rows'+
@@ -1434,7 +1812,7 @@ function renderDay(){
 const S=v=>v==null?'':String(v);
 // One log line as table cells, all plain strings.
 function logView(o){
-  const kind=S(o.kind)||'?',v={kind,ts:+o.ts||0,type:'',ip:'',mac:'',vendor:'',user:'',pass:'',det:'',hl:''};
+  const kind=S(o.kind)||'?',v={kind,ts:+o.ts||0,code:codeOf(o),type:'',ip:'',mac:'',vendor:'',user:'',pass:'',det:'',hl:''};
   if(kind==='attack'){v.type=TNAME[o.type]||S(o.tname)||'?';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);v.user=S(o.user);v.pass=S(o.pass);v.det=(o.ignored===true?'(ignored) ':'')+S(o.payload);v.hl=S(o.headline);}
   else if(kind==='alarm'){v.type=TNAME[o.type]||'';v.ip=S(o.ip);v.det='incident #'+S(o.id)+' '+S(o.event)+', '+S(o.count)+' event(s)';}
   else if(kind==='http'){v.type='HTTP '+S(o.port);v.ip=S(o.ip);v.det=[S(o.category),S(o.request),o.host?'Host '+S(o.host):'',o.ua?'UA '+S(o.ua):'',o.body?'body '+S(o.body):''].filter(Boolean).join(', ');}
@@ -1442,7 +1820,7 @@ function logView(o){
   else if(kind==='discovery'){v.type=S(o.proto);v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
     v.det=S(o.what)+': '+[S(o.label),o.host&&o.host!==o.label?'host '+S(o.host):'',S(o.query)].filter(Boolean).join(', ');}
   else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
-  v.key=isDisco(o)?[kind,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
+  v.key=isDisco(o)?[kind,v.code,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
   v.n=1;v.t0=v.t1=v.ts;
   return v;
 }
@@ -1465,11 +1843,12 @@ function devCell(vendor,mac){
 function logRow(v){
   const tr=el('tr'),tc=td(fmt(v.t0),'td-ts nw'),dc=td('','td-payload td-det');
   if(v.n>1){const a=fmt(v.t0),b=fmt(v.t1);tc.append(el('div','tsub','to '+(a.slice(0,10)===b.slice(0,10)?b.slice(11):b)));dc.append(el('span','rep','x'+v.n));}
-  // A headline (newer firmware) leads; the raw details stay underneath.
-  if(v.hl){dc.append(document.createTextNode(v.hl));dc.append(el('div','td-raw',v.det));}
-  else dc.append(document.createTextNode(v.det));
+  // The code and headline (newer firmware) lead; the raw details stay underneath.
+  codeLead(dc,v.code,v.hl||v.det);
+  if(v.hl)dc.append(el('div','td-raw',v.det));
   dc.title=v.det;
-  tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
+  const cc=td(v.code,'nw mono');if(v.code)cc.title=codeName(v.code,-1);
+  tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),cc,td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
   return tr;
 }
 
@@ -1602,18 +1981,33 @@ function uploadOui(){
 
 // ── Ignore list ──
 function igMsg(kind,text){const m=$('ig-msg');m.className='msg '+kind;m.textContent=text;}
+let _ign=null;            // the last ignore list read, for the Devices toggles
+// An entry's code: "" (or none, older firmware) means every alert from the device.
+const ignCode=x=>codeOf(x);
+const codeText=c=>c?'Code '+c+' '+codeName(c,-1):'All alerts';
 function renderIgnore(d){
   const tb=$('ig-body'),en=d.entries||[];
-  if(!en.length)return emptyRow(tb,5,'Nothing ignored');
+  _ign=en;fillIgnCodes();
+  if(!en.length)return emptyRow(tb,6,'Nothing ignored');
   tb.replaceChildren(...en.map(x=>{
     const tr=el('tr'),mc=devCell(x.vendor,x.mac),b=el('button','btn btn-red','Remove'),bc=td('');
     b.type='button';b.onclick=()=>removeIgnore(x);bc.append(b);
-    tr.append(td(x.ip||'','td-ip'),mc,td(x.note||''),td(x.ts?fmt(x.ts):'-','td-ts'),bc);return tr;}));
+    tr.append(td(x.ip||'','td-ip'),mc,td(codeText(ignCode(x)),'nw'),td(x.note||''),td(x.ts?fmt(x.ts):'-','td-ts'),bc);return tr;}));
+}
+// The Add row's code list: "All alerts from this device", then every code
+// with its name (the code table, plus any code the list already holds).
+function fillIgnCodes(){
+  const sel=$('ig-code'),cur=sel.value;
+  const all=[...new Set(Object.keys(CODES).concat((_ign||[]).map(ignCode).filter(Boolean)))].sort();
+  const o0=el('option','','All alerts from this device');o0.value='';
+  sel.replaceChildren(o0,...all.map(c=>{const o=el('option','',codeText(c));o.value=c;return o;}));
+  if(all.includes(cur))sel.value=cur;
 }
 async function loadIgnore(){
   try{const r=await fetch('/api/ignore');if(!r.ok)throw 0;renderIgnore(await r.json());}
   catch{igMsg('err','Could not load the ignore list.');}
 }
+const ignRemoveBody=x=>({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||'',code:ignCode(x)});
 async function postIgnore(body){
   const r=await fetch('/api/ignore',{method:'POST',headers:{'X-ShadowSentry':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
   let d={};try{d=await r.json();}catch{}
@@ -1622,15 +2016,16 @@ async function postIgnore(body){
 }
 async function addIgnore(ev){
   ev.preventDefault();
-  const ip=$('ig-ip').value.trim(),mac=$('ig-mac').value.trim(),note=$('ig-note').value.trim();
+  const ip=$('ig-ip').value.trim(),mac=$('ig-mac').value.trim(),note=$('ig-note').value.trim(),code=$('ig-code').value;
   if(!ip&&!mac)return igMsg('err','Give an IP, a MAC or both.');
-  try{await postIgnore({action:'add',ip,mac,note});['ig-ip','ig-mac','ig-note'].forEach(i=>$(i).value='');igMsg('ok','Added.');}
+  const body={action:'add',ip,mac,note};if(code)body.code=code;
+  try{await postIgnore(body);['ig-ip','ig-mac','ig-note'].forEach(i=>$(i).value='');$('ig-code').value='';igMsg('ok','Added.');}
   catch(e){igMsg('err','Add failed: '+e.message);}
 }
 async function removeIgnore(x){
-  const who=[x.ip,x.mac].filter(Boolean).join(' / ');
+  const who=[x.ip,x.mac].filter(Boolean).join(' / ')+(ignCode(x)?', '+codeText(ignCode(x)):'');
   if(!confirm('Remove '+who+' from the ignore list? Its events will alarm again.'))return;
-  try{await postIgnore({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||''});igMsg('ok','Removed '+who+'.');}
+  try{await postIgnore(ignRemoveBody(x));igMsg('ok','Removed '+who+'.');}
   catch(e){igMsg('err','Remove failed: '+e.message);loadIgnore();}
 }
 async function testWhatsApp(){
@@ -1667,6 +2062,16 @@ async function rebootDev(){
   setTimeout(poll,8000);
 }
 
+// ── Code table (GET /api/codes) ──
+async function loadCodes(){
+  try{
+    const r=await fetch('/api/codes');if(!r.ok)return;
+    const d=await r.json(),rows=Array.isArray(d)?d:(d&&d.codes)||[];
+    rows.forEach(x=>{const c=codeOf(x);if(!c)return;CODES[c]=S(x.name);const t=tierKey(x.tier);if(t)CODE_TIER[c]=t;});
+    fillIgnCodes();if(_loaded)fillCodeFilter();
+  }catch{}
+}
+loadCodes();
 showPage(location.hash.slice(1)||'dash');
 </script>
 </body>
