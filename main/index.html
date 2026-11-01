@@ -449,6 +449,16 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .dv-tog{display:flex;align-items:center;gap:6px;font-size:14px;margin:4px 0;cursor:pointer}
 .dv-tog input{width:16px;height:16px}
 .dv-msg{font-size:14px;color:var(--amber);min-height:1em}
+/* Device drill-in and AI advice (alert-web) */
+.dv-msgs{margin-top:14px}
+.dv-list{max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:8px}
+.dv-list details{border-bottom:1px solid rgba(255,255,255,.06);padding:6px 10px}
+.dv-list details:last-child{border-bottom:none}
+.dv-list summary{cursor:pointer;font-size:14px;overflow-wrap:anywhere}
+.dv-list summary .td-ts{margin-right:8px}
+.dv-list summary .tsub{margin-right:8px}
+.dv-list pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px var(--mono);color:var(--muted);margin-top:6px}
+.ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.cond{padding-left:16px;padding-right:16px}}
 </style>
 </head>
@@ -898,7 +908,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="modal-body" id="d-body"></div>
     <div class="modal-foot">
       <button class="m-btn" id="d-copy" onclick="copyDetail()">&#128203; Copy details</button>
+      <button class="m-btn" id="d-ai" onclick="eventAdvice()" title="Opens claude.ai in a new tab with this report; nothing is sent until you click">Get AI advice</button>
     </div>
+    <div class="ai-msg" id="d-aimsg" hidden></div>
   </div>
 </div>
 
@@ -944,7 +956,8 @@ function codeOf(x){const c=x&&x.code;return typeof c==='string'&&/^[0-9A-Za-z]{1
 // code -> name and code -> tier, from GET /api/codes (describe.c's table),
 // loaded at start (loadCodes below). Empty with older firmware.
 const CODES={},CODE_TIER={};
-function codeName(c,type){return(c&&CODES[c])||TNAME[type]||'Event';}
+// 00-00: an event no code covers (counted as a probe).
+function codeName(c,type){return c==='00-00'?'Unclassified':(c&&CODES[c])||TNAME[type]||'Event';}
 const TIERS={alert:'Alert',probe:'Probe',info:'Info'};
 const tierKey=t=>TIERS[t]?t:t===1?'alert':t===2?'probe':t===3?'info':'';
 // The event's tier ("alert", "probe" or "info", from describe.c), else its
@@ -958,6 +971,7 @@ function codeLead(x,c,hl){
   if(c){
     x.append(mk('span','code-chip','Code '+c));
     if(hl.startsWith('Code '+c+' '))hl=hl.slice(c.length+6);
+    if(c==='00-00'&&hl.startsWith('Event | '))hl='Unclassified'+hl.slice(5);   // the table's "Event"
   }
   x.append(document.createTextNode(hl));
   return x;
@@ -1054,10 +1068,27 @@ function showDetailKey(key){
     r.append(mk('div','dk',k),v);return r;}));
   _detailText='ShadowSentry S3 event report\n'+title+' ('+TIERS[tier]+')\n'+sub+'\n\n'+textRows(rows)+'\n';
   const cb=document.getElementById('d-copy');cb.classList.remove('copied','copy-fail');cb.textContent='\u{1F4CB} Copy details';
+  document.getElementById('d-aimsg').hidden=true;
   document.getElementById('detail-modal').classList.add('open');
 }
 function closeDetail(){document.getElementById('detail-modal').classList.remove('open');}
 function copyDetail(){copyBtn(document.getElementById('d-copy'),_detailText,'\u{1F4CB} Copy details');}
+// ── Get AI advice (alert-web) ──
+// Opens claude.ai in a new tab with the prompt in ?q= and copies the same
+// prompt, since that prefill is undocumented and has broken before. Device or
+// event details leave the LAN only on this click.
+const AI_MAX=4000;
+const AI_HEAD='I run a home-network honeypot. Analyse this ';
+function aiAdvice(prompt,msg){
+  if(prompt.length>AI_MAX)prompt=prompt.slice(0,AI_MAX-6)+'\n[cut]';
+  const cp=copyText(prompt);          // first, while the click still counts as a user gesture
+  window.open('https://claude.ai/new?q='+encodeURIComponent(prompt),'_blank','noopener');
+  msg.hidden=false;msg.textContent='Opening claude.ai...';
+  cp.then(ok=>{msg.textContent=ok?'Prompt copied; paste it if Claude doesn\'t pre-fill.':'Copy failed: the prompt is only in the claude.ai link.';});
+}
+function eventAdvice(){
+  aiAdvice(AI_HEAD+'event and tell me if it\'s a risk and what to do:\n\n'+_detailText,document.getElementById('d-aimsg'));
+}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
 
 // animated counter
@@ -1480,6 +1511,7 @@ function dvAnalysis(x){
   const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
   const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
   box.append(el('div','an-foot','Worked out in this page from the table above, by fixed rules. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
+  box._ai={id,beh,risk,rate,sug:sug[0],qs};
   return box;
 }
 // A device row and its analysis row under it; a click opens or closes it, and
@@ -1487,7 +1519,8 @@ function dvAnalysis(x){
 const _dvOpen=new Set();
 function dvRows(tr,x){
   const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
-  c.colSpan=6;c.append(dvAnalysis(x),dvAlerts(x));an.append(c);
+  const ab=dvAnalysis(x);
+  c.colSpan=6;c.append(ab,dvAlerts(x),dvMessages(x,k,ab._ai));an.append(c);
   const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
   set(_dvOpen.has(k));
   tr.title='Click for the analysis';
@@ -1548,6 +1581,99 @@ async function dvToggle(x,code,ignore,cb,msg){
   loadDevices();
 }
 const IGNORE_MAX_JS=32;   // IGNORE_MAX in main/detect/ignore.h
+
+// ── Device drill-in: every logged line for one device (GET /api/logs/device) ──
+// Loaded on request (it scans the card), kept per device across the 10 s
+// refresh. Every value through textContent.
+const _dvMsg=new Map();      // device key -> {days, lines, meta, err}
+const DV_DAYS=[1,2,3,7];
+function dvMessages(x,k,ai){
+  const box=el('div','an dv-msgs'),s=el('div');box.append(s);
+  s.append(el('h5','','Messages from this device'));
+  if(!_dvMsg.has(k))_dvMsg.set(k,{days:2});
+  const st=_dvMsg.get(k),ctl=el('div','ctl'),sel=el('select'),go=el('button','btn',st.lines?'Refresh':'Load messages');
+  DV_DAYS.forEach(d=>{const o=el('option','',d===1?'today':'last '+d+' days');o.value=String(d);sel.append(o);});
+  sel.value=String(st.days);go.type='button';
+  const aib=el('button','btn','Get AI advice'),info=el('span','muted'),list=el('div','dv-list'),amsg=el('div','tsub');
+  aib.type='button';aib.title='Opens claude.ai in a new tab with this device\'s details; nothing is sent until you click';
+  amsg.hidden=true;
+  ctl.append(sel,go,aib,info);
+  s.append(ctl,amsg,el('div','tsub','From the microSD day logs, newest first, matched by MAC or IP. Discovery is logged per new observation (a new device, protocol, label or query), not per packet.'),list);
+  const show=()=>{
+    go.disabled=!!st.loading;go.textContent=st.lines?'Refresh':'Load messages';
+    if(st.loading){info.textContent='Reading the card...';return;}
+    if(st.err){info.textContent=st.err;list.hidden=true;return;}
+    if(!st.lines){info.textContent='';list.hidden=true;return;}
+    const m=st.meta||{};
+    info.textContent=st.lines.length+' line'+(st.lines.length===1?'':'s')+' from '+(+m.files||0)+' day file'+(+m.files===1?'':'s')+
+      (m.truncated?' (cut by the '+(m.timed_out?'3 s time box':'limit of '+(+m.limit||0))+')':'')+
+      (m.long_skipped?', '+m.long_skipped+' over-long skipped':'')+(st.bad?', '+st.bad+' unreadable':'');
+    list.hidden=!st.lines.length;
+    list.replaceChildren(...st.lines.map(dvMsgRow));
+  };
+  // The 10 s refresh rebuilds this row, so the newest build's show() paints the result.
+  st.show=show;
+  go.onclick=async()=>{
+    st.days=+sel.value||2;st.loading=true;show();
+    try{Object.assign(st,await dvLoadLog(x,st.days),{err:''});}
+    catch(e){st.err=e.message;st.lines=null;}
+    st.loading=false;st.show();
+  };
+  aib.onclick=()=>aiAdvice(dvPrompt(x,ai,st.lines),amsg);
+  show();
+  return box;
+}
+async function dvLoadLog(x,days){
+  const q=new URLSearchParams();
+  if(isMac(x.mac))q.set('mac',S(x.mac));
+  if(x.ip)q.set('ip',S(x.ip));
+  q.set('days',String(days));q.set('limit','300');
+  const r=await fetch('/api/logs/device?'+q.toString(),{cache:'no-store'});
+  if(r.status===404)throw new Error('This firmware has no device log route.');
+  if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(String(d.error||('Could not read the log (HTTP '+r.status+').')));}
+  const lines=[];let meta=null,bad=0;
+  for(const ln of (await r.text()).split('\n')){
+    if(!ln.trim())continue;
+    try{const o=JSON.parse(ln);
+      if(!o||typeof o!=='object'||Array.isArray(o)){bad++;continue;}
+      if(o.kind==='meta'&&!meta){meta=o;continue;}
+      lines.push(o);}catch{bad++;}
+  }
+  return{lines,meta,bad};
+}
+// One line: time, kind and type, code, headline (or details); the raw line underneath.
+function dvMsgRow(o){
+  const v=logView(o),d=el('details'),sm=el('summary');
+  sm.append(el('span','td-ts',fmt(v.ts)),el('span','tsub',[v.kind,v.type].filter(Boolean).join(' ')));
+  codeLead(sm,v.code,v.hl||v.det);
+  d.append(sm);
+  if(v.hl&&v.det)d.append(el('div','td-raw',v.det));
+  const raw=Object.assign({},o);delete raw._raw;
+  d.append(el('pre','',JSON.stringify(raw,null,1)));
+  return d;
+}
+// The device prompt: identity, behaviour, rates, last queries, risk notes and
+// the rule table's suggestion, then the newest log lines while they fit.
+function dvPrompt(x,ai,lines){
+  ai=ai||{id:[],beh:[],risk:[],rate:[],sug:'',qs:[]};
+  const pr=Object.entries(x.protos||{}).map(([k,v])=>k+' '+v).join(', ');
+  const head=textRows([['Label',S(x.label)||'unknown'],['IP',S(x.ip)||'-'],['MAC',isMac(x.mac)?S(x.mac):'unknown'],
+    ['Vendor',S(x.vendor)||'unknown'],['Random MAC',x.random_mac?'yes':'no'],['Protocols',pr?pr+' ('+(+x.total||0)+' packets)':'-'],
+    ['First seen',x.first_ts?fmt(x.first_ts):ago(x.first_ago_s)],['Last seen',x.last_ts?fmt(x.last_ts):ago(x.last_ago_s)]]);
+  const list=(h,a)=>h+'\n'+(a.length?a.map(t=>'- '+t).join('\n'):'- none')+'\n';
+  let p=AI_HEAD+'device and tell me if it\'s a risk and what to do:\n\nDevice\n'+head+'\n\n'+
+    list('Identity',ai.id)+'\n'+list('Behaviour',ai.beh)+'\n'+list('Rates',ai.rate)+'\n'+list('Last queries',ai.qs)+'\n'+
+    list('Risk notes',ai.risk)+'\nSuggestion from the dashboard\'s fixed rules: '+ai.sug+'\n';
+  if(lines&&lines.length){
+    p+='\nRecent log lines, newest first\n';
+    for(const o of lines){
+      const v=logView(o),t='- '+fmt(v.ts)+' '+[v.kind,v.type].filter(Boolean).join(' ')+': '+(v.hl&&v.hl.startsWith('Code ')?v.hl:(v.code?'Code '+v.code+' ':'')+(v.hl||v.det))+'\n';
+      if(p.length+t.length>AI_MAX-40)break;
+      p+=t;
+    }
+  }
+  return p;
+}
 
 // ── Summary metrics ──
 function bars(id,vals,labels){
@@ -1623,7 +1749,7 @@ function fillCodeFilter(){
   const sel=$('lg-code'),cur=sel.value,seen=new Set(_lines.map(codeOf).filter(Boolean));
   const all=[...new Set([...seen].sort().concat(Object.keys(CODES).sort()))];
   const o0=el('option','','All codes');o0.value='';
-  sel.replaceChildren(o0,...all.map(c=>{const o=el('option','','Code '+c+' '+(CODES[c]||'')+(seen.has(c)?'':' (none here)'));o.value=c;return o;}));
+  sel.replaceChildren(o0,...all.map(c=>{const o=el('option','','Code '+c+' '+codeName(c,-1)+(seen.has(c)?'':' (none here)'));o.value=c;return o;}));
   if(all.includes(cur))sel.value=cur;
 }
 function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
