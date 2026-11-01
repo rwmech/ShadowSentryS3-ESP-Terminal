@@ -68,11 +68,12 @@ static void format_entry_json(const attack_log_t *e, char *buf, size_t len)
         "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
         "\"mac\":\"%s\",\"vendor\":\"%s\","
         "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
-        "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\"}",
+        "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\",\"code\":\"%s\"}",
         (unsigned long)e->timestamp, (unsigned long)e->src_ip, (int)e->type,
         ignore_match(e->src_ip, e->src_mac, describe_code(e)) ? "true" : "false",
         user_j, pass_j, pay_j, mac_j, vendor,
-        gi.cc, ctry_j, org_j, gi.asn, gi.tag, hl_j, describe_tier_key(describe_tier(e)));
+        gi.cc, ctry_j, org_j, gi.asn, gi.tag, hl_j, describe_tier_key(describe_tier(e)),
+        describe_code(e));
 }
 
 // ── Client tracking (httpd task context only) ───────────────────────────────────
@@ -96,7 +97,7 @@ typedef struct { attack_log_t e; } ws_msg_t;
 
 static void broadcast_text(const char *json);
 
-#define WS_JSON_MAX 1024        // one entry, with its headline
+#define WS_JSON_MAX 1536        // one entry, with its headline and code
 
 static void broadcast_work(void *arg)
 {
@@ -126,15 +127,21 @@ static void on_attack(const attack_log_t *e)
 
 void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len)
 {
-    char mac[WIFI_MAC_STR_LEN];
+    char mac[WIFI_MAC_STR_LEN], code_j[2 * DESCRIBE_CODE_LEN], hl_j[2 * DESCRIBE_MAX];
     wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
+    jesc(a->code, code_j, sizeof(code_j));
+    jesc(a->headline, hl_j, sizeof(hl_j));
     snprintf(buf, len,
-        "{\"state\":%d,\"id\":%lu,\"ip\":%lu,\"type\":%u,\"count\":%lu,"
-        "\"first\":%lu,\"last\":%lu,\"mac\":\"%s\",\"vendor\":\"%s\"}",
-        (int)a->state, (unsigned long)a->id, (unsigned long)a->src_ip,
+        "{\"state\":%d,\"cond\":\"%s\",\"code\":\"%s\",\"headline\":\"%s\","
+        "\"id\":%lu,\"ip\":%lu,\"type\":%u,\"count\":%lu,"
+        "\"first\":%lu,\"last\":%lu,\"mac\":\"%s\",\"vendor\":\"%s\","
+        "\"acked_by\":\"%s\",\"resolved_by\":\"%s\"}",
+        (int)a->state, alarm_cond_key(a->cond), code_j, hl_j,
+        (unsigned long)a->id, (unsigned long)a->src_ip,
         (unsigned)a->type, (unsigned long)a->count,
         (unsigned long)a->first_ts, (unsigned long)a->last_ts,
-        mac, wifi_manager_mac_vendor(a->src_mac));
+        mac, wifi_manager_mac_vendor(a->src_mac),
+        alarm_by_key(a->acked_by), alarm_by_key(a->resolved_by));
 }
 
 static void broadcast_text(const char *json)
@@ -157,7 +164,7 @@ static void broadcast_text(const char *json)
 static void alarm_work(void *arg)
 {
     alarm_info_t *a = (alarm_info_t *)arg;
-    char inner[256], json[272];
+    char inner[WS_ALARM_JSON_MAX], json[WS_ALARM_JSON_MAX + 16];
     ws_format_alarm_json(a, inner, sizeof(inner));
     free(a);
     snprintf(json, sizeof(json), "{\"alarm\":%s}", inner);

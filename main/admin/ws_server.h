@@ -34,8 +34,12 @@
 void ws_server_start(void);
 
 // Incident JSON object, shared by the WebSocket push and GET /api/status:
-// {"state":0|1|2,"id":n,"ip":u32,"type":t,"count":n,"first":ts,"last":ts,
-//  "mac":"..","vendor":".."}   state: 0 idle, 1 active (unacked), 2 acked
+// {"state":0|1|2,"cond":"green|yellow|red","code":"17-01","headline":"..",
+//  "id":n,"ip":u32,"type":t,"count":n,"first":ts,"last":ts,"mac":"..",
+//  "vendor":"..","acked_by":"|panel|dashboard","resolved_by":"|panel|dashboard"}
+// state: 0 idle (green), 1 active (red, unacked), 2 acked (yellow).
+// buf should hold WS_ALARM_JSON_MAX bytes.
 #include <stddef.h>
 #include "alarm.h"
+#define WS_ALARM_JSON_MAX  640
 void ws_format_alarm_json(const alarm_info_t *a, char *buf, size_t len);

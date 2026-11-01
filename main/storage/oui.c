@@ -46,6 +46,12 @@ static QueueHandle_t     s_missq;
 static uint32_t          s_tick, s_lookups, s_hits, s_queued;
 static volatile bool     s_dirty = true;
 static hdr_t             s_hdr;
+static hdr_t             s_hdr_pub;     // copy of s_hdr for oui_status(), under s_mux
+
+// The file mutex is held across SD reads, which can stall behind the shared
+// SPI bus. Nobody waits for it without a bound, and the admin task never
+// waits at all: oui_status() serves the copy above.
+#define OUI_LOCK_MS      250
 
 static inline uint16_t le16(const uint8_t *b) { return (uint16_t)(b[0] | (b[1] << 8)); }
 static inline uint32_t le32(const uint8_t *b)
@@ -118,6 +124,9 @@ static bool hdr_refresh(void)
     s_hdr.checked = true;
     s_hdr.checked_us = now;
     s_dirty = false;
+    portENTER_CRITICAL(&s_mux);
+    s_hdr_pub = s_hdr;
+    portEXIT_CRITICAL(&s_mux);
     return s_hdr.present;
 }
 
@@ -245,7 +254,7 @@ bool oui_lookup(const uint8_t mac[6], char *buf, size_t len)
 
     char name[OUI_NAME_MAX] = "";
     bool found = false;
-    xSemaphoreTake(s_fmux, portMAX_DELAY);
+    if (xSemaphoreTake(s_fmux, pdMS_TO_TICKS(OUI_LOCK_MS)) != pdTRUE) goto fallback;   // busy: not cached, retried later
     if (hdr_refresh()) {
         FILE *f = fopen(OUI_PATH, "rb");
         if (f) {
@@ -295,15 +304,19 @@ void oui_invalidate(void) { s_dirty = true; }
 void oui_status(oui_status_t *out)
 {
     memset(out, 0, sizeof(*out));
-    if (s_fmux) {
-        xSemaphoreTake(s_fmux, portMAX_DELAY);
+    // Refresh only if the file is free this instant; otherwise the copy from
+    // the last refresh (the discovery task refreshes every round).
+    if (s_fmux && xSemaphoreTake(s_fmux, 0) == pdTRUE) {
         hdr_refresh();
-        out->present  = s_hdr.present;
-        out->count    = s_hdr.present ? s_hdr.count : 0;
-        out->build_ts = s_hdr.present ? s_hdr.build_ts : 0;
-        out->size     = s_hdr.present ? s_hdr.size : 0;
         xSemaphoreGive(s_fmux);
     }
+    portENTER_CRITICAL(&s_mux);
+    hdr_t h = s_hdr_pub;
+    portEXIT_CRITICAL(&s_mux);
+    out->present  = h.present;
+    out->count    = h.present ? h.count : 0;
+    out->build_ts = h.present ? h.build_ts : 0;
+    out->size     = h.present ? h.size : 0;
     out->lookups = s_lookups;
     out->hits = s_hits;
     out->misses_queued = s_queued;
