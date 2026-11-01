@@ -1581,8 +1581,9 @@ function dvNetwork(x,k){
     else if(cn.pending)li('Asking the router for its connections...');
     else if(cn.state==='error')li('The router did not give its connections'+(cn.as_of?'; last good '+fmt(cn.as_of):''));
     const ext=(cn.dst||[]).filter(t=>t.external).slice(0,8);
-    ext.forEach(t=>li('  '+S(t.ip)+':'+S(t.port)+' '+S(t.proto)+', '+kb((+t.bytes_out||0)+(+t.bytes_in||0))+(t.conns>1?', '+t.conns+' connections':'')+
-      (t.beacon?', every ~'+t.beacon.every_s+' s':'')));
+    ext.forEach(t=>li('  '+(t.name?S(t.name)+' ':'')+S(t.ip)+':'+S(t.port)+' '+S(t.proto)+(t.cc?' ('+S(t.cc)+(t.asn?' '+S(t.asn):'')+')':'')+
+      ', up '+kb(+t.bytes_out||0)+', down '+kb(+t.bytes_in||0)+(t.conns>1?', '+t.conns+' connections':'')+
+      (t.beacon?', every ~'+t.beacon.every_s+' s':'')+((t.flags||[]).length?' ['+t.flags.map(S).join(', ')+']':'')));
     if(ph.state==='ok')li('Pi-hole: '+ph.total+' lookups, '+ph.blocked+' blocked');
     s.append(u);
     const fl=d.flags||[];

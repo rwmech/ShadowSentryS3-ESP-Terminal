@@ -28,15 +28,37 @@ extern "C" {
  *   unusual_port    outbound to an external port malware favours (Telnet, IRC,
  *                   ADB, SMB, Metasploit's 4444, ...)
  *   fanout          many distinct external hosts at once
+ *   doh             DNS over HTTPS or TLS to a known public resolver (443 or
+ *                   853): lookups Pi-hole never sees
+ *   upload          an external destination that got at least 1 MB and four
+ *                   times what came back
+ *   direct_ip       external destinations with no DNS name behind them, when
+ *                   a name source covers the device (Pi-hole answers, or the
+ *                   router's DNS cache naming its other destinations)
+ * Each destination carries the bits of the flags it raised (CORRELATE_F_*),
+ * its name (Pi-hole answer, else the router's DNS cache) and its GeoIP
+ * country and AS (looked up only for a device someone opened, top 8).
  *
  * Pure RAM work over copies; no network, no flash. Any task.
  */
 
-#define CORRELATE_FLAGS_MAX   8
+#define CORRELATE_FLAGS_MAX   10
 #define CORRELATE_REASON_LEN  112
 #define CORRELATE_CODES_MAX   12
 #define CORRELATE_SUMMARY_LEN 72
 #define CORRELATE_FANOUT      25        // distinct external hosts in one snapshot
+#define CORRELATE_UPLOAD_MIN  (1024u * 1024u)
+#define CORRELATE_GEO_LOOKUPS 8         // GeoIP requests per intel call
+
+// Per-destination flag bits (correlate_t.dflags), and their keys.
+#define CORRELATE_F_DNS      0x01       // dns_bypass
+#define CORRELATE_F_DOH      0x02
+#define CORRELATE_F_PORT     0x04       // unusual_port
+#define CORRELATE_F_BEACON   0x08       // beaconing
+#define CORRELATE_F_UPLOAD   0x10
+#define CORRELATE_F_DIRECT   0x20       // direct_ip
+#define CORRELATE_F_BLOCKED  0x40       // blocked_contact
+const char *correlate_flag_key(int bit);    // "dns_bypass", ...; bit 0..6
 
 // ── Optional Pi-hole input ────────────────────────────────────────────────────
 //
@@ -94,6 +116,8 @@ typedef struct {
     mikrotik_host_t host;
     bool     conn_found;
     mikrotik_conn_t conn;
+    uint8_t  dflags[MIKROTIK_DST_MAX];      // CORRELATE_F_* per conn.dst[]
+    struct { char cc[4]; char asn[16]; char org[40]; } geo[MIKROTIK_DST_MAX];   // "" unknown
 
     // Pi-hole
     bool     dns_on;

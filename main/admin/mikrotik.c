@@ -86,6 +86,7 @@ typedef struct {
     uint16_t sport[MT_SPORTS];      // source ports in the last snapshot
     uint32_t obs[MT_OBS];           // uptime s of each observation, oldest first
     uint32_t seen;                  // uptime s it was last in a snapshot
+    uint32_t first;                 // uptime s it was first in one
     uint32_t conns;                 // new connections counted
     uint64_t bytes;                 // their bytes, both ways, as last seen
 } mt_hist_t;
@@ -144,6 +145,9 @@ typedef struct {
     bool     learned;
     mt_slot_t slot[MT_SLOTS];
     mt_build_t build;
+    struct { uint32_t ip; char name[48]; } dns[MIKROTIK_DNS_NAMES];    // router DNS cache, a ring
+    uint16_t n_dns, dns_next;
+    int64_t  dns_s;                 // uptime s of the last DNS cache read
     mikrotik_row_t row;
     mt_reader_t rd;
     settings_t set;
@@ -1017,7 +1021,7 @@ static bool beacon_port_skipped(uint8_t proto, uint16_t port)
 }
 
 // Merge the snapshot into the slot's destination history and mark beacons.
-static void history_update(mt_slot_t *sl, mt_build_t *b, uint32_t now)
+static void history_update(mt_slot_t *sl, mt_build_t *b, uint32_t now, uint32_t unix_now)
 {
     for (int k = 0; k < b->n; k++) {
         mikrotik_dst_t *d = &b->d[k];
@@ -1034,7 +1038,10 @@ static void history_update(mt_slot_t *sl, mt_build_t *b, uint32_t now)
             h->ip = d->ip;
             h->port = d->port;
             h->proto = d->proto;
+            h->first = now;
         }
+        d->first_seen = unix_now - (now - h->first);
+        d->last_seen = unix_now;
         // New connections: source ports not in the last snapshot.
         int fresh = 0;
         for (int s = 0; s < b->n_sport[k]; s++) {
@@ -1068,6 +1075,70 @@ static void history_update(mt_slot_t *sl, mt_build_t *b, uint32_t now)
         }
         if (regular) { d->beacon_n = h->n_obs; d->beacon_s = mean; }
     }
+}
+
+// ── Destination names (the router's DNS cache) ────────────────────────────────
+
+static bool dns_lookup(uint32_t ip, char *name, size_t len)
+{
+    for (int i = 0; i < S->n_dns; i++)
+        if (S->dns[i].ip == ip) { strlcpy(name, S->dns[i].name, len); return true; }
+    return false;
+}
+
+static int names_missing(mt_build_t *b)
+{
+    int miss = 0;
+    for (int i = 0; i < b->n; i++) {
+        mikrotik_dst_t *d = &b->d[i];
+        if (d->name[0]) continue;
+        if (dns_lookup(d->ip, d->name, sizeof(d->name))) d->name_src = MIKROTIK_NAME_ROUTER_DNS;
+        else if (d->external) miss++;
+    }
+    return miss;
+}
+
+// A records whose address is one of this snapshot's unnamed external
+// destinations go into the ring. Router text: cut to printable ASCII.
+static bool dns_cb(void *ctx, const mikrotik_row_t *r)
+{
+    mt_build_t *b = ctx;
+    const char *type = mikrotik_row_get(r, "type");
+    if (type[0] && strcmp(type, "A")) return true;
+    uint32_t ip;
+    if (!parse_ip(mikrotik_row_get(r, "data"), &ip, NULL)) return true;
+    bool want = false;
+    for (int i = 0; i < b->n && !want; i++) want = b->d[i].external && !b->d[i].name[0] && b->d[i].ip == ip;
+    if (!want) return true;
+    char name[48];
+    copy_txt(name, sizeof(name), mikrotik_row_get(r, "name"));
+    if (!name[0]) return true;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int k = -1;
+    for (int i = 0; i < S->n_dns && k < 0; i++) if (S->dns[i].ip == ip) k = i;
+    if (k < 0) {
+        k = S->dns_next;
+        S->dns_next = (uint16_t)((S->dns_next + 1) % MIKROTIK_DNS_NAMES);
+        if (S->n_dns < MIKROTIK_DNS_NAMES) S->n_dns++;
+    }
+    S->dns[k].ip = ip;
+    strlcpy(S->dns[k].name, name, sizeof(S->dns[k].name));
+    unlock();
+    for (int i = 0; i < b->n; i++)
+        if (b->d[i].ip == ip && !b->d[i].name[0]) {
+            strlcpy(b->d[i].name, name, sizeof(b->d[i].name));
+            b->d[i].name_src = MIKROTIK_NAME_ROUTER_DNS;
+        }
+    return true;
+}
+
+static void dns_names(mt_build_t *b)
+{
+    if (!names_missing(b) || up_s() - S->dns_s < MIKROTIK_DNS_EVERY_S) return;
+    S->dns_s = up_s();
+    uint32_t rows;
+    int st = mikrotik_rest_get("/ip/dns/cache?.proplist=name,type,data", dns_cb, b, MT_LIST_BYTES, &rows);
+    if (st != 200 && st != -4) ESP_LOGI(TAG, "DNS cache not read (status %d): destinations stay unnamed", st);
 }
 
 static void conn_fetch(uint32_t ip)
@@ -1105,6 +1176,7 @@ static void conn_fetch(uint32_t ip)
             uint8_t ns = b->n_sport[j]; b->n_sport[j] = b->n_sport[j - 1]; b->n_sport[j - 1] = ns;
         }
     }
+    if (st == 200) dns_names(b);
     uint16_t ext_hosts = 0;
     for (int i = 0; i < b->n; i++) {
         if (!b->d[i].external) continue;
@@ -1124,7 +1196,7 @@ static void conn_fetch(uint32_t ip)
         c->ip = ip;
         c->pending = false;
         if (st == 200) {
-            history_update(sl, b, (uint32_t)now);
+            history_update(sl, b, (uint32_t)now, (uint32_t)time(NULL));
             c->state = MIKROTIK_CONN_OK;
             c->as_of = (uint32_t)time(NULL);
             c->total = b->total;

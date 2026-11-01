@@ -236,6 +236,20 @@ static void intel_json(jb_t *j, const correlate_t *c)
                (unsigned long long)d->bytes_out, (unsigned long long)d->bytes_in,
                (unsigned long)d->pkts_out, (unsigned long)d->pkts_in);
         jb_kv(j, "tcp_state", d->tcp_state, sizeof(d->tcp_state));
+        jb_lit(j, ",");
+        jb_kv(j, "name", d->name, sizeof(d->name));
+        jb_fmt(j, ",\"name_src\":\"%s\",\"first_seen\":%lu,\"last_seen\":%lu,",
+               d->name_src == MIKROTIK_NAME_ROUTER_DNS ? "router_dns" : d->name_src == MIKROTIK_NAME_PIHOLE ? "pihole" : "",
+               (unsigned long)d->first_seen, (unsigned long)d->last_seen);
+        jb_kv(j, "cc", c->geo[i].cc, sizeof(c->geo[i].cc));
+        jb_lit(j, ",");
+        jb_kv(j, "asn", c->geo[i].asn, sizeof(c->geo[i].asn));
+        jb_lit(j, ",");
+        jb_kv(j, "org", c->geo[i].org, sizeof(c->geo[i].org));
+        jb_lit(j, ",\"flags\":[");
+        for (int b = 0, f = 0; b < 7; b++)
+            if (c->dflags[i] & (1u << b)) jb_fmt(j, "%s\"%s\"", f++ ? "," : "", correlate_flag_key(b));
+        jb_lit(j, "]");
         if (d->beacon_n) jb_fmt(j, ",\"beacon\":{\"every_s\":%lu,\"times\":%u}", (unsigned long)d->beacon_s, (unsigned)d->beacon_n);
         jb_lit(j, "}");
     }

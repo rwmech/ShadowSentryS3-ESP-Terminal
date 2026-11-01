@@ -35,7 +35,10 @@ extern "C" {
  * about is watched for MIKROTIK_WATCH_S (and the open incident's source while
  * it is open): its connections are fetched again every MIKROTIK_WATCH_POLL_S,
  * and a destination that gets new connections at a near-regular interval is
- * marked as a possible beacon.
+ * marked as a possible beacon. Destination names come from the router's DNS
+ * cache, /rest/ip/dns/cache (name, type, data: the fields routeros-scanner's
+ * dns.py reads on 7.x; A records only), read at most every
+ * MIKROTIK_DNS_EVERY_S and only when an external destination has no name.
  *
  * A bound DHCP lease from a MAC never seen before raises an ATTACK_NEW_DEVICE
  * event (Code 60-02, SEV3: logged and posted, no incident unless its alert
@@ -67,6 +70,8 @@ extern "C" {
 #define MIKROTIK_WATCH_POLL_S   60      // a watched device's connections are fetched this often
 #define MIKROTIK_HOSTS_MAX      128
 #define MIKROTIK_DST_MAX        48      // destinations kept per device
+#define MIKROTIK_DNS_NAMES      128     // router DNS cache names kept (address to name)
+#define MIKROTIK_DNS_EVERY_S    120
 #define MIKROTIK_KNOWN_MAX      160     // MACs remembered for new-device detection (960 B of NVS, a 16 KB partition)
 
 #define MIKROTIK_NAME_LEN       48
@@ -133,7 +138,13 @@ typedef struct {
     uint64_t bytes_out, bytes_in;
     uint32_t pkts_out, pkts_in;
     char     tcp_state[12];     // of the newest connection
+    uint32_t first_seen;        // unix time a fetch first saw it (not the connection's start:
+    uint32_t last_seen;         //   conntrack has no age); last_seen: the last fetch that saw it
+    char     name[48];          // the name behind the address, "" none (see name_src)
+    uint8_t  name_src;          // MIKROTIK_NAME_*
 } mikrotik_dst_t;
+
+enum { MIKROTIK_NAME_NONE = 0, MIKROTIK_NAME_ROUTER_DNS, MIKROTIK_NAME_PIHOLE };
 
 typedef struct {
     uint8_t  state;             // MIKROTIK_CONN_*

@@ -14,6 +14,7 @@
 #include "alarm.h"
 #include "discovery.h"
 #include "wifi_manager.h"
+#include "geoip.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -36,6 +37,45 @@ static const struct { uint16_t port; const char *what; } ODD_PORTS[] = {
     { 5555,  "ADB" },             { 445,   "SMB" },           { 135,  "MS RPC" },
     { 139,   "NetBIOS" },         { 31337, "Back Orifice" },  { 9001, "Tor relay" },
 };
+
+// Public resolvers that answer DNS over HTTPS (443) and TLS (853): a
+// connection to one on those ports is a lookup Pi-hole never sees.
+static const struct { uint8_t a, b, c, d, bits; const char *who; } RESOLVERS[] = {
+    { 8, 8, 8, 8, 32, "Google" },        { 8, 8, 4, 4, 32, "Google" },
+    { 1, 1, 1, 1, 32, "Cloudflare" },    { 1, 0, 0, 1, 32, "Cloudflare" },
+    { 1, 1, 1, 2, 32, "Cloudflare" },    { 1, 0, 0, 2, 32, "Cloudflare" },
+    { 1, 1, 1, 3, 32, "Cloudflare" },    { 1, 0, 0, 3, 32, "Cloudflare" },
+    { 9, 9, 9, 9, 32, "Quad9" },         { 149, 112, 112, 112, 32, "Quad9" },
+    { 9, 9, 9, 11, 32, "Quad9" },        { 208, 67, 222, 222, 32, "OpenDNS" },
+    { 208, 67, 220, 220, 32, "OpenDNS" },{ 94, 140, 14, 14, 32, "AdGuard" },
+    { 94, 140, 15, 15, 32, "AdGuard" },  { 185, 228, 168, 9, 32, "CleanBrowsing" },
+    { 185, 228, 169, 9, 32, "CleanBrowsing" }, { 76, 76, 2, 0, 24, "Control D" },
+    { 76, 76, 10, 0, 24, "Control D" },  { 194, 242, 2, 2, 32, "Mullvad" },
+    { 45, 90, 28, 0, 24, "NextDNS" },    { 45, 90, 30, 0, 24, "NextDNS" },
+};
+
+static const char *resolver(uint32_t ip)
+{
+    const uint8_t *q = (const uint8_t *)&ip;
+    for (size_t i = 0; i < sizeof(RESOLVERS) / sizeof(RESOLVERS[0]); i++) {
+        const uint8_t r[4] = { RESOLVERS[i].a, RESOLVERS[i].b, RESOLVERS[i].c, RESOLVERS[i].d };
+        int whole = RESOLVERS[i].bits / 8;
+        if (!memcmp(q, r, (size_t)whole)) return RESOLVERS[i].who;
+    }
+    return NULL;
+}
+
+const char *correlate_flag_key(int bit)
+{
+    static const char *const K[] = { "dns_bypass", "doh", "unusual_port", "beaconing", "upload", "direct_ip", "blocked_contact" };
+    return bit >= 0 && bit < 7 ? K[bit] : "";
+}
+
+static void mb(uint64_t n, char *b, size_t len)
+{
+    if (n >= 1048576ull) snprintf(b, len, "%.1f MB", (double)n / 1048576.0);
+    else snprintf(b, len, "%lu KB", (unsigned long)((n + 1023) / 1024));
+}
 
 static void ip_s(uint32_t ip, char *b, size_t n)
 {
@@ -130,39 +170,46 @@ static void flags(correlate_t *c)
     char ip[16], dom[48];
     bool bypass = false;
 
+    // DNS straight to a server that is not the Pi-hole (an outside one when
+    // there is no Pi-hole data). Known public resolvers are the doh flag.
+    for (int i = 0; i < k->n_dst; i++) {
+        const mikrotik_dst_t *d = &k->dst[i];
+        if (!(d->port == 53 || (d->port == 853 && d->proto == 6))) continue;
+        if (c->dns_on ? (d->ip == c->dns.server_ip || (!d->external && !c->dns.server_ip)) : !d->external) continue;
+        if (d->port == 853 && resolver(d->ip)) continue;
+        c->dflags[i] |= CORRELATE_F_DNS;
+        if (bypass) continue;
+        ip_s(d->ip, ip, sizeof(ip));
+        flag(c, "dns_bypass", "sends DNS%s straight to %s:%u, %s", d->port == 853 ? " over TLS" : "", ip,
+             (unsigned)d->port, c->dns_on ? "not through Pi-hole" : "an outside server");
+        bypass = true;
+    }
+    // DNS over HTTPS or TLS to a known resolver.
+    bool doh = false;
+    for (int i = 0; i < k->n_dst; i++) {
+        const mikrotik_dst_t *d = &k->dst[i];
+        const char *who = (d->port == 443 || d->port == 853) ? resolver(d->ip) : NULL;
+        if (!who) continue;
+        c->dflags[i] |= CORRELATE_F_DOH;
+        bypass = true;
+        if (doh) continue;
+        ip_s(d->ip, ip, sizeof(ip));
+        flag(c, "doh", "DNS over %s to %s (%s:%u): lookups Pi-hole never sees", d->port == 853 ? "TLS" : "HTTPS",
+             who, ip, (unsigned)d->port);
+        doh = true;
+    }
     if (c->dns_on) {
-        // DNS straight to a server that is not the Pi-hole.
-        for (int i = 0; i < k->n_dst && !bypass; i++) {
-            const mikrotik_dst_t *d = &k->dst[i];
-            if (!(d->port == 53 || (d->port == 853 && d->proto == 6))) continue;
-            if (d->ip == c->dns.server_ip || (!d->external && !c->dns.server_ip)) continue;
-            ip_s(d->ip, ip, sizeof(ip));
-            flag(c, "dns_bypass", "sends DNS%s straight to %s:%u, not through Pi-hole",
-                 d->port == 853 ? " over TLS" : "", ip, (unsigned)d->port);
-            bypass = true;
-        }
         if (!bypass && k->external >= 3 && c->dns.total == 0 && c->dns.window_s) {
             flag(c, "dns_bypass", "%u external connections but no lookups through Pi-hole in the last %lu min",
                  (unsigned)k->external, (unsigned long)(c->dns.window_s / 60));
             bypass = true;
-        }
-        if (!bypass && dns_any_ips(&c->dns)) {
-            int miss = 0, ext = 0;
-            for (int i = 0; i < k->n_dst; i++) {
-                if (!k->dst[i].external) continue;
-                ext++;
-                if (!dns_has_ip(&c->dns, k->dst[i].ip, false, NULL)) miss++;
-            }
-            if (miss >= 3) {
-                flag(c, "dns_bypass", "%d of %d external destinations were not looked up through Pi-hole", miss, ext);
-                bypass = true;
-            }
         }
         // Blocked names.
         bool hit = false;
         for (int i = 0; i < k->n_dst && !hit; i++) {
             const char *d = NULL;
             if (!k->dst[i].external || !dns_has_ip(&c->dns, k->dst[i].ip, true, &d)) continue;
+            c->dflags[i] |= CORRELATE_F_BLOCKED;
             ip_s(k->dst[i].ip, ip, sizeof(ip));
             txt(dom, sizeof(dom), d);
             flag(c, "blocked_contact", "connected to %s, an address of %s, which Pi-hole blocks", ip, dom);
@@ -181,7 +228,9 @@ static void flags(correlate_t *c)
     int nb = 0;
     for (int i = 0; i < k->n_dst; i++) {
         const mikrotik_dst_t *d = &k->dst[i];
-        if (!d->beacon_n || !d->external || nb >= 2) continue;
+        if (!d->beacon_n || !d->external) continue;
+        c->dflags[i] |= CORRELATE_F_BEACON;
+        if (nb >= 2) continue;
         ip_s(d->ip, ip, sizeof(ip));
         flag(c, "beaconing", "new %s connections to %s:%u about every %lu s (%u times), little data each: a check-in or beacon",
              proto_s(d->proto), ip, (unsigned)d->port, (unsigned long)d->beacon_s, (unsigned)d->beacon_n);
@@ -196,6 +245,7 @@ static void flags(correlate_t *c)
         if (!d->external) continue;
         for (size_t p = 0; p < sizeof(ODD_PORTS) / sizeof(ODD_PORTS[0]); p++) {
             if (ODD_PORTS[p].port != d->port) continue;
+            c->dflags[i] |= CORRELATE_F_PORT;
             if (nu < 3) {
                 char one[64];
                 ip_s(d->ip, ip, sizeof(ip));
@@ -206,6 +256,45 @@ static void flags(correlate_t *c)
         }
     }
     if (nu) flag(c, "unusual_port", "outbound to %s%s", list, nu > 3 ? " and more" : "");
+
+    // Upload-heavy.
+    bool up = false;
+    for (int i = 0; i < k->n_dst; i++) {
+        const mikrotik_dst_t *d = &k->dst[i];
+        if (!d->external || d->bytes_out < CORRELATE_UPLOAD_MIN || d->bytes_out < 4 * d->bytes_in) continue;
+        c->dflags[i] |= CORRELATE_F_UPLOAD;
+        if (up) continue;
+        char sent[16];
+        mb(d->bytes_out, sent, sizeof(sent));
+        ip_s(d->ip, ip, sizeof(ip));
+        unsigned long x = d->bytes_in ? (unsigned long)(d->bytes_out / d->bytes_in) : 0;
+        if (x) flag(c, "upload", "sent %s to %s:%u, %lux what came back", sent, ip, (unsigned)d->port, x);
+        else   flag(c, "upload", "sent %s to %s:%u, nothing came back", sent, ip, (unsigned)d->port);
+        up = true;
+    }
+
+    // Direct-IP: only when a name source covers this device.
+    bool covered = c->dns_on && dns_any_ips(&c->dns);
+    for (int i = 0; i < k->n_dst && !covered; i++) covered = k->dst[i].name_src == MIKROTIK_NAME_ROUTER_DNS;
+    if (covered) {
+        char dl[72] = "";
+        int nd = 0;
+        for (int i = 0; i < k->n_dst; i++) {
+            const mikrotik_dst_t *d = &k->dst[i];
+            if (!d->external || d->name[0] || d->port == 53 || d->port == 853 || (c->dflags[i] & CORRELATE_F_DOH)) continue;
+            if (d->bytes_out + d->bytes_in < 4096 || (d->proto != 6 && d->proto != 17)) continue;
+            c->dflags[i] |= CORRELATE_F_DIRECT;
+            if (nd < 3) {
+                char one[28];
+                ip_s(d->ip, ip, sizeof(ip));
+                snprintf(one, sizeof(one), "%s%s:%u", nd ? ", " : "", ip, (unsigned)d->port);
+                strlcat(dl, one, sizeof(dl));
+            }
+            nd++;
+        }
+        if (nd) flag(c, "direct_ip", "%d external host%s with no DNS lookup behind %s: %s%s", nd, nd == 1 ? "" : "s",
+                     nd == 1 ? "it" : "them", dl, nd > 3 ? " and more" : "");
+    }
 
     // Fan-out.
     if (k->ext_hosts >= CORRELATE_FANOUT)
@@ -272,6 +361,27 @@ void correlate_build(uint32_t ip, const uint8_t *mac, bool fetch, bool with_even
     if (correlate_pihole_device && c->ip)
         c->dns_on = correlate_pihole_device(c->ip, c->mac_known ? c->mac : NULL, &c->dns);
 
+    if (c->conn_found) {
+        int asked = 0;
+        for (int i = 0; i < c->conn.n_dst; i++) {
+            mikrotik_dst_t *d = &c->conn.dst[i];
+            const char *dom = NULL;
+            if (c->dns_on && dns_has_ip(&c->dns, d->ip, false, &dom) && dom) {
+                txt(d->name, sizeof(d->name), dom);
+                d->name_src = MIKROTIK_NAME_PIHOLE;
+            }
+            if (!d->external) continue;
+            geoip_info_t g;
+            if (geoip_lookup(d->ip, &g)) {
+                txt(c->geo[i].cc, sizeof(c->geo[i].cc), g.cc);
+                txt(c->geo[i].asn, sizeof(c->geo[i].asn), g.asn);
+                txt(c->geo[i].org, sizeof(c->geo[i].org), g.org);
+            } else if (fetch && asked < CORRELATE_GEO_LOOKUPS) {
+                geoip_enqueue(d->ip);       // answered on a later call
+                asked++;
+            }
+        }
+    }
     if (with_events) {
         events(c);
         discovery_label_for(c->ip, c->mac_known ? c->mac : NULL, c->label, sizeof(c->label));
