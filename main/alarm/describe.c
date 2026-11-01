@@ -57,6 +57,18 @@ static const code_row_t CODES[] = {
     { "40-09", "Tripwire",           TIER_SEV1, NULL },     // a service added later
     { "50-01", "ARP spoof",          TIER_SEV1, NULL },
     { "50-02", "Wi-Fi deauth",       TIER_SEV1, NULL },
+    // Router integrity (admin/mikrotik_watch.c): critical and high are SEV1, medium SEV2.
+    { "55-01", "Router scheduler",   TIER_SEV1, NULL },
+    { "55-02", "Router users",       TIER_SEV1, NULL },
+    { "55-03", "Router proxy",       TIER_SEV1, NULL },
+    { "55-04", "Router NAT",         TIER_SEV1, NULL },
+    { "55-05", "Router service",     TIER_SEV1, NULL },
+    { "55-06", "Router firewall",    TIER_SEV1, NULL },
+    { "55-07", "Router DNS",         TIER_SEV1, NULL },
+    { "55-08", "Router tunnel",      TIER_SEV1, NULL },
+    { "55-09", "Router logging",     TIER_SEV1, NULL },
+    { "55-10", "Router login",       TIER_SEV2, NULL },
+    { "55-11", "Router version",     TIER_SEV2, NULL },
     { "60-01", "LAN discovery",      TIER_SEV3, NULL },
     { "60-02", "New device on network", TIER_SEV3, NULL },
 };
@@ -67,7 +79,8 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_SSH, C_TELNET, C_FTP, C_RTSP, C_SHELL_CMD, C_SHELL_SESSION,
     C_WEB_LOGIN, C_WEB_FIRST = C_WEB_LOGIN, C_WEB_UNCLASSIFIED = C_WEB_LOGIN + 8,
     C_ADB, C_TRIP_FIRST, C_TRIP_OTHER = C_TRIP_FIRST + 7,
-    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY, C_NEW_DEVICE, C_COUNT
+    C_ARP_SPOOF, C_WIFI_DEAUTH, C_ROUTER_FIRST, C_ROUTER_LAST = C_ROUTER_FIRST + 10,
+    C_DISCOVERY, C_NEW_DEVICE, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
 
@@ -125,10 +138,18 @@ static const code_row_t *code_row(const attack_log_t *e)
     case ATTACK_WIFI:      return &CODES[C_WIFI_DEAUTH];
     case ATTACK_DISCOVERY: return &CODES[C_DISCOVERY];
     case ATTACK_NEW_DEVICE: return &CODES[C_NEW_DEVICE];
+    case ATTACK_ROUTER: {
+        // "[55-NN] <detail>": the watcher names the code.
+        payload_str(e, p, sizeof(p));
+        char code[DESCRIBE_CODE_LEN] = "";
+        if (p[0] == '[' && strlen(p) > 6 && p[6] == ']') { memcpy(code, p + 1, 5); code[5] = 0; }
+        for (int i = C_ROUTER_FIRST; i <= C_ROUTER_LAST; i++) if (!strcmp(CODES[i].code, code)) return &CODES[i];
+        return &CODES[C_ROUTER_FIRST];
+    }
     default:               return &UNKNOWN;
     }
 }
-_Static_assert(ATTACK_NEW_DEVICE + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
+_Static_assert(ATTACK_ROUTER + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
 
 const char *describe_code(const attack_log_t *e)
 {
@@ -486,6 +507,13 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
     case ATTACK_NEW_DEVICE:
         new_device_detail(&s, p);
         break;
+    case ATTACK_ROUTER: {
+        char d[80];
+        const char *q = (p[0] == '[' && strlen(p) > 8) ? p + 8 : p;
+        clean(d, sizeof(d), q, strlen(q));
+        sb_fmt(&s, "%s", d[0] ? d : "configuration changed");
+        break;
+    }
     default:
         sb_fmt(&s, "type %d", (int)e->type);
         break;

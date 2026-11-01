@@ -20,6 +20,7 @@ typedef enum {
     ATTACK_TRIPWIRE  = 12,  // connection to a tripwire port (honeypot/tripwire.c)
     ATTACK_DISCOVERY = 13,  // LAN discovery: a new device, protocol or label (detect/discovery.c)
     ATTACK_NEW_DEVICE = 14, // a DHCP lease from a MAC never seen before, from the router (admin/mikrotik.c)
+    ATTACK_ROUTER   = 15,   // the router's configuration changed: Code 55-xx (admin/mikrotik_watch.c)
     ATTACK_TYPE_COUNT      // number of types; size every per-type table with it
 } attack_type_t;
 

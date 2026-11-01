@@ -17,6 +17,11 @@
  *   POST /api/mikrotik/test               queue a connection test (409 when off)
  *   POST /api/mikrotik/cert/forget        forget the fingerprint recorded on
  *        first use; the next https connection records the one it sees
+ *   GET  /api/mikrotik/integrity          router integrity: armed, arm time,
+ *        last check, and each check's state (mikrotik_watch.h)
+ *   POST /api/mikrotik/integrity/arm      arm (or re-arm) the baseline from
+ *        the router's current state; one pass over the menus, about 30 s
+ *   The intel of the router's own address adds "integrity".
  *
  * Returns true when the request was one of these and has been answered.
  */

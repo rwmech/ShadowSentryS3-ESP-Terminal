@@ -13,6 +13,7 @@
 // record), every value is cut to a fixed size, and callers escape on output.
 
 #include "mikrotik.h"
+#include "mikrotik_watch.h"
 #include "settings.h"
 #include "wifi_manager.h"
 #include "log_store.h"
@@ -297,6 +298,8 @@ static void nvs_save_async(const char *key, const void *data, size_t len)
         free(j);
     }
 }
+
+void mikrotik_nvs_save(const char *key, const void *data, size_t len) { nvs_save_async(key, data, len); }
 
 // ── TLS: the certificate pin ──────────────────────────────────────────────────
 
@@ -1467,6 +1470,7 @@ static void mikrotik_task(void *arg)
         if (healthy) {
             uint32_t ip = watched_due(now);
             if (ip) conn_fetch(ip);
+            else mikrotik_watch_tick();         // router integrity: one menu when due
         }
 
         if (now < next_poll) {
@@ -1546,6 +1550,7 @@ void mikrotik_start(void)
             }
             nvs_close(h);
         }
+        mikrotik_watch_load();          // armed digests, from NVS on this stack
         s_stat.state = MIKROTIK_ST_STARTING;
         s_stat.known = S->n_known;
         s_stat.learned = S->learned;

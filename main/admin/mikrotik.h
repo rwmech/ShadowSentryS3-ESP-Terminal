@@ -243,6 +243,10 @@ typedef bool (*mikrotik_row_cb)(void *ctx, const mikrotik_row_t *row);
 // *rows = records read. Only from the mikrotik task (one request at a time).
 int mikrotik_rest_get(const char *path, mikrotik_row_cb cb, void *ctx, uint32_t max_bytes, uint32_t *rows);
 
+// Save a blob in NVS namespace "mikrotik" from a short-lived helper task with
+// an internal stack (the mikrotik task must not write flash). data is copied.
+void mikrotik_nvs_save(const char *key, const void *data, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

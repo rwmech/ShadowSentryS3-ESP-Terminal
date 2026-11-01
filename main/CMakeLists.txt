@@ -72,6 +72,7 @@ idf_component_register(
         "admin/api_devlog.c"
         "admin/api_tasks.c"
         "admin/mikrotik.c"
+        "admin/mikrotik_watch.c"
         "admin/api_mikrotik.c"
         "detect/correlate.c"
         "storage/oui.c"

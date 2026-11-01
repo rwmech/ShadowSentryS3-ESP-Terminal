@@ -169,7 +169,8 @@ static const char *type_name(uint8_t t)
                                         "Interactive shell", "Port scan", "Probe", "ARP sweep",
                                         "ADB (Android Debug Bridge)",
                                         "Tripwire port", "LAN discovery (device seen)",
-                                        "New device on the network (router lease)"};
+                                        "New device on the network (router lease)",
+                                        "Router integrity (configuration change)"};
     _Static_assert(sizeof(NAMES) / sizeof(NAMES[0]) == ATTACK_TYPE_COUNT, "NAMES: one per attack_type_t");
     return t < ATTACK_TYPE_COUNT ? NAMES[t] : "other attack";
 }

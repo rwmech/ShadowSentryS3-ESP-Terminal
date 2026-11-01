@@ -7,6 +7,7 @@
 
 #include "api_mikrotik.h"
 #include "mikrotik.h"
+#include "mikrotik_watch.h"
 #include "correlate.h"
 #include "settings.h"
 #include "describe.h"
@@ -21,7 +22,8 @@
 #include <string.h>
 
 #define SEND_TIMEOUT_S  10
-#define INTEL_JSON_MAX  (20 * 1024)     // 48 destinations at about 200 B, flags, identity
+#define INTEL_JSON_MAX  (32 * 1024)     // 48 destinations at about 300 B, flags, identity, integrity
+#define WATCH_JSON_MAX  (12 * 1024)     // 20 checks at about 400 B
 #define QUERY_MAX       160
 
 // ── Reply helpers ─────────────────────────────────────────────────────────────
@@ -271,6 +273,14 @@ static void intel_json(jb_t *j, const correlate_t *c)
         jb_lit(j, ",\"pihole\":{\"state\":\"off\"}");
     }
 
+    // The router itself: its integrity checks.
+    uint32_t rip = mikrotik_watch_router_ip();
+    if (rip && c->ip == rip && j->cap - j->n > WATCH_JSON_MAX) {
+        jb_lit(j, ",\"integrity\":");
+        unsigned w = mikrotik_watch_json(j->b + j->n, (unsigned)(j->cap - j->n));
+        if (w) j->n += w; else jb_lit(j, "null");
+    }
+
     jb_lit(j, ",\"flags\":[");
     for (int i = 0; i < c->n_flags; i++) {
         jb_fmt(j, "%s{\"key\":\"%s\",", i ? "," : "", c->flags[i].key);
@@ -353,6 +363,24 @@ static void post_test(int sock)
     send_json(sock, "200 OK", b, (size_t)len);
 }
 
+static void get_integrity(int sock)
+{
+    char *buf = heap_caps_malloc(WATCH_JSON_MAX, MALLOC_CAP_SPIRAM);
+    if (!buf) { send_err(sock, "503 Service Unavailable", "out of memory"); return; }
+    unsigned n = mikrotik_watch_json(buf, WATCH_JSON_MAX);
+    if (!n) send_err(sock, "500 Internal Server Error", "response too large");
+    else send_json(sock, "200 OK", buf, n);
+    free(buf);
+}
+
+static void post_arm(int sock)
+{
+    if (!settings_mikrotik_enabled()) { send_err(sock, "409 Conflict", "MikroTik is off"); return; }
+    if (!mikrotik_watch_arm()) { send_err(sock, "503 Service Unavailable", "MikroTik task not running"); return; }
+    static const char ok[] = "{\"arming\":true}";
+    send_json(sock, "200 OK", ok, sizeof(ok) - 1);
+}
+
 static void post_forget(int sock)
 {
     mikrotik_cert_forget();
@@ -390,6 +418,8 @@ bool api_mikrotik_handle(int sock, const char *req, int req_len)
     else if (get && !strcmp(path, "/api/mikrotik/status"))    get_status(sock);
     else if (post && !strcmp(path, "/api/mikrotik/test"))     post_test(sock);
     else if (post && !strcmp(path, "/api/mikrotik/cert/forget")) post_forget(sock);
+    else if (get && !strcmp(path, "/api/mikrotik/integrity"))     get_integrity(sock);
+    else if (post && !strcmp(path, "/api/mikrotik/integrity/arm")) post_arm(sock);
     else send_err(sock, "404 Not Found", "no such route");
     return true;
 }

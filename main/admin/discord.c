@@ -123,13 +123,14 @@ static int64_t mono_s(void) { return esp_timer_get_time() / 1000000LL; }
 
 static const char *const TYPE_SHORT[] = {"RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP", "WiFi", "Shell",
                                          "Scan", "Probe", "Sweep", "ADB", "Tripwire",
-                                         "Discovery", "New device"};
+                                         "Discovery", "New device", "Router"};
 static const char *const TYPE_LONG[]  = {"RTSP login", "HTTP request", "Telnet login", "SSH login",
                                          "FTP login", "ARP spoofing / MITM", "Wi-Fi deauth flood",
                                          "Interactive shell", "Port scan", "Probe", "ARP sweep",
                                          "ADB (Android Debug Bridge)",
                                          "Tripwire port", "LAN discovery (device seen)",
-                                         "New device on the network (router lease)"};
+                                         "New device on the network (router lease)",
+                                         "Router integrity (configuration change)"};
 _Static_assert(sizeof(TYPE_SHORT) / sizeof(TYPE_SHORT[0]) == ATTACK_TYPE_COUNT, "TYPE_SHORT: one per attack_type_t");
 _Static_assert(sizeof(TYPE_LONG) / sizeof(TYPE_LONG[0]) == ATTACK_TYPE_COUNT, "TYPE_LONG: one per attack_type_t");
 static const char *type_short(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_SHORT[t] : "?"; }
