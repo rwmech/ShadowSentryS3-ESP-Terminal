@@ -66,8 +66,11 @@ extern "C" {
  *
  * Output:
  *   - an SD line {"kind":"discovery",...} per new device, new protocol, new
- *     label or new query string for a device (DISCOVERY_SD_BURST, then one per
- *     DISCOVERY_SD_REFILL_MS)
+ *     label or hostname, or a query string that device never sent before
+ *     (a per-device LRU set of DISCOVERY_QHASH_N hashes), DISCOVERY_SD_BURST
+ *     then one per DISCOVERY_SD_REFILL_MS; and once an hour one
+ *     {"kind":"discovery_summary"} line per device that sent anything, with
+ *     its packets per protocol. Nothing is written per packet.
  *   - a Discord digest every DISCOVERY_DIGEST_S, only when something new was
  *     seen: "LAN devices seen (last 30 min)", one line per device with news
  *     (label, IP or MAC, what it did in plain words from a table in flash:
@@ -119,6 +122,8 @@ extern "C" {
 #define DISCOVERY_DIGEST_LINES  20      // devices per digest, the rest "+N more"
 #define DISCOVERY_DIGEST_LINE   90      // characters per line, cut at a word
 #define DISCOVERY_DIGEST_MAX    1800    // characters in all (Discord allows 2000)
+#define DISCOVERY_QHASH_N       32      // distinct query strings remembered per device (LRU)
+#define DISCOVERY_SUMMARY_S     3600    // discovery_summary period
 #define DISCOVERY_TASK_STACK    4096    // PSRAM; high-water logged on each new low
 #define DISCOVERY_TASK_PRIO     2
 
