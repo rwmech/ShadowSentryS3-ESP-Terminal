@@ -28,13 +28,12 @@
 // tune stops at bar 5. The score has it at B1, in the bass; we play it four
 // octaves up, where the piezo is loud.
 //
-// The phrase ends open, on the held A. We add a short close in the same tempo
-// to land on the tonic: F# as a quaver, then B held a minim.
+// The tune stops on the held A, where the phrase ends.
 //
 // At crotchet = 138 a crotchet is 434.8 ms and a quaver 217.4 ms. Pizzicato and
 // staccato as written: every dotted note sounds 110 ms, about half a quaver,
 // and the rest of its value is silence. The held A sounds 820 of its 870 ms.
-//   4 bars of 4 crotchets + close (217 + 870) = 1737 + 1738 + 1736 + 1738 + 1087 = 8036 ms
+//   4 bars of 4 crotchets = 1737 + 1738 + 1736 + 1738 = 6949 ms
 #define BPM     138
 #define CROTCHET ((60000 + BPM / 2) / BPM)      // 435 ms
 #define QUAVER   (60000 / (2 * BPM))            // 217 ms
@@ -50,7 +49,6 @@ const melody_note_t MELODY_STARTUP[] = {
     Q(ES6), Q(CS6), C(ES6), Q(E6), Q(C6), C(E6),                    // bar 3
     Q(B5), Q(CS6), Q(D6), Q(E6), Q(FS6), Q(D6), Q(FS6), Q(B6),     // bar 4
     Q(A6), Q(FS6), Q(D6), Q(FS6), { A6, HELD, MINIM },             // bar 5
-    Q(FS6), { B6, MINIM, MINIM },                                   // our close on the tonic
 };
 
 const size_t MELODY_STARTUP_LEN = sizeof(MELODY_STARTUP) / sizeof(MELODY_STARTUP[0]);
