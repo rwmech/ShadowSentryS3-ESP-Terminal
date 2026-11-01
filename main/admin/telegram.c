@@ -227,7 +227,7 @@ void telegram_notify(const attack_log_t *entry)
     if (!s_queue || !settings_telegram_enabled()) return;
     // The dashboard's "Alert on" switches and the ignore list apply here too.
     if ((unsigned)entry->type >= ATTACK_TYPE_COUNT ||
-        !alarm_should_alert((uint8_t)entry->type, entry->src_ip, entry->src_mac)) return;
+        !alarm_should_alert(entry)) return;
     // Non-blocking: drop if the queue is full rather than stalling the caller.
     if (xQueueSend(s_queue, entry, 0) != pdTRUE)
         ESP_LOGD(TAG, "Queue full — notification dropped");
@@ -467,6 +467,19 @@ void telegram_task(void *arg)
         ESP_LOGD(TAG, "Sending alert for %s (%s)", ip_str,
                  s_type_label[entry.type]);
 
-        deliver(msg);
+        // The alert code and headline lead (fork: one code on every alert).
+        enum { HL_H = 5 * DESCRIBE_MAX, OUT_MAX = sizeof(msg) + HL_H + 16 };
+        static char *hl_h, *out;      // PSRAM, task only
+        if (!hl_h) hl_h = heap_caps_malloc(HL_H, MALLOC_CAP_SPIRAM);
+        if (!out)  out  = heap_caps_malloc(OUT_MAX, MALLOC_CAP_SPIRAM);
+        char hl[DESCRIBE_MAX];
+        describe_event(&entry, hl, sizeof(hl));
+        if (hl_h && out) {
+            html_escape(hl, hl_h, HL_H);
+            snprintf(out, OUT_MAX, "<b>%s</b>\n%s", hl_h, msg);
+            deliver(out);
+        } else {
+            deliver(msg);
+        }
     }
 }

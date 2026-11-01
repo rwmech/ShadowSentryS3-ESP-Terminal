@@ -908,11 +908,14 @@ static void get_log_file(int sock, const char *query)
 
 // ── Ignore list: GET /api/ignore, POST /api/ignore (detect-core) ──────────────
 //
-// POST {"action":"add","ip":"192.168.0.50","mac":"aa:bb:cc:dd:ee:ff","note":"NAS"}
-//   ip and mac are optional, one is required; "" means none.
-// POST {"action":"remove","index":3,"ip":"...","mac":"..."}
-//   ip and mac must still match entry 3 as listed, so a panel add in between
-//   can't make the dashboard remove the wrong entry (409 if it moved).
+// POST {"action":"add","ip":"192.168.0.50","mac":"aa:bb:cc:dd:ee:ff","code":"17-01","note":"NAS"}
+//   ip and mac are optional, one is required; "" means none. code is
+//   optional: absent or "" ignores the whole device, else one code from the
+//   table (describe.h, GET /api/codes) from that device only.
+// POST {"action":"remove","index":3,"ip":"...","mac":"...","code":"..."}
+//   ip and mac (and code, if given) must still match entry 3 as listed, so a
+//   panel add in between can't make the dashboard remove the wrong entry
+//   (409 if it moved).
 
 static void get_ignore(int sock)
 {
@@ -933,6 +936,11 @@ static void get_ignore(int sock)
         jb_str(&j, mac, sizeof(mac));
         JB_LIT(&j, ",\"vendor\":");
         jb_str(&j, has_mac ? wifi_manager_mac_vendor(l[i].mac) : "", 64);
+        JB_LIT(&j, ",\"code\":");
+        jb_str(&j, l[i].code, sizeof(l[i].code));
+        JB_LIT(&j, ",\"code_name\":");
+        const char *cn = l[i].code[0] ? describe_code_name(l[i].code) : NULL;
+        jb_str(&j, cn ? cn : "", 32);
         JB_LIT(&j, ",\"note\":");
         jb_str(&j, l[i].note, sizeof(l[i].note));
         jb_printf(&j, ",\"ts\":%lu}", (unsigned long)l[i].added_ts);
@@ -980,6 +988,13 @@ static void post_ignore(int sock, const char *req, int req_len)
     const char *err = take_addr(root, &ip, mac);
     const char *st = "400 Bad Request";
     esp_err_t r = ESP_OK;
+    const cJSON *cd = cJSON_GetObjectItemCaseSensitive(root, "code");
+    const char *code = "";
+    if (!err && cd && !cJSON_IsNull(cd)) {
+        if (!cJSON_IsString(cd) || !cd->valuestring) err = "code must be a string";
+        else if (cd->valuestring[0] && !describe_code_name(cd->valuestring)) err = "code is not in the code table (GET /api/codes)";
+        else code = cd->valuestring;
+    }
 
     if (err) {
         /* reported below */
@@ -989,7 +1004,7 @@ static void post_ignore(int sock, const char *req, int req_len)
         if (!ip && !memcmp(mac, zero, 6)) err = "give an IP, a MAC or both";
         else if (strlen(note) >= IGNORE_NOTE_MAX) err = "note is too long (max 39)";
         else {
-            r = ignore_add(ip, memcmp(mac, zero, 6) ? mac : NULL, note);
+            r = ignore_add(ip, memcmp(mac, zero, 6) ? mac : NULL, code, note);
             if (r == ESP_ERR_NO_MEM) { st = "409 Conflict"; err = "the ignore list is full (32)"; }
             else if (r != ESP_OK)    { st = "500 Internal Server Error"; err = "could not save the ignore list"; }
         }
@@ -1000,7 +1015,9 @@ static void post_ignore(int sock, const char *req, int req_len)
         double d = cJSON_IsNumber(ix) ? ix->valuedouble : -1;
         int i = (d >= 0 && d < IGNORE_MAX) ? (int)d : -1;      // range first: no UB cast
         if (i < 0 || d != (double)i || i >= n) err = "index out of range";
-        else if (l[i].ip != ip || memcmp(l[i].mac, mac, 6)) { st = "409 Conflict"; err = "the list changed, reload it"; }
+        else if (l[i].ip != ip || memcmp(l[i].mac, mac, 6) || (cd && strcmp(l[i].code, code))) {
+            st = "409 Conflict"; err = "the list changed, reload it";
+        }
         else if (ignore_remove(i) != ESP_OK) { st = "500 Internal Server Error"; err = "could not save the ignore list"; }
     } else {
         err = "action must be add or remove";
@@ -1011,18 +1028,104 @@ static void post_ignore(int sock, const char *req, int req_len)
     get_ignore(sock);
 }
 
-// ── POST /api/alarm/clear: re-arm ─────────────────────────────────────────────
+// ── Alarm: ack, resolve, ignore; GET /api/codes ───────────────────────────────
 //
-// Ends an acknowledged incident so the next event alarms again. Logs and
-// metrics are untouched. An unacknowledged incident must be acknowledged first.
+// POST /api/alarm/ack (alias /api/ack): RED -> YELLOW.
+// POST /api/alarm/resolve (alias /api/alarm/clear): RED or YELLOW -> GREEN.
+// POST /api/alarm/ignore {"scope":"error"|"device"}: ignore the incident's
+//   code from its source, or the whole source, and resolve the incident if
+//   that leaves nothing of it unignored.
+// Each answers 200 {"alarm":{...}} (the /api/status shape) once the alarm
+// task has applied it, or after ALARM_WAIT_MS with the state as it stands;
+// 409 when there is nothing to act on. Logs and metrics are never touched.
 
-static void post_alarm_clear(int sock)
+#define ALARM_WAIT_MS   600
+
+static void send_alarm(int sock, const alarm_info_t *a)
+{
+    char inner[WS_ALARM_JSON_MAX];
+    ws_format_alarm_json(a, inner, sizeof(inner));
+    jb_t j;
+    jb_init(&j);
+    JB_LIT(&j, "{\"alarm\":");
+    jb_raw(&j, inner, strlen(inner));
+    JB_LIT(&j, "}");
+    send_json(sock, &j);
+}
+
+// Wait for the alarm task to leave state `from` in incident `id` (or for a
+// new incident). Returns the state as it stands.
+static void alarm_wait(uint32_t id, alarm_state_t from, alarm_info_t *a)
+{
+    for (int t = 0; t < ALARM_WAIT_MS; t += 20) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        alarm_get(a);
+        if (a->id != id || a->state != from) return;
+    }
+}
+
+static void post_alarm_ack(int sock)
 {
     alarm_info_t a;
     alarm_get(&a);
-    if (a.state == ALARM_ACTIVE) { send_error(sock, "409 Conflict", "acknowledge first"); return; }
-    alarm_clear();
-    send_204(sock);
+    if (a.state != ALARM_ACTIVE) { send_error(sock, "409 Conflict", "no unacknowledged (red) incident"); return; }
+    alarm_ack(ALARM_BY_DASHBOARD);
+    ESP_LOGI(TAG, "Incident #%lu acknowledged from the dashboard", (unsigned long)a.id);
+    alarm_wait(a.id, a.state, &a);
+    send_alarm(sock, &a);
+}
+
+static void post_alarm_resolve(int sock)
+{
+    alarm_info_t a;
+    alarm_get(&a);
+    if (a.state == ALARM_IDLE) { send_error(sock, "409 Conflict", "no open incident"); return; }
+    alarm_resolve(ALARM_BY_DASHBOARD);
+    ESP_LOGI(TAG, "Incident #%lu resolved from the dashboard", (unsigned long)a.id);
+    alarm_wait(a.id, a.state, &a);
+    send_alarm(sock, &a);
+}
+
+static void post_alarm_ignore(int sock, const char *req, int req_len)
+{
+    size_t blen = 0;
+    const char *why = NULL;
+    const char *status = read_body(sock, req, req_len, &blen, &why);
+    if (status) { send_error(sock, status, why); return; }
+    if (!json_depth_ok(s_body, blen, 2)) { send_error(sock, "400 Bad Request", "JSON nested too deeply"); return; }
+    cJSON *root = cJSON_ParseWithLength(s_body, blen);
+    const cJSON *sc = root ? cJSON_GetObjectItemCaseSensitive(root, "scope") : NULL;
+    int scope = !cJSON_IsString(sc) || !sc->valuestring ? -1
+              : !strcmp(sc->valuestring, "error") ? 0 : !strcmp(sc->valuestring, "device") ? 1 : -1;
+    cJSON_Delete(root);
+    if (scope < 0) { send_error(sock, "400 Bad Request", "scope must be error or device"); return; }
+
+    alarm_info_t a;
+    alarm_get(&a);
+    if (a.state == ALARM_IDLE) { send_error(sock, "409 Conflict", "no open incident"); return; }
+    esp_err_t r = scope ? alarm_ignore_device(ALARM_BY_DASHBOARD) : alarm_ignore_error(ALARM_BY_DASHBOARD);
+    if (r == ESP_ERR_NO_MEM)        { send_error(sock, "409 Conflict", "the ignore list is full (32)"); return; }
+    if (r == ESP_ERR_INVALID_STATE) { send_error(sock, "409 Conflict", "no open incident with a source"); return; }
+    if (r != ESP_OK)                { send_error(sock, "500 Internal Server Error", "could not save the ignore list"); return; }
+    alarm_wait(a.id, a.state, &a);
+    send_alarm(sock, &a);
+}
+
+static void get_codes(int sock)
+{
+    jb_t j;
+    jb_init(&j);
+    JB_LIT(&j, "{\"codes\":[");
+    for (int i = 0; i < describe_code_count(); i++) {
+        const char *name = NULL;
+        int tier = 0;
+        const char *code = describe_code_at(i, &name, &tier);
+        jb_printf(&j, "%s{\"code\":\"%s\",\"name\":", i ? "," : "", code);   // fixed table text
+        jb_str(&j, name, 32);
+        jb_printf(&j, ",\"tier\":%d}", tier);
+    }
+    JB_LIT(&j, "]}");
+    send_json(sock, &j);
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -1033,10 +1136,10 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (!parse_request_line(req, method, sizeof(method), path, sizeof(path), query, sizeof(query)))
         return false;
     bool get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
-    if (post && !strcmp(path, "/api/alarm/clear")) { post_alarm_clear(sock); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
-           R_DC_TEST, R_DC_STATUS, R_IGN_GET, R_IGN_POST, R_WA_TEST, R_WA_STATUS } r = R_NONE;
+           R_DC_TEST, R_DC_STATUS, R_IGN_GET, R_IGN_POST, R_WA_TEST, R_WA_STATUS,
+           R_AL_ACK, R_AL_RESOLVE, R_AL_IGNORE, R_CODES } r = R_NONE;
     if      (get  && !strcmp(path, "/api/settings"))    r = R_SET_GET;
     else if (post && !strcmp(path, "/api/settings"))    r = R_SET_POST;
     else if (post && !strcmp(path, "/api/reboot"))      r = R_REBOOT;
@@ -1050,6 +1153,10 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     else if (post && !strcmp(path, "/api/ignore"))      r = R_IGN_POST;
     else if (post && !strcmp(path, "/api/whatsapp/test"))   r = R_WA_TEST;
     else if (get  && !strcmp(path, "/api/whatsapp/status")) r = R_WA_STATUS;
+    else if (post && (!strcmp(path, "/api/alarm/ack") || !strcmp(path, "/api/ack")))           r = R_AL_ACK;
+    else if (post && (!strcmp(path, "/api/alarm/resolve") || !strcmp(path, "/api/alarm/clear"))) r = R_AL_RESOLVE;
+    else if (post && !strcmp(path, "/api/alarm/ignore")) r = R_AL_IGNORE;
+    else if (get  && !strcmp(path, "/api/codes"))        r = R_CODES;
     if (r == R_NONE) return false;
 
     // A client that stops reading can't hold the single admin task for ever.
@@ -1070,6 +1177,10 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     case R_IGN_POST: post_ignore(sock, req, req_len); break;
     case R_WA_TEST:  post_whatsapp_test(sock); break;
     case R_WA_STATUS: get_whatsapp_status(sock); break;
+    case R_AL_ACK:     post_alarm_ack(sock); break;
+    case R_AL_RESOLVE: post_alarm_resolve(sock); break;
+    case R_AL_IGNORE:  post_alarm_ignore(sock, req, req_len); break;
+    case R_CODES:      get_codes(sock); break;
     default: break;
     }
     return true;
