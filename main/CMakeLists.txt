@@ -85,6 +85,7 @@ idf_component_register(
     EMBED_TXTFILES
         "index.html"   # dashboard → _binary_index_html_{start,end}
         "device.html"  # device page (api_devlog.c) → _binary_device_html_{start,end}
+        "analysis.js"  # device analysis rules, both pages (api_devlog.c) → _binary_analysis_js_{start,end}
 
     REQUIRES
         # Core system

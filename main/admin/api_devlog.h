@@ -10,6 +10,11 @@
  *     The device page (main/device.html, embedded). It reads its own query
  *     and calls the routes below; the server ignores the query here.
  *
+ *   GET /analysis.js
+ *
+ *     The device analysis rules (main/analysis.js, embedded), loaded by the
+ *     dashboard (main/index.html) and the device page: one copy for both.
+ *
  *   GET /api/logs/device?mac=aa:bb:cc:dd:ee:ff&ip=192.168.0.50[&limit=M][&cursor=C]
  *
  *     The microSD log lines (/sd/log/YYYY-MM-DD.jsonl) whose "mac" or "ip"

@@ -18,6 +18,9 @@ static const char *TAG = "DEVLOG";
 // The device page (main/device.html, embedded as text: NUL-terminated).
 extern const uint8_t device_html_start[] asm("_binary_device_html_start");
 extern const uint8_t device_html_end[]   asm("_binary_device_html_end");
+// The device analysis rules both pages load (main/analysis.js, embedded as text).
+extern const uint8_t analysis_js_start[] asm("_binary_analysis_js_start");
+extern const uint8_t analysis_js_end[]   asm("_binary_analysis_js_end");
 
 #define SEND_TIMEOUT_S      10      // a client that stops reading can't hold the admin task
 #define DEVLOG_LIMIT_DEF    200
@@ -343,11 +346,12 @@ static bool scan_file(scan_t *s, const char *name, uint32_t start)
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-static void serve_device_page(int sock)
+// An embedded text file (EMBED_TXTFILES adds a NUL, not sent).
+static void serve_embedded(int sock, const uint8_t *start, const uint8_t *end, const char *type)
 {
-    size_t n = (size_t)(device_html_end - device_html_start);
-    if (n && device_html_start[n - 1] == '\0') n--;          // EMBED_TXTFILES adds a NUL
-    if (send_head(sock, "200 OK", "text/html; charset=utf-8", n)) send_all(sock, device_html_start, n);
+    size_t n = (size_t)(end - start);
+    if (n && start[n - 1] == '\0') n--;
+    if (send_head(sock, "200 OK", type, n)) send_all(sock, start, n);
 }
 
 static void serve_device_log(int sock, const char *q, size_t qn)
@@ -463,11 +467,19 @@ bool api_devlog_handle(int sock, const char *req, int req_len)
     size_t qn;
     int m = match_get(req, req_len, "/api/logs/device", &q, &qn);
     int page = m < 0 ? match_get(req, req_len, "/device", &q, &qn) : -1;
-    if (m < 0 && page < 0) return false;
+    int js = m < 0 && page < 0 ? match_get(req, req_len, "/analysis.js", &q, &qn) : -1;
+    if (m < 0 && page < 0 && js < 0) return false;
 
     struct timeval tv = { .tv_sec = SEND_TIMEOUT_S, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    if (page >= 0) { serve_device_page(sock); return true; }   // the page reads its own query
+    if (page >= 0) {                                           // the page reads its own query
+        serve_embedded(sock, device_html_start, device_html_end, "text/html; charset=utf-8");
+        return true;
+    }
+    if (js >= 0) {
+        serve_embedded(sock, analysis_js_start, analysis_js_end, "text/javascript; charset=utf-8");
+        return true;
+    }
     if (m == 0) { send_error(sock, "400 Bad Request", "query too long"); return true; }
     serve_device_log(sock, q, qn);
     return true;
