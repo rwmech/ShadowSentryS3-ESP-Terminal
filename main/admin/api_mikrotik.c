@@ -11,6 +11,7 @@
 #include "correlate.h"
 #include "router_trip.h"
 #include "router_flow.h"
+#include "blocklist.h"
 #include "settings.h"
 #include "describe.h"
 #include "json_esc.h"
@@ -411,6 +412,13 @@ static void get_router_status(int sock)
         size_t w = router_flow_status_json(j.b + j.n, j.cap - j.n);
         if (w) j.n += w; else jb_lit(&j, "null");
     }
+    uint32_t served, last, refused;
+    blocklist_fetch_stats(&served, &last, &refused);
+    block_entry_t *be = heap_caps_malloc(BLOCK_MAX * sizeof(*be), MALLOC_CAP_SPIRAM);
+    int nb = be ? blocklist_get(be, BLOCK_MAX) : 0;
+    free(be);
+    jb_fmt(&j, ",\"block\":{\"entries\":%d,\"max\":%d,\"fetches\":%lu,\"last_fetch\":%lu,\"refused\":%lu}",
+           nb, BLOCK_MAX, (unsigned long)served, (unsigned long)last, (unsigned long)refused);
     jb_lit(&j, "}");
     if (j.full) send_err(sock, "500 Internal Server Error", "response too large");
     else send_json(sock, "200 OK", buf, j.n);

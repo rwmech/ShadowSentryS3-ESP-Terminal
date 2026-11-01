@@ -36,6 +36,7 @@ typedef enum {
     NOTIFY_INCIDENT_OPENED,
     NOTIFY_INCIDENT_ACKED,
     NOTIFY_INCIDENT_CLOSED,
+    NOTIFY_BLOCK,               // a block list add or remove (admin/blocklist.c)
     NOTIFY_KIND_COUNT
 } notify_kind_t;
 

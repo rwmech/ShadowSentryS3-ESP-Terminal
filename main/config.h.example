@@ -184,6 +184,11 @@
 #define ROUTER_IPFIX_ENABLE         1
 #define ROUTER_IPFIX_PORT           4739
 #define ROUTER_IPFIX_RATE           200
+// ROUTER_NEVER_BLOCK: addresses the block list refuses, comma separated, up
+//   to 16 (your PC, a NAS). Also never blocked: this board, the gateway, the
+//   router, the Pi-hole (ROUTER_PIHOLE_IP), ROUTER_ADMIN_IPS, the admin
+//   allowlist, 0/8, 127/8, multicast and broadcast. main/admin/blocklist.h.
+#define ROUTER_NEVER_BLOCK          ""      // "192.168.0.10"
 
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //

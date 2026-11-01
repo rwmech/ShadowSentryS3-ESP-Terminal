@@ -40,6 +40,7 @@
 #include "oui.h"
 #include "pihole.h"
 #include "router_trip.h"
+#include "blocklist.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -212,6 +213,7 @@ void app_main(void)
     // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
     settings_init();
     pihole_init();                  // cJSON allocator (PSRAM first), settings listener; no task yet
+    blocklist_init();               // the block list the router pulls (NVS), PSRAM
 
     // ── Recon detection and the ignore list (before anything logs events) ───
     detect_init();

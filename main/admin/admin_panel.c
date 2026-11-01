@@ -15,6 +15,7 @@
 #include "web_assets.h"
 #include "api_pihole.h"
 #include "api_mikrotik.h"
+#include "api_block.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -446,6 +447,7 @@ static void conn_read(admin_conn_t *c, int64_t now)
 
 static void handle_request(int sock, char *buf, int len)
 {
+    if (api_block_public(sock, buf, len)) return;     // the router's block list fetch: no auth, router only
     if (!check_auth(buf)) {
         ESP_LOGD(TAG, "Auth failed");
         send_401(sock);
@@ -455,6 +457,7 @@ static void handle_request(int sock, char *buf, int len)
         send_text(sock, "403 Forbidden", "POST needs an X-ShadowSentry header\n");
         return;
     }
+    if (api_block_handle(sock, buf, len)) return; // block list for the router to pull
     if (api_ext_handle(sock, buf, len)) return;   // fork routes (settings, logs, ...)
     if (api_cam_handle(sock, buf, len)) return;   // camera snapshot routes
     if (api_devices_handle(sock, buf, len)) return;   // LAN discovery table
