@@ -24,6 +24,25 @@
 #     extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 #     extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 #   The file is embedded as text (null-terminated); use EMBED_FILES for binary.
+#
+# Fork (alert-web): the dashboard, the device page and analysis.js are embedded
+# gzip-compressed instead, from gz/ (written by tools/gzip_assets.py, run here
+# at configure time and by PlatformIO as a pre: script), and served by
+# admin/web_assets.c with Content-Encoding: gzip.
+#     _binary_index_html_gz_start / _end, _binary_device_html_gz_*, _binary_analysis_js_gz_*
+idf_build_get_property(ss_python PYTHON)
+if(NOT ss_python)
+    set(ss_python python)
+endif()
+execute_process(
+    COMMAND ${ss_python} "${CMAKE_CURRENT_LIST_DIR}/../tools/gzip_assets.py" "${CMAKE_CURRENT_LIST_DIR}/.."
+    RESULT_VARIABLE ss_gzip_result)
+if(NOT ss_gzip_result EQUAL 0)
+    message(FATAL_ERROR "tools/gzip_assets.py failed")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/index.html" "${CMAKE_CURRENT_LIST_DIR}/device.html"
+    "${CMAKE_CURRENT_LIST_DIR}/analysis.js")
 
 idf_component_register(
     SRCS
@@ -68,6 +87,7 @@ idf_component_register(
         "admin/api_devices.c"
         "admin/api_oui.c"
         "admin/api_devlog.c"
+        "admin/web_assets.c"
         "admin/api_tasks.c"
         "storage/oui.c"
 
@@ -82,10 +102,10 @@ idf_component_register(
         "camera"       # cam.h, OV2640 panel-press snapshots
         "detect"       # detect.h, ignore.h, discovery.h (recon detection, ignore list, LAN discovery)
 
-    EMBED_TXTFILES
-        "index.html"   # dashboard → _binary_index_html_{start,end}
-        "device.html"  # device page (api_devlog.c) → _binary_device_html_{start,end}
-        "analysis.js"  # device analysis rules, both pages (api_devlog.c) → _binary_analysis_js_{start,end}
+    EMBED_FILES
+        "gz/index.html.gz"   # dashboard, gzip (web_assets.c)
+        "gz/device.html.gz"  # device page, gzip (web_assets.c)
+        "gz/analysis.js.gz"  # device analysis rules for both pages, gzip (web_assets.c)
 
     REQUIRES
         # Core system

@@ -16,3 +16,4 @@ sdkconfig.crowpanel35
 sdkconfig.crowpanel35_ota
 tools/ota_password
 tools/__pycache__/
+main/gz/

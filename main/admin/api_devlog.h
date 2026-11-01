@@ -2,18 +2,11 @@
 #include <stdbool.h>
 
 /*
- * Per-device routes on the admin port (fork addition, Robert Mech; Basic
+ * Per-device log route on the admin port (fork addition, Robert Mech; Basic
  * auth already checked by admin_panel.c):
  *
- *   GET /device?mac=..&ip=..
- *
- *     The device page (main/device.html, embedded). It reads its own query
- *     and calls the routes below; the server ignores the query here.
- *
- *   GET /analysis.js
- *
- *     The device analysis rules (main/analysis.js, embedded), loaded by the
- *     dashboard (main/index.html) and the device page: one copy for both.
+ *   (The device page itself, GET /device, and /analysis.js are served by
+ *   web_assets.c.)
  *
  *   GET /api/logs/device?mac=aa:bb:cc:dd:ee:ff&ip=192.168.0.50[&limit=M][&cursor=C]
  *
@@ -42,6 +35,6 @@
  * 32 KB if PSRAM is short) are in PSRAM, freed before returning. Reads the
  * card from the admin task, one file open at a time (FATFS is reentrant; the
  * SD writer keeps its own).
- * Returns true when the request was one of these routes and has been answered.
+ * Returns true when the request was this route and has been answered.
  */
 bool api_devlog_handle(int sock, const char *req, int req_len);

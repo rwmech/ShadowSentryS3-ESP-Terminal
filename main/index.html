@@ -449,6 +449,14 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .dv-tog{display:flex;align-items:center;gap:6px;font-size:14px;margin:4px 0;cursor:pointer}
 .dv-tog input{width:16px;height:16px}
 .dv-msg{font-size:14px;color:var(--amber);min-height:1em}
+/* Loading spinner (alert-web): on every panel until its data or an error with Retry */
+.spin{display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border-radius:50%;
+  border:2px solid var(--g-dim);border-top-color:var(--g);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+.loading{color:var(--muted);font-size:14px;padding:10px 0}
+.loading.err{color:var(--red)}
+.loading .btn{margin-left:10px}
 /* Device tools and AI advice (alert-web) */
 .dv-tools{margin-top:14px}
 .ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
@@ -660,7 +668,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="timeline-card">
       <div class="card-title">&#9889; Live Attack Feed</div>
       <div class="feed" id="feed">
-        <div class="feed-empty">Waiting for attackers…</div>
+        <div class="loading"><span class="spin"></span>Loading the feed...</div>
       </div>
     </div>
 
@@ -675,7 +683,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
              style="display:block;border-radius:8px;object-fit:cover;background:#000;border:1px solid var(--border)">
       </a>
       <div class="kv">
-        <div id="snap-what" class="muted">Loading&hellip;</div>
+        <div id="snap-what" class="muted"><span class="spin"></span>Loading&hellip;</div>
         <div id="snap-when" class="muted"></div>
         <div id="snap-file" class="muted"></div>
       </div>
@@ -688,6 +696,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     const NAME={ack:'Acknowledged',clear:'Cleared / re-armed'};
     let shown=-1;
     async function snapLoad(){
+      if(g('page-dash').hidden)return;          // only the visible tab refreshes
       try{
         const r=await fetch('/api/snap/last.json',{cache:'no-store'});if(!r.ok)throw 0;
         const d=await r.json();
@@ -732,7 +741,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
           </tr>
         </thead>
         <tbody id="tbody">
-          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="7"><span class="spin"></span>Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -877,7 +886,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="card-title">Vendor database</div>
     <div class="msg" id="ou-msg"></div>
     <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">MAC vendor names from the IEEE registry, kept on the microSD card. Build it on a PC with tools/make_oui.py, then upload the oui.bin here (or with tools/oui_upload.py). Without it a short built-in list is used.</div>
-    <div class="kv" id="ou-status">Loading...</div>
+    <div class="kv" id="ou-status"><div class="loading"><span class="spin"></span>Loading...</div></div>
     <div class="ctl" style="margin-top:10px">
       <input type="file" id="ou-file" accept=".bin">
       <button class="btn" type="button" onclick="uploadOui()">Update vendor database</button>
@@ -911,6 +920,22 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 </div>
 
 <script>
+// Fork (alert-web): the admin server answers one request at a time, so a burst
+// only queues on the board. At most 2 requests in flight from this page, in call
+// order, /api/status first (the banner and the heartbeat).
+(function(){
+  const raw=window.fetch.bind(window),q=[];let live=0;
+  const next=()=>{while(live<2&&q.length){const j=q.shift();live++;
+    raw(...j.a).then(j.ok,j.no).finally(()=>{live--;next();});}};
+  window.fetch=(...a)=>new Promise((ok,no)=>{
+    const j={a,ok,no};String(a[0]).startsWith('/api/status')?q.unshift(j):q.push(j);next();});
+})();
+// Spinner and error-with-Retry, for every panel that waits on the board.
+function spinner(text){const d=document.createElement('div');d.className='loading';
+  const sp=document.createElement('span');sp.className='spin';d.append(sp,document.createTextNode(text||'Loading...'));return d;}
+function failBox(text,retry){const d=document.createElement('div');d.className='loading err';d.append(document.createTextNode(text));
+  if(retry){const b=document.createElement('button');b.className='btn';b.type='button';b.textContent='Retry';b.onclick=retry;d.append(b);}return d;}
+function boxRow(tb,cols,box){const tr=document.createElement('tr'),c=document.createElement('td');tr.className='empty-row';c.colSpan=cols;c.append(box);tr.append(c);tb.replaceChildren(tr);}
 // Every POST carries this header; the device refuses POSTs without it (CSRF guard).
 const POSTH={method:'POST',headers:{'X-ShadowSentry':'1'}};
 function ip4(n){return[(n>>>0)&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255].join('.')}
@@ -1212,10 +1237,14 @@ async function load(){
     setVal('s-rtsp',bt[0]||0);setVal('s-http',bt[1]||0);setVal('s-telnet',bt[2]||0);setVal('s-ssh',bt[3]||0);setVal('s-ftp',bt[4]||0);
     updateDonut(bt);
     const fe=en.filter(matchF);
+    const feed=document.getElementById('feed');
+    if(feed.querySelector('.loading'))feed.innerHTML='<div class="feed-empty">'+(_filter===null?'Waiting for attackers…':'No matching events…')+'</div>';
     updateFeed(fe);updateTable(fe);setOnline(true);
   }catch{
     setOnline(false);
-    document.getElementById('tbody').innerHTML='<tr class="empty-row"><td colspan="7" style="color:var(--red)">&#9888; Device unreachable</td></tr>';
+    boxRow(document.getElementById('tbody'),7,failBox('\u26a0 Device unreachable',load));
+    const feed=document.getElementById('feed');
+    if(feed.querySelector('.loading'))feed.replaceChildren(failBox('Could not load the feed',load));
   }
 }
 async function clearLogs(){
@@ -1331,7 +1360,10 @@ function ignoreAlarm(scope){
     await alarmReply(r);
   });
 }
-load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
+// Status first (small: the banner and the heartbeat); the visible tab's data
+// follows from showPage(); only the visible tab refreshes.
+loadStatus();setInterval(loadStatus,5000);
+setInterval(()=>{if(!document.getElementById('page-dash').hidden)load();},10000);
 
 // live push — WebSocket on the dedicated port; falls back silently to polling
 function applyEntry(e){
@@ -1377,6 +1409,7 @@ function showPage(p){
   if(!PAGES.includes(p))p='dash';
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
+  if(p==='dash')load();
   if(p==='logs'){loadSummary();loadDays();}
   if(p==='settings'){loadSettings();loadIgnore();loadOui();}
   if(p==='devices')loadDevices();
@@ -1390,9 +1423,10 @@ setInterval(()=>{if(!$('page-devices').hidden)loadDevices();},10000);
 const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
 async function loadDevices(){
   let d;
+  if(!$('dv-body').querySelector('tr.dv-row'))boxRow($('dv-body'),6,spinner('Loading the devices...'));
   const ig=fetch('/api/ignore',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(j)_ign=j.entries||[];}).catch(()=>{});
   try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw 0;d=await r.json();}
-  catch{$('dv-note').textContent='Devices unavailable';return;}
+  catch{$('dv-note').textContent='';boxRow($('dv-body'),6,failBox('Devices unavailable',loadDevices));return;}
   await ig;
   const ls=(d.listeners||[]).map(l=>String(l.name)+' '+l.port+(l.open?'':' ('+(l.error||'closed')+')'));
   $('dv-note').textContent='Listening, log only: '+ls.join(', ')+'. mDNS: '+String(d.mdns||'')+'. '+
@@ -1540,8 +1574,9 @@ function bars(id,vals,labels){
 }
 const dkey=d=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
 async function loadSummary(){
+  if(!$('sum-cards').querySelector('.stat-card'))$('sum-cards').replaceChildren(spinner('Loading the summary...'));
   try{const r=await fetch('/api/summary');if(!r.ok)throw 0;renderSummary(await r.json());}
-  catch{$('sum-cards').replaceChildren(el('div','muted','Summary unavailable'));}
+  catch{$('sum-cards').replaceChildren(failBox('Summary unavailable',loadSummary));}
 }
 function renderSummary(d){
   const a=d.alarm||{};
@@ -1612,6 +1647,7 @@ function fillCodeFilter(){
 function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
 async function loadDays(){
   const sel=$('lg-day'),cur=sel.value;
+  if(!_loaded)boxRow($('lg-body'),9,spinner('Listing the day files...'));
   try{
     const r=await fetch('/api/logs');if(!r.ok)throw 0;const d=await r.json();
     _days=d.files||[];_tail=+d.tail_bytes||_tail;
@@ -1620,12 +1656,12 @@ async function loadDays(){
     updDl();
     if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),9,'No lines');}
     else if(!_loaded)loadDay();
-  }catch{note('Could not list the log files.');}
+  }catch{note('');boxRow($('lg-body'),9,failBox('Could not list the log files',loadDays));}
 }
 async function loadDay(){
   const name=$('lg-day').value;if(!name)return;
   const full=$('lg-full').checked,f=_days.find(x=>x.name===name)||{};
-  note('Loading '+name+'...');
+  note('');boxRow($('lg-body'),9,spinner('Loading '+name+'...'));
   try{
     const r=await fetch('/api/logs/file?f='+encodeURIComponent(name)+(full?'':'&tail=1'));
     if(!r.ok)throw 0;
@@ -1638,7 +1674,7 @@ async function loadDay(){
     _loaded={name,cut:!full&&(+f.size||0)>_tail,bad};
     fillCodeFilter();
     renderDay();
-  }catch{note('Could not load '+name+'.');}
+  }catch{boxRow($('lg-body'),9,failBox('Could not load '+name,loadDay));}
 }
 // Discovery is hidden unless "Show discovery" is ticked (kept in localStorage),
 // or the kind or type filter asks for it. Discovery lines are the kind
@@ -1722,6 +1758,7 @@ function showMsg(kind,text){const m=$('st-msg');m.className='msg '+kind;m.textCo
 TNAME.forEach((n,i)=>{const l=el('label'),c=el('input');c.type='checkbox';c.id='st-al-'+i;l.append(c,document.createTextNode(n));$('st-alerts').append(l);});
 let _clientIp='';
 async function loadSettings(){
+  const m=$('st-msg');m.className='msg ok';m.replaceChildren(spinner('Loading the settings...'));
   try{
     const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();
     $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();
@@ -1749,8 +1786,9 @@ async function loadSettings(){
     $('st-allow').value=(s.admin_allow||[]).join(', ');
     $('st-allow-hint').textContent='IPv4s, comma separated, up to 8. When set, ports 9999 and 9998 drop connections from anyone else, so a scan shows them filtered. '+
       'It must include your address ('+(_clientIp||'unknown')+'). Locked out? On the USB serial console type: admin-allow clear';
+    m.className='msg';m.textContent='';
     if(s.reboot_pending)showMsg('ok','Saved Wi-Fi or Telegram changes are waiting for a reboot.');
-  }catch{showMsg('err','Could not load the settings.');}
+  }catch{m.className='msg err';m.replaceChildren(failBox('Could not load the settings',loadSettings));}
 }
 async function saveSettings(ev){
   ev.preventDefault();
@@ -1816,12 +1854,13 @@ async function testDiscord(){
 // ── Vendor database (GET/POST /api/oui) ──
 function ouMsg(kind,text){const m=$('ou-msg');m.className='msg '+kind;m.textContent=text;}
 async function loadOui(){
+  $('ou-status').replaceChildren(spinner('Loading...'));
   try{const r=await fetch('/api/oui',{cache:'no-store'});if(!r.ok)throw 0;const d=await r.json();
     $('ou-status').replaceChildren(...(d.present?[
       'Present: '+d.count+' prefixes, '+kb(d.size)+', built '+fmt(d.build_ts),
       'Lookups '+d.lookups+', cache hits '+d.hits+', names cached '+kb(d.pool_used)]
       :[d.card?'Not on the card: the built-in list is used.':'No microSD card: the built-in list is used.']).map(t=>el('div','',t)));}
-  catch{$('ou-status').textContent='Status unavailable';}
+  catch{$('ou-status').replaceChildren(failBox('Status unavailable',loadOui));}
 }
 function uploadOui(){
   const f=$('ou-file').files[0];
@@ -1864,8 +1903,9 @@ function fillIgnCodes(){
   if(all.includes(cur))sel.value=cur;
 }
 async function loadIgnore(){
+  boxRow($('ig-body'),6,spinner('Loading the ignore list...'));
   try{const r=await fetch('/api/ignore');if(!r.ok)throw 0;renderIgnore(await r.json());}
-  catch{igMsg('err','Could not load the ignore list.');}
+  catch{boxRow($('ig-body'),6,failBox('Could not load the ignore list',loadIgnore));}
 }
 const ignRemoveBody=x=>({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||'',code:ignCode(x)});
 async function postIgnore(body){
