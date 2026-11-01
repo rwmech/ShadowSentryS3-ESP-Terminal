@@ -119,9 +119,13 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   <div class="card">
     <div class="ctl" style="justify-content:space-between">
       <div><div class="idt" id="id-label"><span class="spin"></span>Loading...</div><div class="tsub" id="id-sub"></div></div>
-      <div class="ctl"><button class="btn" type="button" id="ai-btn">Get AI advice</button></div>
+      <div class="ctl"><button class="btn" type="button" id="ai-btn">Get AI advice</button>
+        <button class="btn" type="button" id="blk-dev" hidden>Block this device</button>
+        <button class="btn" type="button" id="blk-dev-un" hidden>Unblock</button></div>
     </div>
     <div class="tsub" id="ai-msg" hidden></div>
+    <div class="tsub" id="blk-dev-st" hidden></div>
+    <div class="msg" id="blk-msg"></div>
     <div class="kv" id="id-kv"></div>
   </div>
   <div class="card"><div class="card-title">Analysis</div><div id="an"><div class="loading"><span class="spin"></span>Loading the device table...</div></div></div>
@@ -519,6 +523,8 @@ function dstTable(rows){
   const src=rows.some(t=>t.source!=null&&t.source!=='');
   const heads=['Destination','Port','Up','Down','Conns','First seen','Last seen','Owner','Flags'];
   if(src)heads.push('Seen by');
+  const blk=_blkOn&&rows.some(t=>t.external===true);
+  if(blk)heads.push('Block');
   const t=el('table'),hd=el('thead'),hr=el('tr'),tb=el('tbody');
   heads.forEach(h=>hr.append(el('th','',h)));hd.append(hr);
   rows.forEach(x=>{
@@ -534,9 +540,86 @@ function dstTable(rows){
       el('td','nw',fmt(+x.first_seen)),el('td','nw',fmt(+x.last_seen)),
       el('td','',x.external===true?owner(x)||'not looked up yet':'your network'),fc);
     if(src)tr.append(el('td','',SRC_NAME[x.source]||S(x.source)));
+    if(blk)tr.append(blkCell(x));
     tb.append(tr);
   });
   t.append(hd,tb);const w=el('div','tbl-wrap');w.append(t);return w;
+}
+
+// ── Block at the router: GET /api/block, POST /api/block, POST /api/block/remove (lane router) ──
+// {"entries":[{"ip","kind":"dst"|"src","note","ts"}],"max":64}. 404: the firmware has
+// no block list, so no buttons. A POST answers 200 with the list, or 409 {"error"}.
+// The list holds addresses, not devices: a "dst" entry stops every device reaching it.
+let _blk=null,_blkOn=false,_blkErr='';
+async function loadBlock(){
+  try{const d=await getJson('/api/block');
+    if(!d){_blkOn=false;_blk=null;}
+    else{_blkOn=true;_blk={entries:(Array.isArray(d.entries)?d.entries:[]).map(obj).filter(Boolean),max:+d.max||0};}
+    _blkErr='';}
+  catch(e){_blkOn=true;_blk=null;_blkErr=e.message;}
+  renderBlock();
+}
+const blkFind=(ip,kind)=>_blk?_blk.entries.find(e=>S(e.ip)===S(ip)&&e.kind===kind)||null:null;
+// Note: printable ASCII, 40 characters at most.
+const blkNote=t=>S(t).replace(/[^\x20-\x7e]/g,'').slice(0,40);
+async function blkPost(path,body){
+  const r=await fetch(path,{method:'POST',headers:JH,body:JSON.stringify(body)});
+  let d={};try{d=await r.json();}catch{}
+  if(!r.ok)throw new Error(S(d&&d.error)||'HTTP '+r.status);
+  if(obj(d)&&Array.isArray(d.entries))_blk={entries:d.entries.map(obj).filter(Boolean),max:+d.max||(_blk&&_blk.max)||0};
+  else await loadBlock();
+}
+async function blkDo(add,ip,kind,note,msgEl){
+  msgEl.textContent=add?'Asking the board to block '+ip+'...':'Asking the board to unblock '+ip+'...';
+  try{
+    await blkPost(add?'/api/block':'/api/block/remove',add?{ip,kind,note:blkNote(note)}:{ip,kind});
+    msgEl.textContent=add?'Blocked '+ip+': the router drops it within about a minute.':'Unblocked '+ip+': the router lets it through again within about a minute.';
+  }catch(e){msgEl.textContent=(add?'Not blocked: ':'Not unblocked: ')+e.message;}
+  renderBlock();
+}
+function blkDstConfirm(t){
+  const ip=S(t.ip),who=[S(t.name),owner(t)].filter(Boolean).join(', ');
+  return confirm('Block traffic to '+ip+(who?' ('+who+')':'')+'?\n\n'+
+    'What happens: ShadowSentry puts '+ip+' on its block list in the router. Within about a minute the router drops every connection from your network to this address. '+
+    'The list holds addresses, not devices, so this stops every device on your network reaching it, not only this one. Whatever uses the address (an app, an update or cloud service) stops working.\n\n'+
+    'To undo: press Unblock on this row. It stays blocked until you do.');
+}
+function blkDevConfirm(ip,label){
+  return confirm('Block this device ('+(label?label+', ':'')+ip+')?\n\n'+
+    'What happens: ShadowSentry puts '+ip+' on its block list in the router. Within about a minute the router drops traffic from this address that passes through it: '+
+    'the device loses the internet and cannot reach your other networks. Traffic that stays inside one part of your LAN (to a printer or TV on the same switch or Wi-Fi) may not pass the router\'s firewall and can still get through. '+
+    'The block follows the address: if the device gets a new IP from DHCP, it is free again.\n\n'+
+    'To undo: press Unblock at the top of this page (it takes the place of Block this device). It stays blocked until you do.');
+}
+// The device's own button, in the header card.
+function renderBlock(){
+  const b=$('blk-dev'),u=$('blk-dev-un'),st=$('blk-dev-st'),ip=devIp();
+  b.hidden=u.hidden=true;st.hidden=true;
+  if(_blkOn&&ip){
+    st.hidden=false;
+    if(!_blk){st.replaceChildren(failBox('Block list unavailable: '+_blkErr,loadBlock));}
+    else{
+      const e=blkFind(ip,'src');
+      if(e){st.textContent='Blocked at the router'+(+e.ts?' since '+fmt(+e.ts):'')+'.';u.hidden=false;}
+      else{st.textContent=_blk.max?'Block list: '+_blk.entries.length+' of '+_blk.max+' addresses used.':'';b.hidden=false;}
+    }
+  }
+  if(_intel)renderIntel(_intel);       // the per-row buttons
+}
+// The Block cell of one outbound row.
+function blkCell(t){
+  const c=el('td','nw');
+  if(t.external!==true){c.append(el('span','muted','-'));return c;}
+  if(!_blk){c.append(el('span','muted','unavailable'));return c;}
+  const ip=S(t.ip),e=blkFind(ip,'dst'),btn=el('button','btn',e?'Unblock':'Block traffic to this address');btn.type='button';
+  if(e)c.append(el('span','tier-chip tier-alert','Blocked'),el('span','sub',+e.ts?'since '+fmt(+e.ts):''));
+  btn.onclick=()=>{
+    if(e){if(!confirm('Unblock '+ip+'?\n\nThe router lets traffic to it through again within about a minute.'))return;}
+    else if(!blkDstConfirm(t))return;
+    btn.disabled=true;
+    blkDo(!e,ip,'dst',e?'':(S(_dev&&_dev.label)||devIp())+': '+(S(t.name)||owner(t)||ip),$('rt-msg'));
+  };
+  c.append(btn);return c;
 }
 
 // ── The log, in pages (GET /api/logs/device, cursor) ──
@@ -776,6 +859,10 @@ $('full').onclick=fullScan;
 $('ig-all').onchange=e=>toggleIgnore('',!e.target.checked,e.target);
 $('ph-ref').onclick=phRefresh;
 $('rt-ref').onclick=()=>loadIntel();
+$('blk-dev').onclick=()=>{const ip=devIp(),lb=S(_dev&&_dev.label);if(!ip||!blkDevConfirm(ip,lb))return;
+  $('blk-dev').disabled=true;blkDo(true,ip,'src',lb||'device page',$('blk-msg')).finally(()=>{$('blk-dev').disabled=false;});};
+$('blk-dev-un').onclick=()=>{const ip=devIp();if(!ip||!confirm('Unblock this device ('+ip+')?\n\nThe router lets its traffic through again within about a minute.'))return;
+  $('blk-dev-un').disabled=true;blkDo(false,ip,'src','',$('blk-msg')).finally(()=>{$('blk-dev-un').disabled=false;});};
 
 // ── Start: the device table, the codes and the ignore list, then the newest page fast ──
 (async()=>{
@@ -791,7 +878,7 @@ $('rt-ref').onclick=()=>loadIntel();
   renderDevice();
   // Each section loads on its own (the queue keeps 2 in flight): the router
   // first, since its connection fetch takes a few seconds on the board.
-  loadIntel();loadPihole();
+  loadBlock();loadIntel();loadPihole();
   await older(100);
 })();
 </script>
