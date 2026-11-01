@@ -10,6 +10,7 @@
 #include "mikrotik_watch.h"
 #include "correlate.h"
 #include "router_trip.h"
+#include "router_flow.h"
 #include "settings.h"
 #include "describe.h"
 #include "json_esc.h"
@@ -21,9 +22,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define SEND_TIMEOUT_S  10
-#define INTEL_JSON_MAX  (32 * 1024)     // 48 destinations at about 300 B, flags, identity, integrity
+#define INTEL_JSON_MAX  (40 * 1024)     // 48 destinations at about 430 B (with IPFIX), flags, identity, integrity
 #define WATCH_JSON_MAX  (12 * 1024)     // 20 checks at about 400 B
 #define QUERY_MAX       160
 
@@ -254,9 +256,27 @@ static void intel_json(jb_t *j, const correlate_t *c)
             if (c->dflags[i] & (1u << b)) jb_fmt(j, "%s\"%s\"", f++ ? "," : "", correlate_flag_key(b));
         jb_lit(j, "]");
         if (d->beacon_n) jb_fmt(j, ",\"beacon\":{\"every_s\":%lu,\"times\":%u}", (unsigned long)d->beacon_s, (unsigned)d->beacon_n);
+        jb_fmt(j, ",\"source\":\"%s\"", correlate_src_key(c->dsrc[i]));
+        if (c->fidx[i] >= 0 && c->fidx[i] < c->flow.n) {
+            const router_flow_dst_t *f = &c->flow.d[c->fidx[i]];
+            jb_fmt(j, ",\"flow\":{\"bytes_out\":%llu,\"bytes_in\":%llu,\"pkts_out\":%lu,\"pkts_in\":%lu,"
+                      "\"flows\":%lu,\"first\":%lu,\"last\":%lu}",
+                   (unsigned long long)f->bytes_out, (unsigned long long)f->bytes_in, (unsigned long)f->pkts_out,
+                   (unsigned long)f->pkts_in, (unsigned long)f->flows, (unsigned long)f->first, (unsigned long)f->last);
+        }
         jb_lit(j, "}");
     }
-    jb_lit(j, "]}}");
+    jb_lit(j, "]}");
+    // The router's IPFIX for this device: state, how far back, how many kept.
+    uint32_t now = (uint32_t)time(NULL);
+    jb_fmt(j, ",\"flow\":{\"state\":\"%s\",\"as_of\":%lu,\"window_s\":%lu,\"destinations\":%u,"
+              "\"truncated\":%s,",
+           router_flow_state_key(c->flow.state), (unsigned long)c->flow.as_of,
+           (unsigned long)(c->flow_found && c->flow.first && c->flow.first < now ? now - c->flow.first : 0),
+           (unsigned)(c->flow_found ? c->flow.n : 0), (c->flow.truncated || c->flow_cut) ? "true" : "false");
+    uint32_t rec = 0, drop = 0;
+    router_flow_counters(&rec, &drop);
+    jb_fmt(j, "\"records\":%lu,\"dropped\":%lu}}", (unsigned long)rec, (unsigned long)drop);
 
     // Pi-hole, when a client is built in and has data.
     if (c->dns_on) {
@@ -384,6 +404,11 @@ static void get_router_status(int sock)
     jb_lit(&j, "{\"syslog\":");
     if (j.cap - j.n > 1024) {
         size_t w = router_trip_status_json(j.b + j.n, j.cap - j.n);
+        if (w) j.n += w; else jb_lit(&j, "null");
+    }
+    jb_lit(&j, ",\"ipfix\":");
+    if (j.cap - j.n > 1024) {
+        size_t w = router_flow_status_json(j.b + j.n, j.cap - j.n);
         if (w) j.n += w; else jb_lit(&j, "null");
     }
     jb_lit(&j, "}");

@@ -8,6 +8,7 @@
 // this file.
 
 #include "router_trip.h"
+#include "router_flow.h"
 #include "mikrotik.h"
 #include "mikrotik_watch.h"
 #include "settings.h"
@@ -78,7 +79,7 @@ static bool gw_match(const uint8_t *mac)
 bool router_frame_tap(const uint8_t *f, size_t len, uint32_t our_ip)
 {
     sl_slot_t *ring = __atomic_load_n(&s_ring, __ATOMIC_ACQUIRE);
-    if (!ring || !f || !our_ip || len < 14 + 20 + 8) return false;
+    if (!f || !our_ip || len < 14 + 20 + 8 || !s_rip) return false;
     if (f[12] != 0x08 || f[13] != 0x00) return false;               // IPv4
     const uint8_t *ip = f + 14;
     unsigned hl = (ip[0] & 0x0fu) * 4u;
@@ -88,13 +89,21 @@ bool router_frame_tap(const uint8_t *f, size_t len, uint32_t our_ip)
     if (dst != our_ip) return false;
     const uint8_t *udp = ip + hl;
     uint16_t dport = rd16(udp + 2);
-    if (dport != ROUTER_SYSLOG_PORT) return false;
+    bool flow = ROUTER_IPFIX_ENABLE && dport == ROUTER_IPFIX_PORT;
+    if (dport != ROUTER_SYSLOG_PORT && !flow) return false;
     if (rd16(ip + 6) & 0x3fff) return false;                        // a fragment: lwIP's
     memcpy(&src, ip + 12, 4);
     uint32_t rip = s_rip;
     if (!rip || src != rip || !gw_match(f + 6)) { s_st_foreign++; return false; }
     size_t tot = rd16(ip + 2), ulen = rd16(udp + 4);
     if (tot < hl + 8 || 14 + tot > len || ulen < 8 || ulen > tot - hl) return false;
+    if (flow) {                                     // a no-op while the collector is off
+        router_flow_push(udp + 8, ulen - 8);
+        TaskHandle_t tk = s_task;
+        if (tk) xTaskNotifyGive(tk);
+        return true;
+    }
+    if (!ring) return false;
     s_st_received++;
     uint32_t h = s_head, t = __atomic_load_n(&s_tail, __ATOMIC_ACQUIRE);
     if (h - t >= ROUTER_SYSLOG_SLOTS) { s_st_dropped++; return true; }    // the router's: consumed anyway
@@ -705,6 +714,7 @@ void router_trip_task(void *arg)
 #if ROUTER_SYSLOG_ENABLE
     __atomic_store_n(&s_ring, ring, __ATOMIC_RELEASE);  // the tap starts copying now
 #endif
+    router_flow_init();                                 // IPFIX: its ring starts taking datagrams now
     ESP_LOGI(TAG, "Syslog on UDP %d %s: %u B ring and %u B state in PSRAM, no socket, %d admin address%s from ROUTER_ADMIN_IPS",
              ROUTER_SYSLOG_PORT, ROUTER_SYSLOG_ENABLE ? "on" : "off",
              (unsigned)(ROUTER_SYSLOG_SLOTS * sizeof(sl_slot_t)), (unsigned)sizeof(*R), R->n_admin,
@@ -724,6 +734,7 @@ void router_trip_task(void *arg)
             next_gw = now + (ok ? 60 : 5);
         }
         if (s_ring) drain();
+        router_flow_service();
         if (!hw && s_st_received) {
             hw = true;
             ESP_LOGI(TAG, "First line from the router, stack high-water %u B of %d",

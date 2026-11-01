@@ -177,6 +177,10 @@ bool mikrotik_conn_get(uint32_t ip, mikrotik_conn_t *out);
 // Non-blocking, any task.
 bool mikrotik_note_lease(const uint8_t mac[6], uint32_t ip, const char *host);
 
+// The router's DNS cache name for an address (cached A records, filled when a
+// device is fetched), "" and false when none. Any task, a short lock.
+bool mikrotik_dns_name(uint32_t ip, char *name, size_t len);
+
 // ── Status and test ───────────────────────────────────────────────────────────
 
 typedef enum {

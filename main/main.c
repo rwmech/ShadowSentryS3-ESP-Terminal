@@ -356,9 +356,9 @@ void app_main(void)
     // MikroTik: only when configured (no task, no RAM otherwise); its stack is
     // in PSRAM (HTTP(S) and RAM only). A Settings save can start it later.
     mikrotik_start();
-#if ROUTER_SYSLOG_ENABLE
-    // Router syslog (router tripwires): rings and parsing in RAM, events
-    // through the integrity watcher's helper, so the stack is PSRAM.
+#if ROUTER_SYSLOG_ENABLE || ROUTER_IPFIX_ENABLE
+    // Router syslog (router tripwires) and IPFIX: rings and parsing in RAM,
+    // events through the integrity watcher's helper, so the stack is PSRAM.
     SPAWN_PSRAM(router_trip_task, "router", ROUTER_TASK_STACK, ROUTER_TASK_PRIO, 1);
 #endif
 

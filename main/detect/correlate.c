@@ -303,6 +303,50 @@ static void flags(correlate_t *c)
              k->truncated ? " (more not read)" : "");
 }
 
+const char *correlate_src_key(uint8_t src)
+{
+    return src == CORRELATE_SRC_BOTH ? "both" : src == CORRELATE_SRC_IPFIX ? "ipfix" : "conntrack";
+}
+
+// The IPFIX destinations into conn.dst[]: a row conntrack has too is marked
+// both; the rest are appended, busiest first, while there is room. Names
+// from the router's DNS cache for the new rows.
+static void merge_flows(correlate_t *c)
+{
+    mikrotik_conn_t *k = &c->conn;
+    for (int i = 0; i < MIKROTIK_DST_MAX; i++) { c->fidx[i] = -1; c->dsrc[i] = CORRELATE_SRC_CONNTRACK; }
+    if (!c->ip) return;
+    c->flow_found = router_flow_device(c->ip, &c->flow);
+    if (!c->flow_found) return;
+    for (int f = 0; f < c->flow.n; f++) {
+        const router_flow_dst_t *x = &c->flow.d[f];
+        int i;
+        for (i = 0; i < k->n_dst; i++)
+            if (k->dst[i].ip == x->ip && k->dst[i].port == x->port && k->dst[i].proto == x->proto) break;
+        if (i < k->n_dst) {
+            if (c->fidx[i] < 0) { c->fidx[i] = (int8_t)f; c->dsrc[i] = CORRELATE_SRC_BOTH; }
+            continue;
+        }
+        if (k->n_dst >= MIKROTIK_DST_MAX) { c->flow_cut = true; continue; }
+        mikrotik_dst_t *d = &k->dst[k->n_dst];
+        memset(d, 0, sizeof(*d));
+        d->ip = x->ip;
+        d->port = x->port;
+        d->proto = x->proto;
+        d->external = x->external;
+        d->bytes_out = x->bytes_out;
+        d->bytes_in = x->bytes_in;
+        d->pkts_out = x->pkts_out;
+        d->pkts_in = x->pkts_in;
+        d->first_seen = x->first;
+        d->last_seen = x->last;
+        if (d->external && mikrotik_dns_name(d->ip, d->name, sizeof(d->name))) d->name_src = MIKROTIK_NAME_ROUTER_DNS;
+        c->fidx[k->n_dst] = (int8_t)f;
+        c->dsrc[k->n_dst] = CORRELATE_SRC_IPFIX;
+        k->n_dst++;
+    }
+}
+
 static void summarise(correlate_t *c)
 {
     char s[CORRELATE_SUMMARY_LEN] = "", host[24];
@@ -321,10 +365,16 @@ static void summarise(correlate_t *c)
             strlcat(s, sig, sizeof(s));
         }
     }
-    if (c->conn_found) {
+    if (c->conn_found && c->conn.state == MIKROTIK_CONN_OK) {
         char t[48];
         snprintf(t, sizeof(t), "%s%u external connection%s", s[0] ? ", " : "", (unsigned)c->conn.external,
                  c->conn.external == 1 ? "" : "s");
+        strlcat(s, t, sizeof(s));
+    } else if (c->flow_found) {
+        unsigned ext = 0;
+        for (int i = 0; i < c->flow.n; i++) ext += c->flow.d[i].external;
+        char t[48];
+        snprintf(t, sizeof(t), "%s%u external destination%s (IPFIX)", s[0] ? ", " : "", ext, ext == 1 ? "" : "s");
         strlcat(s, t, sizeof(s));
     }
     if (c->n_flags && s[0]) {
@@ -358,6 +408,13 @@ void correlate_build(uint32_t ip, const uint8_t *mac, bool fetch, bool with_even
         if (c->ip) c->conn_found = mikrotik_conn_get(c->ip, &c->conn);
     }
     if (!c->mac_known && c->ip && wifi_manager_lookup_mac(c->ip, c->mac) && memcmp(c->mac, zero, 6)) c->mac_known = true;
+
+    // IPFIX: destinations the conntrack snapshot missed (short flows).
+    merge_flows(c);
+    if (c->flow_found && c->conn.n_dst) {
+        c->conn_found = true;           // names, GeoIP and flags below cover the IPFIX rows too
+        if (!c->conn.ip) c->conn.ip = c->ip;
+    }
 
     if (correlate_pihole_device && c->ip)
         c->dns_on = correlate_pihole_device(c->ip, c->mac_known ? c->mac : NULL, &c->dns);

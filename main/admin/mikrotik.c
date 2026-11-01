@@ -15,6 +15,7 @@
 #include "mikrotik.h"
 #include "mikrotik_watch.h"
 #include "router_trip.h"         // router_trip_list_tick(): the tripwire address-list check
+#include "router_flow.h"         // router_flow_ext_count(): IPFIX destinations want names too
 #include "settings.h"
 #include "wifi_manager.h"
 #include "log_store.h"
@@ -103,6 +104,8 @@ typedef struct {
     mt_hist_t hist[MT_HIST];
 } mt_slot_t;
 
+#define MT_FLOW_NAMES  32       // IPFIX destinations named per DNS cache read
+
 // The connection snapshot being built, with each destination's source ports.
 typedef struct {
     uint32_t target;
@@ -112,6 +115,8 @@ typedef struct {
     uint16_t total, external;
     bool     truncated;
     uint16_t n;
+    uint16_t n_flow;                // IPFIX destinations of the target still unnamed (dns_names)
+    uint32_t flow_ip[MT_FLOW_NAMES];
     mikrotik_dst_t d[MIKROTIK_DST_MAX];
     uint8_t  n_sport[MIKROTIK_DST_MAX];
     uint16_t sport[MIKROTIK_DST_MAX][MT_SPORTS];
@@ -1115,9 +1120,17 @@ static bool dns_lookup(uint32_t ip, char *name, size_t len)
     return false;
 }
 
+bool mikrotik_dns_name(uint32_t ip, char *name, size_t len)
+{
+    if (!S || !ip || !len || !lock(100)) return false;
+    bool ok = dns_lookup(ip, name, len);
+    unlock();
+    return ok;
+}
+
 static int names_missing(mt_build_t *b)
 {
-    int miss = 0;
+    int miss = router_flow_ext_count(b->target);     // IPFIX-only destinations: names come from the same cache
     for (int i = 0; i < b->n; i++) {
         mikrotik_dst_t *d = &b->d[i];
         if (d->name[0]) continue;
@@ -1138,6 +1151,7 @@ static bool dns_cb(void *ctx, const mikrotik_row_t *r)
     if (!parse_ip(mikrotik_row_get(r, "data"), &ip, NULL)) return true;
     bool want = false;
     for (int i = 0; i < b->n && !want; i++) want = b->d[i].external && !b->d[i].name[0] && b->d[i].ip == ip;
+    for (int i = 0; i < b->n_flow && !want; i++) want = b->flow_ip[i] == ip;
     if (!want) return true;
     char name[48];
     copy_txt(name, sizeof(name), mikrotik_row_get(r, "name"));
@@ -1164,6 +1178,15 @@ static bool dns_cb(void *ctx, const mikrotik_row_t *r)
 static void dns_names(mt_build_t *b)
 {
     if (!names_missing(b) || up_s() - S->dns_s < MIKROTIK_DNS_EVERY_S) return;
+    // The device's IPFIX destinations without a cached name, for dns_cb.
+    b->n_flow = 0;
+    router_flow_dev_t *fd = heap_caps_malloc(sizeof(*fd), MALLOC_CAP_SPIRAM);
+    if (fd && router_flow_device(b->target, fd)) {
+        char nm[4];
+        for (int i = 0; i < fd->n && b->n_flow < MT_FLOW_NAMES; i++)
+            if (fd->d[i].external && !dns_lookup(fd->d[i].ip, nm, sizeof(nm))) b->flow_ip[b->n_flow++] = fd->d[i].ip;
+    }
+    free(fd);
     S->dns_s = up_s();
     uint32_t rows;
     int st = mikrotik_rest_get("/ip/dns/cache?.proplist=name,type,data", dns_cb, b, MT_LIST_BYTES, &rows);

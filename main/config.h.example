@@ -176,6 +176,14 @@
 #define ROUTER_ADMIN_IPS            ""      // "192.168.0.10,192.168.0.11"
 #define ROUTER_PIHOLE_IP            ""      // "192.168.0.2"
 #define ROUTER_LIST_CHECK_S         15
+// ROUTER_IPFIX_ENABLE: collect the router's traffic-flow (IPFIX or NetFlow v9)
+//   per device for the device page (main/detect/router_flow.c).
+// ROUTER_IPFIX_PORT: UDP port of the router's traffic-flow target.
+// ROUTER_IPFIX_RATE: flow records taken a second, 10..5000; the rest are
+//   dropped and counted.
+#define ROUTER_IPFIX_ENABLE         1
+#define ROUTER_IPFIX_PORT           4739
+#define ROUTER_IPFIX_RATE           200
 
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
