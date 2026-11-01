@@ -2,7 +2,6 @@
 #include "alarm.h"
 #include "settings.h"
 #include "api_ext.h"
-#include "discord.h"
 #include "notify.h"
 #include "api_cam.h"
 #include "api_devices.h"
@@ -141,13 +140,17 @@ static void serve_status_json(int sock)
 
     alarm_info_t a;
     alarm_get(&a);
-    char alarm_j[256];
-    ws_format_alarm_json(&a, alarm_j, sizeof(alarm_j));
+    // PSRAM, made once: the admin task serves one client at a time.
+    enum { ALARM_J = WS_ALARM_JSON_MAX, JSON_MAX = WS_ALARM_JSON_MAX + 384 };
+    static char *alarm_j, *json;
+    if (!alarm_j) alarm_j = heap_caps_malloc(ALARM_J, MALLOC_CAP_SPIRAM);
+    if (!json)    json    = heap_caps_malloc(JSON_MAX, MALLOC_CAP_SPIRAM);
+    if (!alarm_j || !json) { send_404(sock); return; }
+    ws_format_alarm_json(&a, alarm_j, ALARM_J);
 
     // No serial console on the board any more: the reset reason and the
     // internal heap figures come from here instead.
-    char json[640];
-    int len = snprintf(json, sizeof(json),
+    int len = snprintf(json, JSON_MAX,
         "{\"uptime_s\":%llu,\"free_heap\":%lu,\"rssi\":%d,"
         "\"reset_reason\":\"%s\",\"internal_free\":%lu,\"internal_min\":%lu,"
         "\"internal_after_boot\":%lu,\"alarm\":%s}",
@@ -266,7 +269,7 @@ static void serve_attacks_json(int sock)
                 "\"user\":\"%s\",\"pass\":\"%s\",\"payload\":\"%s\","
                 "\"mac\":\"%s\",\"vendor\":\"%s\","
                 "\"cc\":\"%s\",\"country\":\"%s\",\"org\":\"%s\","
-                "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\"}",
+                "\"asn\":\"%s\",\"geotag\":\"%s\",\"headline\":\"%s\",\"tier\":\"%s\",\"code\":\"%s\"}",
                 (unsigned long)entries[i].timestamp,
                 (unsigned long)entries[i].src_ip,
                 (int)entries[i].type,
@@ -274,7 +277,7 @@ static void serve_attacks_json(int sock)
                 user_j, pass_j, pay_j,
                 mac_j, vendor_j,
                 gi.cc, ctry_j, org_j2, gi.asn, gi.tag,
-                hl_j, describe_tier_key(describe_tier(&entries[i])));
+                hl_j, describe_tier_key(describe_tier(&entries[i])), describe_code(&entries[i]));
     }
 
     JPRINTF("]}");
@@ -430,11 +433,6 @@ static void handle_request(int sock, char *buf, int len)
         serve_status_json(sock);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ota")) {
         handle_ota(sock, buf, len);
-    } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
-        discord_note_dashboard_ack();   // so the Discord embed can say where
-        alarm_ack(ALARM_BY_DASHBOARD);
-        ESP_LOGI(TAG, "Incident acknowledged via admin panel");
-        send_204(sock);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/clear")) {
         log_store_clear();
         ESP_LOGI(TAG, "Logs cleared via admin panel");

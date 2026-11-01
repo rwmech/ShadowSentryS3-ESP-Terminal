@@ -64,13 +64,9 @@ static const char *TAG = "DISCORD";
 #define COLOR_ORANGE  0xFB8C00
 #define COLOR_BLURPLE 0x5865F2
 
-enum { ACK_PANEL = 0, ACK_DASHBOARD = 1 };
-
 typedef struct {
     alarm_info_t cur;
     alarm_info_t prev;      // the listener's previous snapshot: final count of a superseded incident
-    uint8_t      ack_src;
-    bool         rearmed;   // IDLE reached by re-arm, not by the quiet timer
 } dc_alarm_msg_t;
 
 typedef struct {
@@ -98,7 +94,6 @@ static discord_status_t  s_stat;                // guarded by s_mux
 static bool              s_running;
 static alarm_info_t      s_prev;                // alarm listener only
 static alarm_info_t      s_carry;               // ACTIVE incident found at init
-static volatile uint32_t s_dash_ack_tick;       // 0 = none
 
 // Task-only state.
 static char         *s_body, *s_content, *s_url, *s_resp;
@@ -149,15 +144,14 @@ static void count_drop(void)
 static void on_alarm(const alarm_info_t *a)
 {
     // Transitions only: count-only updates arrive every second.
+    // Who acknowledged or resolved rides in the snapshot (acked_by, resolved_by).
     if (a->state != s_prev.state || a->id != s_prev.id) {
-        dc_alarm_msg_t m = { .cur = *a, .prev = s_prev, .ack_src = ACK_PANEL };
-        uint32_t t = s_dash_ack_tick;
-        if (a->state == ALARM_ACKED && t && (xTaskGetTickCount() - t) < pdMS_TO_TICKS(5000)) {
-            m.ack_src = ACK_DASHBOARD;
-        }
-        if (a->state == ALARM_ACKED) s_dash_ack_tick = 0;
-        if (a->state == ALARM_IDLE) m.rearmed = alarm_closed_by_rearm();   // we are on the alarm task
-        if (xQueueSend(s_alq, &m, 0) != pdTRUE) count_drop();
+        static dc_alarm_msg_t *m;       // alarm task only, PSRAM: off its stack
+        if (!m) m = heap_caps_malloc(sizeof(*m), MALLOC_CAP_SPIRAM);
+        if (!m) { count_drop(); s_prev = *a; return; }
+        m->cur  = *a;
+        m->prev = s_prev;
+        if (xQueueSend(s_alq, m, 0) != pdTRUE) count_drop();
     }
     s_prev = *a;
 }
@@ -184,11 +178,6 @@ bool discord_post_digest(char *lines)
 }
 
 
-void discord_note_dashboard_ack(void)
-{
-    s_dash_ack_tick = xTaskGetTickCount() | 1;
-}
-
 // notify.c backend: the boot message only (incidents post from on_alarm).
 static bool notice_send(const notify_msg_t *m)
 {
@@ -205,7 +194,7 @@ static const notify_backend_t s_backend = {
 void discord_init(void)
 {
     s_evq = xQueueCreateWithCaps(DC_EVENT_QUEUE, sizeof(attack_log_t), MALLOC_CAP_SPIRAM);
-    s_alq = xQueueCreate(DC_ALARM_QUEUE, sizeof(dc_alarm_msg_t));
+    s_alq = xQueueCreateWithCaps(DC_ALARM_QUEUE, sizeof(dc_alarm_msg_t), MALLOC_CAP_SPIRAM);
     if (!s_evq || !s_alq) {
         ESP_LOGE(TAG, "No memory for the queues, Discord alerts off");
         return;
@@ -535,11 +524,20 @@ static uint32_t open_for_s(const alarm_info_t *a, int64_t seen_mono)
     return d > 0 ? (uint32_t)d : 0;
 }
 
-static void post_opened(const alarm_info_t *a)
+// "Code 17-01 ARP sweep: incident #N <what>", the code first so a cut keeps it
+static void inc_title(char *out, size_t len, const alarm_info_t *a, const char *what)
 {
-    const dc_recent_t *r = find_recent(a->src_ip, a->type, a->first_ts);
-    char title[48], ip[16], mac[WIFI_MAC_STR_LEN], macv[96], user[40], pay[136];
-    snprintf(title, sizeof(title), "Incident #%lu opened", (unsigned long)a->id);
+    const char *name = describe_code_name(a->code);
+    snprintf(out, len, "Code %s%s%s: incident #%lu %s",
+             a->code[0] ? a->code : "?", name ? " " : "", name ? name : "", (unsigned long)a->id, what);
+}
+
+static void post_opened(const alarm_info_t *a, bool escalated)
+{
+    const dc_recent_t *r = find_recent(a->src_ip, a->type, escalated ? a->last_ts : a->first_ts);
+    char title[96], ip[16], mac[WIFI_MAC_STR_LEN], macv[96], user[40], pay[136];
+    bool red = a->state == ALARM_ACTIVE;
+    inc_title(title, sizeof(title), a, escalated ? "escalated to RED" : red ? "opened, RED" : "opened, YELLOW");
     ip_str(a->src_ip, ip);
     wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
     const char *vendor = wifi_manager_mac_vendor(a->src_mac);
@@ -552,20 +550,13 @@ static void post_opened(const alarm_info_t *a)
     char dev[64];
     device_str(dev, sizeof(dev));
 
-    // The headline of the opening event, from the recent ring when it is there.
-    char hl[DESCRIBE_MAX], desc[DESCRIBE_MAX];
-    attack_log_t ev = { .timestamp = a->first_ts, .src_ip = a->src_ip, .type = (attack_type_t)a->type };
-    memcpy(ev.src_mac, a->src_mac, 6);
-    if (r) {
-        strlcpy(ev.username, r->user, sizeof(ev.username));
-        strlcpy(ev.payload, r->payload, sizeof(ev.payload));
-    }
-    describe_event(&ev, hl, sizeof(hl));
-    clean(desc, sizeof(desc), hl, sizeof(hl));
+    // The incident's headline (the alarm worked it out from the event).
+    char desc[DESCRIBE_MAX];
+    clean(desc, sizeof(desc), a->headline, sizeof(a->headline));
 
     jb_t j;
     bool first = true;
-    embed_begin(&j, title, COLOR_RED, desc[0] ? desc : NULL);
+    embed_begin(&j, title, red ? COLOR_RED : COLOR_AMBER, desc[0] ? desc : NULL);
     field(&j, &first, "Source IP", ip, true, false);
     field(&j, &first, "MAC", macv, true, false);
     field(&j, &first, "Attack", type_long(a->type), true, false);
@@ -576,17 +567,18 @@ static void post_opened(const alarm_info_t *a)
     dc_send(&j);
 }
 
-static void post_acked(const alarm_info_t *a, uint8_t src)
+static void post_acked(const alarm_info_t *a)
 {
-    char title[48], ip[16], cnt[16], dur[32];
-    snprintf(title, sizeof(title), "Incident #%lu acknowledged", (unsigned long)a->id);
+    char title[96], ip[16], cnt[16], dur[32];
+    inc_title(title, sizeof(title), a, "acknowledged, YELLOW");
     ip_str(a->src_ip, ip);
     snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)a->count);
     fmt_dur(open_for_s(a, s_inc_seen), dur, sizeof(dur));
     jb_t j;
     bool first = true;
     embed_begin(&j, title, COLOR_AMBER,
-                src == ACK_DASHBOARD ? "Acknowledged from the dashboard." : "Acknowledged on the front panel.");
+                a->acked_by == ALARM_BY_DASHBOARD ? "Acknowledged from the dashboard. YELLOW until resolved."
+                                                  : "Acknowledged on the front panel. YELLOW until resolved.");
     field(&j, &first, "Source IP", ip, true, false);
     field(&j, &first, "Events so far", cnt, true, false);
     field(&j, &first, "Open for", dur, true, false);
@@ -594,10 +586,10 @@ static void post_acked(const alarm_info_t *a, uint8_t src)
     dc_send(&j);
 }
 
-static void post_closed(const alarm_info_t *a, const char *why)
+static void post_closed(const alarm_info_t *a, const char *what, const char *why)
 {
-    char title[48], ip[16], cnt[16], dur[32];
-    snprintf(title, sizeof(title), "Incident #%lu closed", (unsigned long)a->id);
+    char title[96], ip[16], cnt[16], dur[32];
+    inc_title(title, sizeof(title), a, what);
     ip_str(a->src_ip, ip);
     snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)a->count);
     fmt_dur(a->last_ts > a->first_ts ? a->last_ts - a->first_ts : 0, dur, sizeof(dur));
@@ -613,8 +605,8 @@ static void post_closed(const alarm_info_t *a, const char *why)
 
 static void post_reminder(const alarm_info_t *a)
 {
-    char title[56], ip[16], cnt[16], dur[32];
-    snprintf(title, sizeof(title), "Incident #%lu still unacknowledged", (unsigned long)a->id);
+    char title[96], ip[16], cnt[16], dur[32];
+    inc_title(title, sizeof(title), a, "still unacknowledged, RED");
     ip_str(a->src_ip, ip);
     snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)a->count);
     fmt_dur(open_for_s(a, s_inc_seen), dur, sizeof(dur));
@@ -676,27 +668,32 @@ static void handle_alarm(const dc_alarm_msg_t *m, int64_t now)
     const alarm_info_t *a = &m->cur, *p = &m->prev;
     bool on = settings_discord_enabled();
 
-    if (a->state == ALARM_ACTIVE && (p->state != ALARM_ACTIVE || p->id != a->id)) {
-        // An acked incident is closed implicitly when another source opens a new one.
-        if (on && p->state == ALARM_ACKED && p->id && p->id != a->id) {
+    if (a->state != ALARM_IDLE && p->id != a->id) {
+        // A YELLOW incident is closed implicitly when a new one opens.
+        if (on && p->state != ALARM_IDLE && p->id) {
             char why[64];
-            snprintf(why, sizeof(why), "Closed: incident #%lu opened from another source.", (unsigned long)a->id);
-            post_closed(p, why);
+            snprintf(why, sizeof(why), "Closed: incident #%lu opened.", (unsigned long)a->id);
+            post_closed(p, "closed, GREEN", why);
         }
+        if (a->state == ALARM_ACTIVE) track_open(a, now);
+        else s_inc_active = false;
+        if (on) post_opened(a, false);
+    } else if (a->state == ALARM_ACTIVE && p->state == ALARM_ACKED) {
         track_open(a, now);
-        if (on) post_opened(a);
+        if (on) post_opened(a, true);
     } else if (a->state == ALARM_ACKED && p->state == ALARM_ACTIVE) {
         s_inc_active = false;
-        if (on) post_acked(a, m->ack_src);
+        if (on) post_acked(a);
     } else if (a->state == ALARM_IDLE && p->state != ALARM_IDLE) {
         s_inc_active = false;
-        if (on && m->rearmed) {
-            post_closed(a, "Closed: re-armed.");
+        if (on && a->resolved_by) {
+            post_closed(a, "resolved, GREEN", a->resolved_by == ALARM_BY_DASHBOARD
+                        ? "Resolved from the dashboard." : "Resolved on the front panel.");
         } else if (on) {
             char q[24], why[64];
             fmt_dur(settings_get()->alarm_quiet_s, q, sizeof(q));
             snprintf(why, sizeof(why), "Closed after %s without events.", q);
-            post_closed(a, why);
+            post_closed(a, "closed, GREEN", why);
         }
     }
 }

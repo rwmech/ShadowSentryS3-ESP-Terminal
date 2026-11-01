@@ -45,10 +45,6 @@ void discord_log_event(const attack_log_t *e);
 // it under about 1800 characters. Never blocks.
 bool discord_post_digest(char *lines);
 
-// Call just before alarm_ack() on the dashboard route, so the acknowledged
-// embed can say where it came from (any other ack is the front panel).
-void discord_note_dashboard_ack(void);
-
 // Queue a test embed. Returns its request number (compare with test_done in
 // discord_status_t), or 0 when the task is not running.
 uint32_t discord_request_test(void);

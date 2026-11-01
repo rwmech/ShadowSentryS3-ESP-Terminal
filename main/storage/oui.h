@@ -59,7 +59,9 @@ void oui_init(void);
 
 // Vendor of mac into buf (len bytes): the database, else the compact table,
 // "" if neither knows it, OUI_PRIVATE for a locally administered MAC. May read
-// the card: discovery or admin task only. True when a name was written.
+// the card: discovery or admin task only. Waits at most 250 ms for the file
+// (another lookup holding it), then answers from the compact table without
+// caching, so a later call retries. True when a name was written.
 bool oui_lookup(const uint8_t mac[6], char *buf, size_t len);
 
 // The cached database name for mac, or NULL (not cached, not in the file, or
@@ -72,7 +74,8 @@ void oui_service(int n);
 // The file changed (an upload was queued): re-read its header on next use.
 void oui_invalidate(void);
 
-// Status, re-reading the header if needed. Discovery or admin task.
+// Status. Never waits: re-reads the header only if the file is free at once,
+// else serves the copy from the last read. Any task.
 void oui_status(oui_status_t *out);
 
 // Header checks for an upload of len bytes: magic, version, record size,
