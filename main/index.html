@@ -449,15 +449,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .dv-tog{display:flex;align-items:center;gap:6px;font-size:14px;margin:4px 0;cursor:pointer}
 .dv-tog input{width:16px;height:16px}
 .dv-msg{font-size:14px;color:var(--amber);min-height:1em}
-/* Device drill-in and AI advice (alert-web) */
-.dv-msgs{margin-top:14px}
-.dv-list{max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:8px}
-.dv-list details{border-bottom:1px solid rgba(255,255,255,.06);padding:6px 10px}
-.dv-list details:last-child{border-bottom:none}
-.dv-list summary{cursor:pointer;font-size:14px;overflow-wrap:anywhere}
-.dv-list summary .td-ts{margin-right:8px}
-.dv-list summary .tsub{margin-right:8px}
-.dv-list pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px var(--mono);color:var(--muted);margin-top:6px}
+/* Device tools and AI advice (alert-web) */
+.dv-tools{margin-top:14px}
 .ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.cond{padding-left:16px;padding-right:16px}}
 </style>
@@ -1520,7 +1513,7 @@ const _dvOpen=new Set();
 function dvRows(tr,x){
   const k=isMac(x.mac)?'m'+x.mac:'i'+S(x.ip),an=el('tr','dv-an'),c=el('td');
   const ab=dvAnalysis(x);
-  c.colSpan=6;c.append(ab,dvAlerts(x),dvMessages(x,k,ab._ai));an.append(c);
+  c.colSpan=6;c.append(ab,dvAlerts(x),dvTools(x,ab._ai));an.append(c);
   const set=open=>{an.hidden=!open;tr.classList.toggle('open',open);open?_dvOpen.add(k):_dvOpen.delete(k);};
   set(_dvOpen.has(k));
   tr.title='Click for the analysis';
@@ -1582,76 +1575,25 @@ async function dvToggle(x,code,ignore,cb,msg){
 }
 const IGNORE_MAX_JS=32;   // IGNORE_MAX in main/detect/ignore.h
 
-// ── Device drill-in: every logged line for one device (GET /api/logs/device) ──
-// Loaded on request (it scans the card), kept per device across the 10 s
-// refresh. Every value through textContent.
-const _dvMsg=new Map();      // device key -> {days, lines, meta, err}
-const DV_DAYS=[1,2,3,7];
-function dvMessages(x,k,ai){
-  const box=el('div','an dv-msgs'),s=el('div');box.append(s);
-  s.append(el('h5','','Messages from this device'));
-  if(!_dvMsg.has(k))_dvMsg.set(k,{days:2});
-  const st=_dvMsg.get(k),ctl=el('div','ctl'),sel=el('select'),go=el('button','btn',st.lines?'Refresh':'Load messages');
-  DV_DAYS.forEach(d=>{const o=el('option','',d===1?'today':'last '+d+' days');o.value=String(d);sel.append(o);});
-  sel.value=String(st.days);go.type='button';
-  const aib=el('button','btn','Get AI advice'),info=el('span','muted'),list=el('div','dv-list'),amsg=el('div','tsub');
-  aib.type='button';aib.title='Opens claude.ai in a new tab with this device\'s details; nothing is sent until you click';
-  amsg.hidden=true;
-  ctl.append(sel,go,aib,info);
-  s.append(ctl,amsg,el('div','tsub','From the microSD day logs, newest first, matched by MAC or IP. Discovery is logged per new observation (a new device, protocol, label or query), not per packet.'),list);
-  const show=()=>{
-    go.disabled=!!st.loading;go.textContent=st.lines?'Refresh':'Load messages';
-    if(st.loading){info.textContent='Reading the card...';return;}
-    if(st.err){info.textContent=st.err;list.hidden=true;return;}
-    if(!st.lines){info.textContent='';list.hidden=true;return;}
-    const m=st.meta||{};
-    info.textContent=st.lines.length+' line'+(st.lines.length===1?'':'s')+' from '+(+m.files||0)+' day file'+(+m.files===1?'':'s')+
-      (m.scanned_bytes?', '+kb(+m.scanned_bytes)+' read from the end'+(m.ms?' in '+(+m.ms/1000).toFixed(1)+' s':''):'')+
-      (m.truncated?' (stopped at the '+(m.timed_out?'3 s time box':'limit of '+(+m.limit||0))+'; older lines may match)':'')+
-      (m.long_skipped?', '+m.long_skipped+' over-long skipped':'')+(st.bad?', '+st.bad+' unreadable':'');
-    list.hidden=!st.lines.length;
-    list.replaceChildren(...st.lines.map(dvMsgRow));
-  };
-  // The 10 s refresh rebuilds this row, so the newest build's show() paints the result.
-  st.show=show;
-  go.onclick=async()=>{
-    st.days=+sel.value||2;st.loading=true;show();
-    try{Object.assign(st,await dvLoadLog(x,st.days),{err:''});}
-    catch(e){st.err=e.message;st.lines=null;}
-    st.loading=false;st.show();
-  };
-  aib.onclick=()=>aiAdvice(dvPrompt(x,ai,st.lines),amsg);
-  show();
-  return box;
-}
-async function dvLoadLog(x,days){
+// ── Device tools: the device page and AI advice ──
+// The device page (/device, main/device.html) opens in a new window with the
+// device's log, an issue summary and the per-code switches.
+function devPageUrl(x){
   const q=new URLSearchParams();
   if(isMac(x.mac))q.set('mac',S(x.mac));
   if(x.ip)q.set('ip',S(x.ip));
-  q.set('days',String(days));q.set('limit','300');
-  const r=await fetch('/api/logs/device?'+q.toString(),{cache:'no-store'});
-  if(r.status===404)throw new Error('This firmware has no device log route.');
-  if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(String(d.error||('Could not read the log (HTTP '+r.status+').')));}
-  const lines=[];let meta=null,bad=0;
-  for(const ln of (await r.text()).split('\n')){
-    if(!ln.trim())continue;
-    try{const o=JSON.parse(ln);
-      if(!o||typeof o!=='object'||Array.isArray(o)){bad++;continue;}
-      if(o.kind==='meta'&&!meta){meta=o;continue;}
-      lines.push(o);}catch{bad++;}
-  }
-  return{lines,meta,bad};
+  return '/device?'+q.toString();
 }
-// One line: time, kind and type, code, headline (or details); the raw line underneath.
-function dvMsgRow(o){
-  const v=logView(o),d=el('details'),sm=el('summary');
-  sm.append(el('span','td-ts',fmt(v.ts)),el('span','tsub',[v.kind,v.type].filter(Boolean).join(' ')));
-  codeLead(sm,v.code,v.hl||v.det);
-  d.append(sm);
-  if(v.hl&&v.det)d.append(el('div','td-raw',v.det));
-  const raw=Object.assign({},o);delete raw._raw;
-  d.append(el('pre','',JSON.stringify(raw,null,1)));
-  return d;
+function dvTools(x,ai){
+  const box=el('div','an dv-tools'),s=el('div');box.append(s);
+  const ctl=el('div','ctl'),open=el('a','btn','Open device page'),aib=el('button','btn','Get AI advice'),amsg=el('div','tsub');
+  open.href=devPageUrl(x);open.target='_blank';open.rel='noopener';
+  open.title='Its whole log, an issue summary by code and the alert switches, in a new window';
+  aib.type='button';aib.title="Opens claude.ai in a new tab with this device's details; nothing is sent until you click";
+  amsg.hidden=true;
+  aib.onclick=()=>aiAdvice(dvPrompt(x,ai,null),amsg);
+  ctl.append(open,aib);s.append(ctl,amsg);
+  return box;
 }
 // The device prompt: identity, behaviour, rates, last queries, risk notes and
 // the rule table's suggestion, then the newest log lines while they fit.

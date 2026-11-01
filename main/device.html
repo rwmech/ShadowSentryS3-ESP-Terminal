@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Device - ShadowSentry S3</title>
+<!-- Fork (alert-web): one device's page, opened from the dashboard's Devices tab
+     as /device?mac=..&ip=... Styles are the dashboard's (main/index.html),
+     copied for what this page uses. Every value from the device or its log
+     goes in with textContent. -->
+<style>
+:root{
+  --bg:#03080f;--surface:rgba(6,18,32,0.85);--border:rgba(0,210,160,0.12);--border-hi:rgba(0,210,160,0.35);
+  --g:#00d2a0;--g-dim:rgba(0,210,160,0.15);--blue:#38bdf8;--amber:#fbbf24;--red:#f87171;
+  --text:#f1f5f9;--muted:#cbd5e1;--font:'Segoe UI',system-ui,sans-serif;
+  --mono:Consolas,'Cascadia Mono',ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5}
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 28px;background:rgba(3,8,15,.9);
+  border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.logo-mark{width:36px;height:36px;flex-shrink:0;background:linear-gradient(135deg,var(--g),#0ea5e9);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 20px rgba(0,210,160,.3)}
+.brand h1{font-size:17px;font-weight:700;letter-spacing:.5px;color:var(--g)}
+.brand p{font-size:13px;color:var(--muted)}
+.spacer{flex:1}
+main{padding:24px 28px;display:flex;flex-direction:column;gap:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-title{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media(max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.btn{display:inline-block;padding:8px 16px;border-radius:7px;cursor:pointer;font:600 14px var(--font);text-decoration:none;
+  background:rgba(0,210,160,.08);border:1px solid rgba(0,210,160,.25);color:var(--g)}
+.btn:hover{background:rgba(0,210,160,.16)}
+.btn:disabled{opacity:.5;cursor:wait}
+.btn.copied{background:rgba(0,210,160,.25)}
+.btn.copy-fail{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.45);color:var(--red)}
+.ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.muted{color:var(--muted)}
+.tsub{font-size:13px;color:var(--muted)}
+.mono{font-family:var(--mono)}
+.idt{font-size:22px;font-weight:700}
+.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:4px 14px;font-size:14px}
+.kv .k{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.5px;padding-top:2px}
+.kv .v{overflow-wrap:anywhere}
+.vendor-chip{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:13px;font-weight:600;
+  background:rgba(56,189,248,.12);color:var(--blue);border:1px solid rgba(56,189,248,.25)}
+.an{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px 28px}
+.an h5{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--g);margin:0 0 6px}
+.an ul{padding-left:18px}
+.an li{font-size:14px;line-height:1.5;margin:3px 0;overflow-wrap:anywhere}
+.an .sg{font-size:15px;font-weight:700;margin-bottom:12px}
+.sg-ok{color:var(--g)}.sg-watch{color:var(--amber)}.sg-iso{color:var(--red)}
+.an-foot{grid-column:1/-1;font-size:13px;color:var(--muted)}
+.code-chip{display:inline-block;margin-right:8px;padding:0 7px;border-radius:6px;font:700 13px var(--mono);
+  background:rgba(255,255,255,.08);color:var(--text);border:1px solid rgba(255,255,255,.22);white-space:nowrap}
+.tier-chip{display:inline-block;padding:1px 9px;border-radius:10px;font-size:13px;font-weight:700;white-space:nowrap}
+.tier-alert{background:rgba(255,59,59,.15);color:#fca5a5;border:1px solid rgba(255,59,59,.4)}
+.tier-probe{background:rgba(255,196,0,.12);color:#fde68a;border:1px solid rgba(255,196,0,.35)}
+.tier-info{background:rgba(129,140,248,.15);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
+.tier-none{background:rgba(255,255,255,.05);color:var(--muted);border:1px solid rgba(255,255,255,.15)}
+table{width:100%;border-collapse:collapse}
+th{background:rgba(0,0,0,.25);color:var(--muted);text-align:left;padding:10px 14px;font-size:13px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid rgba(255,255,255,.05);white-space:nowrap}
+td{padding:9px 14px;border-bottom:1px solid rgba(255,255,255,.07);font-size:14px;vertical-align:middle}
+tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+.tbl-wrap{overflow-x:auto}
+.nw{white-space:nowrap}
+.bars{display:flex;align-items:flex-end;gap:2px;height:110px;border-bottom:1px solid rgba(255,255,255,.08)}
+.bars .b{flex:1;background:var(--g);opacity:.75;border-radius:2px 2px 0 0;min-height:1px}
+.bars .b:hover{opacity:1}
+.bar-lbl{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+.dv-tog{display:inline-flex;align-items:center;gap:6px;font-size:14px;cursor:pointer}
+.dv-tog input{width:16px;height:16px}
+.msg{font-size:14px;color:var(--amber);min-height:1em}
+/* Message list: readable rows, a click opens the labelled detail. */
+.ml{display:flex;flex-direction:column}
+.mr{display:flex;gap:12px;align-items:baseline;padding:9px 6px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer}
+.mr:hover{background:rgba(0,210,160,.05)}
+.mr.open{background:rgba(0,210,160,.07)}
+.mr .t{font-size:13px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:150px}
+.mr .h{flex:1;overflow-wrap:anywhere}
+.mr .k{font-size:13px;color:var(--muted);white-space:nowrap}
+.md{padding:6px 16px 14px;border-bottom:1px solid var(--border-hi);background:rgba(0,210,160,.04)}
+.detail-row{display:flex;gap:14px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.detail-row .dk{width:130px;flex-shrink:0;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.5px;padding-top:2px}
+.detail-row .dv{flex:1;font-size:15px;overflow-wrap:anywhere}
+.md details{margin-top:10px}
+.md summary{cursor:pointer;color:var(--muted);font-size:13px}
+.md pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px var(--mono);color:var(--muted);margin-top:6px}
+progress{width:220px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-mark">&#128737;</div>
+  <div class="brand"><h1>ShadowSentry S3</h1><p>Device page</p></div>
+  <div class="spacer"></div>
+  <a class="btn" href="/#devices">Dashboard</a>
+</header>
+<main>
+  <div class="card">
+    <div class="ctl" style="justify-content:space-between">
+      <div><div class="idt" id="id-label">Loading...</div><div class="tsub" id="id-sub"></div></div>
+      <div class="ctl"><button class="btn" type="button" id="ai-btn">Get AI advice</button></div>
+    </div>
+    <div class="tsub" id="ai-msg" hidden></div>
+    <div class="kv" id="id-kv"></div>
+  </div>
+  <div class="card"><div class="card-title">Analysis</div><div id="an"></div></div>
+  <div class="card">
+    <div class="card-title">Issue summary</div>
+    <div class="tsub" id="sum-note">Loading the log...</div>
+    <div class="grid2">
+      <div><div class="tsub" id="ch-title"></div><div class="bars" id="ch"></div><div class="bar-lbl" id="ch-lbl"></div></div>
+      <div>
+        <label class="dv-tog"><input type="checkbox" id="ig-all"> <span>All alerts from this device</span> <span class="tsub" id="ig-all-st"></span></label>
+        <div class="msg" id="ig-msg"></div>
+        <div class="tsub">Ticked: alerts. Unticked: on the ignore list, still logged, no alarm. Undo here or on the dashboard's Settings, Ignore list.</div>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Code</th><th>Name</th><th>Tier</th><th>Count</th><th>First</th><th>Last</th><th>Alerts</th></tr></thead>
+      <tbody id="sum-body"></tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <div class="ctl" style="justify-content:space-between">
+      <div class="card-title">Messages</div>
+      <div class="ctl">
+        <button class="btn" type="button" id="older">Load older</button>
+        <button class="btn" type="button" id="full">Scan full history</button>
+        <progress id="prog" max="100" value="0" hidden></progress>
+      </div>
+    </div>
+    <div class="tsub" id="ml-note"></div>
+    <div class="tsub">Newest first, from the microSD day logs, matched by MAC or IP. Click a message for its details. Discovery is logged per new observation (a new device, protocol, label or query), not per packet.</div>
+    <div class="ml" id="ml"></div>
+  </div>
+</main>
+<script>
+// ── Helpers (as in the dashboard) ──
+const $=id=>document.getElementById(id);
+function el(tag,cls,text){const x=document.createElement(tag);if(cls)x.className=cls;if(text!==undefined&&text!==null)x.textContent=String(text);return x;}
+const S=v=>v==null?'':String(v);
+const isMac=m=>!!m&&m!=='unknown'&&m!=='00:00:00:00:00:00';
+function fmt(ts){
+  if(!ts)return'-';
+  const d=new Date(ts*1000),p=n=>String(n).padStart(2,'0');
+  return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+const kb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.ceil(n/1024)+' KB';
+const dur=s=>{s=s|0;const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+'d ':'')+h+'h '+m+'m';};
+const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
+const JH={'X-ShadowSentry':'1','Content-Type':'application/json'};
+// One entry per attack_type_t (main/storage/log_store.h), as in the dashboard.
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery'];
+const TPORT=[554,80,23,22,21,0,0,23,0,0,0,5555,0,0];
+const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
+  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z]{2,12} on (\d{1,5})\b/};
+function trapPort(o){
+  const ok=n=>Number.isInteger(n)&&n>0&&n<65536;
+  if(ok(+o.port))return +o.port;
+  const re=PORT_RE[o.type],m=re&&re.exec(S(o.payload));
+  if(m&&ok(+m[1]))return +m[1];
+  return ok(TPORT[o.type])?TPORT[o.type]:0;
+}
+// Codes and tiers, from GET /api/codes.
+const CODES={},CODE_TIER={};
+function codeOf(x){const c=x&&x.code;return typeof c==='string'&&/^[0-9A-Za-z]{1,4}-[0-9A-Za-z]{1,4}$/.test(c)?c:'';}
+function codeName(c){return c==='00-00'?'Unclassified':CODES[c]||'';}
+const TIERS={alert:'Alert',probe:'Probe',info:'Info'};
+const tierKey=t=>TIERS[t]?t:t===1?'alert':t===2?'probe':t===3?'info':'';
+function codeLead(x,c,hl){
+  if(c){
+    x.append(el('span','code-chip','Code '+c));
+    if(hl.startsWith('Code '+c+' '))hl=hl.slice(c.length+6);
+    if(c==='00-00'&&hl.startsWith('Event | '))hl='Unclassified'+hl.slice(5);
+  }
+  x.append(document.createTextNode(hl));
+  return x;
+}
+// navigator.clipboard needs a secure context; the board is plain http, so a
+// hidden textarea and execCommand('copy') otherwise.
+async function copyText(text){
+  if(window.isSecureContext&&navigator.clipboard&&navigator.clipboard.writeText){
+    try{await navigator.clipboard.writeText(text);return true;}catch{}
+  }
+  const ta=document.createElement('textarea'),f=document.activeElement;
+  ta.value=text;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,text.length);
+  let ok=false;try{ok=document.execCommand('copy');}catch{}
+  ta.remove();if(f&&f.focus)try{f.focus();}catch{}
+  return ok;
+}
+async function copyBtn(b,text,label){
+  const ok=await copyText(text);
+  b.classList.toggle('copied',ok);b.classList.toggle('copy-fail',!ok);
+  b.textContent=ok?'\u2713 Copied':'Copy failed';
+  clearTimeout(b._t);b._t=setTimeout(()=>{b.classList.remove('copied','copy-fail');b.textContent=label;},2500);
+}
+function textRows(rows){
+  const w=Math.max(...rows.map(r=>r[0].length))+2;
+  return rows.map(([k,v])=>k.padEnd(w)+String(v).split('\n').join('\n'+' '.repeat(w))).join('\n');
+}
+
+// ── The device ──
+const Q=new URLSearchParams(location.search);
+const qMac=(Q.get('mac')||'').toLowerCase(),qIp=Q.get('ip')||'';
+const DEV={mac:/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(qMac)&&isMac(qMac)?qMac:'',ip:/^\d{1,3}(\.\d{1,3}){3}$/.test(qIp)?qIp:''};
+let _dev=null,_ai=null,_ign=null;
+
+// ── Analysis: the dashboard's rule table (main/index.html, Devices tab), copied. Keep in step with it. ──
+const DV_BRAND=[[/webOS|\bLG\b|LG Electronics/i,'LG'],[/PlayStation|Sony|BDP|Bravia/i,'Sony'],[/HDHomeRun|SiliconDust/i,'SiliconDust'],
+  [/Roku/i,'Roku'],[/Sonos/i,'Sonos'],[/Chromecast|CrKey|Google|Nest/i,'Google'],[/Samsung|Tizen|SEC_HHP/i,'Samsung'],
+  [/Philips|\bHue\b|IpBridge|Signify/i,'Philips'],[/Xbox|Windows|Microsoft|MSFT/i,'Microsoft'],[/Amazon|Fire TV|Echo/i,'Amazon'],
+  [/Apple|iPhone|iPad/i,'Apple'],[/Belkin|WeMo/i,'Belkin'],[/TP-?Link|Kasa/i,'TP-Link'],[/LIFX/i,'LIFX']];
+const DV_LOOK=[
+  {q:/urn:Belkin:/i,brand:'Belkin',t:'Searching for Belkin WeMo smart plugs (LG Home Dashboard style device discovery)'},
+  {p:'kasa',brand:'TP-Link',t:'Probing for TP-Link Kasa plugs',google:'Probing for TP-Link Kasa plugs; on a Google or Nest device this is usually a leftover smart-home integration'},
+  {p:'lifx',brand:'LIFX',t:'Looking for LIFX bulbs'},
+  {p:'playstation',brand:'Sony',t:'Looking for a PlayStation (Remote Play or the PlayStation App)'},
+  {q:/roku:ecp/i,brand:'Roku',t:'Looking for Roku players'},
+  {q:/ZonePlayer|Sonos/i,brand:'Sonos',t:'Looking for Sonos speakers'},
+  {q:/IpBridge|\bhue\b/i,brand:'Philips',t:'Looking for Philips Hue bridges'},
+  {q:/samsung\.com/i,brand:'Samsung',t:'Looking for Samsung devices'},
+  {q:/dial-multiscreen|:dial:/i,t:'Looking for cast targets (DIAL)'},
+  {q:/MediaServer|ContentDirectory/i,t:'Looking for DLNA media servers'},
+  {q:/MediaRenderer|AVTransport|RenderingControl/i,t:'Looking for DLNA media renderers (screens and speakers to play to)'},
+  {q:/InternetGatewayDevice|WANIPConnection|WANPPPConnection/i,t:'Looking for the router\'s UPnP port-mapping service',
+    risk:'Opens router ports by UPnP if the router allows it: check whether UPnP is on',w:1},
+  {q:/ssdp:all|upnp:rootdevice/i,t:'Looking for every UPnP device'},
+];
+const DV_SAY=[[/MediaRenderer/i,'a DLNA media renderer'],[/MediaServer/i,'a DLNA media server'],[/dial/i,'a DIAL cast target'],
+  [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
+const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
+  dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname'};
+const DV_CHATTY=360,DV_MIN_SPAN=600;
+function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}
+function dvAnalysis(x){
+  const id=[],beh=[],risk=[],rate=[];let w=0;
+  const qs=(x.queries||[]).map(String),pr=x.protos||{},vendor=S(x.vendor),label=S(x.label),host=S(x.host);
+  const own=(DV_BRAND.find(([re])=>re.test(label+' '+host+' '+vendor))||[])[1]||'';
+  const span=(+x.first_ago_s||0)-(+x.last_ago_s||0),total=+x.total||0;
+  const flag=(t,weight)=>{risk.push(t);w=Math.max(w,weight);};
+  id.push(vendor?'MAC vendor: '+vendor:'MAC vendor unknown');
+  if(label&&x.label_src!=='mac-vendor')id.push('Model hint: "'+label+'", from '+(DV_SRC[x.label_src]||S(x.label_src)||'?'));
+  if(host&&host!==label)id.push('Hostname: '+host);
+  const vc=(qs.join(' ').match(/class=(\S+)/)||[])[1]||'';
+  const av=vc.match(/android-dhcp-(\d+)/i);
+  if(vc)id.push('DHCP vendor class: '+vc+(av?' (Android '+av[1]+')':/MSFT/i.test(vc)?' (Windows)':''));
+  if(x.random_mac)id.push('Randomised MAC: a phone, or privacy mode on');
+  const looked=new Set();
+  for(const r of DV_LOOK){
+    const hit=r.p?pr[r.p]:qs.some(q=>/^M-SEARCH/i.test(q)&&r.q.test(q));
+    if(!hit)continue;
+    beh.push(r.google&&own==='Google'?r.google:r.t);
+    if(r.brand&&r.brand!==own)looked.add(r.brand==='Belkin'?'Belkin WeMo':r.brand==='TP-Link'?'TP-Link Kasa':r.brand);
+    if(r.risk)flag(r.risk,r.w);
+  }
+  if(pr['ssdp-search']&&!qs.some(q=>/^M-SEARCH/i.test(q)&&DV_LOOK.some(r=>r.q&&r.q.test(q))))beh.push('Searching for UPnP devices');
+  if(pr['ssdp-notify']){
+    const as=DV_SAY.filter(([re])=>qs.some(q=>/^NOTIFY/i.test(q)&&re.test(q))).map(s=>s[1]);
+    beh.push('Announcing itself'+(as.length?' as '+as.join(', '):'')+(span>=DV_MIN_SPAN?', '+dvRate(pr['ssdp-notify'],span)+' times an hour':''));
+  }
+  if(qs.some(q=>/^(Probe|Resolve)\b/.test(q)))beh.push('Looking for WS-Discovery devices (printers, scanners, PCs)');
+  if(qs.some(q=>/^Hello\b/.test(q)))beh.push('Announcing itself over WS-Discovery');
+  const wpad=qs.some(q=>/\bwpad\b/i.test(q));
+  if(wpad)beh.push('Proxy auto-discovery lookup (WPAD)');
+  const names=qs.filter(q=>/^(A|AAAA|ANY|PTR) /.test(q)||/^query /.test(q)).filter(q=>!/\bwpad\b/i.test(q));
+  if(names.length)beh.push('Broadcast name lookups that DNS did not answer: '+names.join('; '));
+  if(qs.some(q=>/^(register|refresh) /.test(q)))beh.push('Registers its NetBIOS name on the LAN');
+  if(pr.dhcp)beh.push('Asked for an address by DHCP');
+  if(!beh.length)beh.push('Nothing beyond the packets counted below');
+  if(av&&+av[1]<=8)flag('Android '+av[1]+'.x, no security updates for years',2);
+  if(wpad)flag('WPAD can be answered by a hostile host to intercept web traffic (the honeypot never answers)',1);
+  if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', '),2);
+  if(span>=DV_MIN_SPAN&&total*3600/span>DV_CHATTY)flag('Very chatty multicast: '+dvRate(total,span)+' packets an hour in all',1);
+  if(!vendor&&x.random_mac)flag('Can\'t identify; check your router\'s client list',1);
+  if(span>=DV_MIN_SPAN){for(const [k,v] of Object.entries(pr))rate.push(k+': '+dvRate(+v||0,span)+' an hour ('+v+' in '+dur(span)+')');}
+  else rate.push('Seen over '+span+' s only, too short for a rate: '+Object.entries(pr).map(([k,v])=>k+' '+v).join(', '));
+  const known=own||vendor||(label&&x.label_src!=='mac-vendor');
+  const sug=w>=2?['Isolate (guest or IoT network)','sg-iso']:w===1||!known?['Watch','sg-watch']:['Known and benign: name it','sg-ok'];
+  const box=el('div','an'),sec=(h,items)=>{const s=el('div'),u=el('ul');s.append(el('h5','',h));items.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);};
+  sec('Identity',id);sec('Behaviour',beh);sec('Risk notes',risk.length?risk:['None from these rules']);
+  const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
+  const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
+  box.append(el('div','an-foot','Worked out in this page by fixed rules from the device table. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
+  _ai={id,beh,risk,rate,sug:sug[0],qs};
+  return box;
+}
+
+function renderDevice(){
+  const x=_dev||{mac:DEV.mac,ip:DEV.ip};
+  const label=S(x.label)||(x.vendor?S(x.vendor)+' device':'Unknown device');
+  document.title=label+' - ShadowSentry S3';
+  $('id-label').textContent=label;
+  $('id-sub').textContent=_dev?'':'Not in the device table now (it keeps 64 devices); its log is below.';
+  const rows=[['Vendor',S(x.vendor)||'unknown'],['IP',S(x.ip)||'-'],['MAC',isMac(x.mac)?S(x.mac):'unknown'],
+    ['Randomised MAC',x.random_mac?'yes':'no'],['Hostname',S(x.host)||'-'],
+    ['Label from',S(x.label_src)||'-'],
+    ['Protocols',Object.entries(x.protos||{}).map(([k,v])=>k+' '+v).join(', ')||'-'],
+    ['First seen',x.first_ts?fmt(x.first_ts):x.first_ago_s!=null?ago(x.first_ago_s):'-'],
+    ['Last seen',x.last_ts?fmt(x.last_ts):x.last_ago_s!=null?ago(x.last_ago_s):'-']];
+  $('id-kv').replaceChildren(...rows.flatMap(([k,v])=>[el('div','k',k),el('div','v',v)]));
+  $('an').replaceChildren(_dev?dvAnalysis(_dev):el('div','muted','No analysis: the device is not in the table now.'));
+}
+
+// ── Ignore by code (the dashboard's ignore list) ──
+const ignCode=g=>codeOf(g);
+function dvIgn(code){
+  const ip=DEV.ip||S(_dev&&_dev.ip),mac=DEV.mac||(isMac(_dev&&_dev.mac)?S(_dev.mac).toLowerCase():'');
+  return(_ign||[]).filter(g=>ignCode(g)===code&&((ip&&S(g.ip)===ip)||(mac&&S(g.mac).toLowerCase()===mac)));
+}
+async function postIgnore(body){
+  const r=await fetch('/api/ignore',{method:'POST',headers:JH,body:JSON.stringify(body)});
+  let d={};try{d=await r.json();}catch{}
+  if(!r.ok)throw new Error(S(d.error||r.status));
+  _ign=d.entries||[];
+}
+const codeText=c=>c?'Code '+c+(codeName(c)?' '+codeName(c):''):'All alerts';
+async function toggleIgnore(code,ignore,cb){
+  const who=S(_dev&&_dev.label)||DEV.ip||DEV.mac;
+  if(!confirm((ignore?'Ignore ':'Alert again on ')+codeText(code)+' from '+who+'?')){cb.checked=!cb.checked;return;}
+  cb.disabled=true;$('ig-msg').textContent='Saving...';
+  try{
+    if(ignore){
+      const b={action:'add',ip:DEV.ip||S(_dev&&_dev.ip),mac:DEV.mac||(isMac(_dev&&_dev.mac)?S(_dev.mac):''),note:(S(_dev&&_dev.label)||'device page').slice(0,39)};
+      if(code)b.code=code;
+      await postIgnore(b);
+    }else{
+      for(let i=0;i<32;i++){const g=dvIgn(code)[0];if(!g)break;
+        await postIgnore({action:'remove',index:g.index,ip:g.ip||'',mac:g.mac||'',code:ignCode(g)});}
+    }
+    $('ig-msg').textContent='';
+  }catch(e){$('ig-msg').textContent='Failed: '+e.message;}
+  renderSummary();
+}
+function ignToggle(code){
+  const l=el('label','dv-tog'),cb=el('input'),all=dvIgn('').length>0,on=dvIgn(code).length>0;
+  cb.type='checkbox';cb.checked=!on;
+  if(code&&all){cb.disabled=true;}
+  cb.onchange=()=>toggleIgnore(code,!cb.checked,cb);
+  l.append(cb,el('span','tsub',code&&all?'covered by "all"':on?'ignored':'alerting'));
+  return l;
+}
+
+// ── The log, in pages (GET /api/logs/device, cursor) ──
+let _lines=[],_cursor='',_more=true,_busy=false,_scanning=false,_stop=false,_scanned=0,_total=0;
+// A line's summary group: its code; discovery lines (no code) are 60-01; other
+// kinds without a code have their own group.
+const KIND_NAME={alarm:'Incident changes',http:'HTTP request details',snap:'Panel photos',boot:'Boots',discovery:'LAN discovery'};
+function groupOf(o){
+  const c=codeOf(o)||(o.kind==='discovery'?'60-01':'');
+  if(c)return{key:c,code:c,name:codeName(c)||(o.kind==='discovery'?'LAN discovery':TNAME[o.type]||''),tier:tierKey(o.tier)||CODE_TIER[c]||''};
+  const k=S(o.kind)||'?';
+  return{key:'kind:'+k,code:'',name:KIND_NAME[k]||k,tier:''};
+}
+// The row's plain text: the headline, else a sentence from the fields.
+function lineText(o){
+  if(o.headline)return S(o.headline);
+  switch(o.kind){
+  case'attack':return(TNAME[o.type]||'Event')+': '+S(o.payload);
+  case'discovery':return[S(o.what),S(o.proto),S(o.label),o.host&&o.host!==o.label?'host '+S(o.host):'',S(o.query)].filter(Boolean).join(', ');
+  case'http':return'HTTP '+S(o.port)+': '+[S(o.category),S(o.request)].filter(Boolean).join(', ');
+  case'alarm':return'Incident #'+S(o.id)+' '+S(o.event)+', '+S(o.count)+' event(s)';
+  default:return S(o.kind)+' line';
+  }
+}
+// Labelled fields, as in the dashboard's event popup; keys it doesn't name follow by key.
+const FIELD=[['code','Code'],['headline','Headline'],['tier','Tier'],['ts','Time'],['kind','Kind'],['type','Type'],['tname','Type name'],
+  ['proto','Protocol'],['what','What'],['ip','Source IP'],['port','Port'],['mac','MAC'],['vendor','Vendor'],['label','Label'],['host','Host'],
+  ['user','Username'],['pass','Password'],['category','Category'],['service','Service'],['request','Request'],['ua','User-Agent'],
+  ['body','Body'],['query','Query'],['payload','Payload'],['ignored','Ignored'],['id','Incident'],['event','Event'],['count','Count']];
+function lineFields(o){
+  const rows=[],used=new Set(['_raw']);
+  for(const [k,label] of FIELD){
+    if(!(k in o))continue;used.add(k);
+    let v=o[k];
+    if(v===''||v==null)continue;
+    if(k==='code'){const c=codeOf(o);v=c?c+(codeName(c)?' '+codeName(c):''):S(v);}
+    else if(k==='tier')v=TIERS[tierKey(v)]||S(v);
+    else if(k==='ts')v=fmt(+v);
+    else if(k==='type'&&(o.kind==='attack'||o.kind==='alarm'))v=(TNAME[v]||S(v))+(trapPort(o)?' · port '+trapPort(o):'');
+    else if(k==='ignored')v=v===true?'yes: logged, no alarm':S(v);
+    else if(k==='id')v='#'+S(v);
+    else v=typeof v==='object'?JSON.stringify(v):S(v);
+    rows.push([label,v]);
+  }
+  for(const k of Object.keys(o)){if(used.has(k))continue;const v=o[k];if(v===''||v==null)continue;
+    rows.push([k,typeof v==='object'?JSON.stringify(v):S(v)]);}
+  return rows;
+}
+function lineRow(o){
+  const r=el('div','mr'),c=codeOf(o);
+  r.append(el('span','t',fmt(+o.ts)));
+  r.append(codeLead(el('span','h'),c,lineText(o)));
+  r.append(el('span','k',[S(o.kind),o.kind==='attack'?TNAME[o.type]||'':S(o.proto)].filter(Boolean).join(' ')));
+  let d=null;
+  r.onclick=()=>{
+    if(d){d.remove();d=null;r.classList.remove('open');return;}
+    d=lineDetail(o);r.after(d);r.classList.add('open');
+  };
+  return r;
+}
+function lineDetail(o){
+  const d=el('div','md'),rows=lineFields(o);
+  rows.forEach(([k,v])=>{const x=el('div','detail-row');x.append(el('div','dk',k),el('div','dv',v));d.append(x);});
+  const ctl=el('div','ctl'),cp=el('button','btn','Copy details');cp.type='button';
+  const text='ShadowSentry S3 log line\n'+(codeOf(o)?'Code '+codeOf(o)+' ':'')+lineText(o)+'\n\n'+textRows(rows)+'\n';
+  cp.onclick=e=>{e.stopPropagation();copyBtn(cp,text,'Copy details');};
+  ctl.append(cp);
+  if(o.ip){
+    const p=o.kind==='attack'||o.kind==='http'?trapPort(o):0,lbl=p?'Copy ip:port':'Copy IP',b=el('button','btn',lbl);
+    b.type='button';b.onclick=e=>{e.stopPropagation();copyBtn(b,p?S(o.ip)+':'+p:S(o.ip),lbl);};
+    ctl.append(b);
+  }
+  d.append(ctl);
+  const raw=el('details'),sm=el('summary','','raw'),pre=el('pre');
+  const ro=Object.assign({},o);delete ro._raw;pre.textContent=JSON.stringify(ro,null,1);
+  raw.append(sm,pre);d.append(raw);
+  return d;
+}
+
+async function loadCodes(){
+  try{const r=await fetch('/api/codes');if(!r.ok)return;const d=await r.json();
+    (Array.isArray(d)?d:d.codes||[]).forEach(x=>{const c=codeOf(x);if(!c)return;CODES[c]=S(x.name);const t=tierKey(x.tier);if(t)CODE_TIER[c]=t;});}
+  catch{}
+}
+async function loadChunk(limit){
+  const q=new URLSearchParams();
+  if(DEV.mac)q.set('mac',DEV.mac);
+  if(DEV.ip)q.set('ip',DEV.ip);
+  q.set('limit',String(limit));
+  if(_cursor)q.set('cursor',_cursor);
+  const r=await fetch('/api/logs/device?'+q.toString(),{cache:'no-store'});
+  if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(S(d.error||('HTTP '+r.status)));}
+  const fr=document.createDocumentFragment();let meta=null,bad=0;
+  for(const ln of (await r.text()).split('\n')){
+    if(!ln.trim())continue;
+    try{const o=JSON.parse(ln);
+      if(!o||typeof o!=='object'||Array.isArray(o)){bad++;continue;}
+      if(o.kind==='meta'&&!meta){meta=o;continue;}
+      _lines.push(o);fr.append(lineRow(o));}catch{bad++;}
+  }
+  $('ml').append(fr);
+  meta=meta||{};
+  _cursor=S(meta.cursor);_more=!!meta.more&&!!_cursor;_scanned+=+meta.scanned_bytes||0;
+  return{meta,bad};
+}
+function status(extra){
+  const oldest=_lines.length?fmt(+_lines[_lines.length-1].ts):'';
+  $('ml-note').textContent=_lines.length+' message'+(_lines.length===1?'':'s')+' loaded'+(oldest?', back to '+oldest:'')+
+    ', '+kb(_scanned)+' of log read'+(_more?'':'; that is the whole history on the card')+(extra?'. '+extra:'.');
+  $('older').hidden=$('full').hidden=!_more;
+}
+async function older(limit){
+  if(_busy||!_more)return;
+  _busy=true;$('older').disabled=true;if(!_scanning)$('full').disabled=true;
+  try{const {meta,bad}=await loadChunk(limit);
+    status((meta.timed_out?'Stopped at the 3 s time box; Load older goes on from there':'')+(bad?(meta.timed_out?'; ':'')+bad+' unreadable lines':''));}
+  catch(e){status('Could not read the log: '+e.message);}
+  _busy=false;$('older').disabled=_scanning;$('full').disabled=false;
+  renderSummary();
+}
+// Page to the end of the history; the bar is bytes read over the day files' total.
+async function fullScan(){
+  if(_scanning){_stop=true;return;}           // the button reads Stop while scanning
+  if(_busy)return;
+  _scanning=true;_stop=false;$('full').textContent='Stop';$('older').disabled=true;
+  try{const r=await fetch('/api/logs');const d=await r.json();
+    const from=_cursor?_cursor.slice(0,16):'';
+    _total=(d.files||[]).filter(f=>/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f.name)&&(!from||f.name<=from)).reduce((a,f)=>a+(+f.size||0),0)+_scanned;}
+  catch{_total=0;}
+  const pg=$('prog');pg.hidden=false;
+  while(_more&&!_stop){
+    await older(500);
+    pg.value=_total?Math.min(100,Math.round(_scanned/_total*100)):0;
+  }
+  _scanning=false;pg.hidden=true;$('full').textContent='Scan full history';$('older').disabled=false;
+}
+
+// ── Summary over every loaded line ──
+const TIER_RANK={alert:0,probe:1,info:2,'':3};
+function renderSummary(){
+  const g=new Map();
+  for(const o of _lines){
+    const x=groupOf(o),t=+o.ts||0;
+    let e=g.get(x.key);if(!e){e=Object.assign(x,{n:0,first:0,last:0});g.set(x.key,e);}
+    e.n++;if(t&&(!e.first||t<e.first))e.first=t;if(t>e.last)e.last=t;
+    if(!e.tier&&tierKey(o.tier))e.tier=tierKey(o.tier);
+  }
+  const rows=[...g.values()].sort((a,b)=>TIER_RANK[a.tier]-TIER_RANK[b.tier]||b.n-a.n);
+  const tb=$('sum-body');
+  if(!rows.length){const tr=el('tr'),c=el('td','muted',_more?'Nothing yet':'Nothing logged for this device');c.colSpan=7;tr.append(c);tb.replaceChildren(tr);}
+  else tb.replaceChildren(...rows.map(e=>{
+    const tr=el('tr'),tc=el('td','nw');
+    tc.append(e.code?el('span','code-chip',e.code):el('span','muted','-'));
+    const tier=el('td');tier.append(el('span','tier-chip tier-'+(e.tier||'none'),TIERS[e.tier]||'-'));
+    const tg=el('td');if(e.code&&_ign)tg.append(ignToggle(e.code));
+    tr.append(tc,el('td','',e.name||'-'),tier,el('td','',e.n),el('td','nw',fmt(e.first)),el('td','nw',fmt(e.last)),tg);
+    return tr;}));
+  const oldest=_lines.length?fmt(+_lines[_lines.length-1].ts):'';
+  $('sum-note').textContent=_lines.length?'Summary covers '+_lines.length+' line'+(_lines.length===1?'':'s')+' back to '+oldest+
+    (_more?'. Load older or Scan full history to take in more.':', the whole history on the card.'):(_more?'Loading the log...':'Nothing logged for this device.');
+  // "All alerts" switch
+  const all=$('ig-all'),on=dvIgn('').length>0;
+  all.disabled=!_ign;all.checked=!on;$('ig-all-st').textContent=_ign?(on?'ignored':'alerting'):'ignore list unavailable';
+  // Activity: per hour over up to 48 h, else per day
+  const ts=_lines.map(o=>+o.ts).filter(t=>t>1600000000);
+  if(!ts.length){$('ch').replaceChildren();$('ch-lbl').replaceChildren();$('ch-title').textContent='';return;}
+  const lo=Math.min(...ts),hi=Math.max(...ts),hourly=hi-lo<=48*3600,step=hourly?3600:86400;
+  const start=hourly?Math.floor(lo/3600)*3600:(()=>{const d=new Date(lo*1000);d.setHours(0,0,0,0);return d.getTime()/1000;})();
+  const n=Math.max(1,Math.floor((hi-start)/step)+1),cnt=new Array(Math.min(n,400)).fill(0);
+  ts.forEach(t=>{const i=Math.floor((t-start)/step);if(i>=0&&i<cnt.length)cnt[i]++;});
+  const max=Math.max(1,...cnt),lab=i=>{const d=new Date((start+i*step)*1000),p=v=>String(v).padStart(2,'0');
+    return hourly?p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':00':d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());};
+  $('ch-title').textContent='Activity, messages per '+(hourly?'hour':'day');
+  $('ch').replaceChildren(...cnt.map((v,i)=>{const b=el('div','b');b.style.height=(v/max*100)+'%';b.title=lab(i)+': '+v;return b;}));
+  $('ch-lbl').replaceChildren(el('span','',lab(0)),el('span','',lab(cnt.length-1)));
+}
+
+// ── Get AI advice: claude.ai in a new tab, the prompt copied too (the ?q=
+// prefill is undocumented). Device details leave the LAN only on this click. ──
+const AI_MAX=4000;
+function aiPrompt(){
+  const x=_dev||{mac:DEV.mac,ip:DEV.ip},ai=_ai||{id:[],beh:[],risk:[],rate:[],sug:'',qs:[]};
+  const list=(h,a)=>h+'\n'+(a.length?a.map(t=>'- '+t).join('\n'):'- none')+'\n';
+  const pr=Object.entries(x.protos||{}).map(([k,v])=>k+' '+v).join(', ');
+  let p='I run a home-network honeypot. Analyse this device and tell me if it\'s a risk and what to do:\n\nDevice\n'+
+    textRows([['Label',S(x.label)||'unknown'],['IP',S(x.ip)||'-'],['MAC',isMac(x.mac)?S(x.mac):'unknown'],['Vendor',S(x.vendor)||'unknown'],
+      ['Random MAC',x.random_mac?'yes':'no'],['Protocols',pr||'-'],['First seen',x.first_ts?fmt(x.first_ts):'-'],['Last seen',x.last_ts?fmt(x.last_ts):'-']])+'\n\n'+
+    list('Identity',ai.id)+'\n'+list('Behaviour',ai.beh)+'\n'+list('Rates',ai.rate)+'\n'+list('Last queries',ai.qs)+'\n'+list('Risk notes',ai.risk)+
+    '\nSuggestion from the dashboard\'s fixed rules: '+(ai.sug||'-')+'\n';
+  const rows=[...$('sum-body').querySelectorAll('tr')].map(tr=>[...tr.children].slice(0,6).map(td=>td.textContent).join(' | ')).filter(t=>!/^Nothing|^Loading/.test(t));
+  if(rows.length)p+='\nIssue summary of its log ('+_lines.length+' lines; code | name | tier | count | first | last)\n'+rows.map(t=>'- '+t).join('\n')+'\n';
+  if(_lines.length){
+    p+='\nNewest log lines\n';
+    for(const o of _lines){const t='- '+fmt(+o.ts)+' '+lineText(o)+'\n';if(p.length+t.length>AI_MAX-40)break;p+=t;}
+  }
+  return p.length>AI_MAX?p.slice(0,AI_MAX-6)+'\n[cut]':p;
+}
+$('ai-btn').onclick=()=>{
+  const p=aiPrompt(),m=$('ai-msg'),cp=copyText(p);     // copy first, inside the click
+  window.open('https://claude.ai/new?q='+encodeURIComponent(p),'_blank','noopener');
+  m.hidden=false;m.textContent='Opening claude.ai...';
+  cp.then(ok=>{m.textContent=ok?'Prompt copied; paste it if Claude doesn\'t pre-fill.':'Copy failed: the prompt is only in the claude.ai link.';});
+};
+$('older').onclick=()=>older(300);
+$('full').onclick=fullScan;
+$('ig-all').onchange=e=>toggleIgnore('',!e.target.checked,e.target);
+
+// ── Start: the device table, the codes and the ignore list, then the newest page fast ──
+(async()=>{
+  if(!DEV.mac&&!DEV.ip){$('id-label').textContent='No device given';$('sum-note').textContent='Open this page from the Devices tab.';$('older').hidden=$('full').hidden=true;return;}
+  const [dv]=await Promise.all([
+    fetch('/api/devices',{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null),
+    loadCodes(),
+    fetch('/api/ignore',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(d=>{if(d)_ign=d.entries||[];}).catch(()=>{}),
+  ]);
+  const devs=(dv&&dv.devices)||[];
+  _dev=devs.find(x=>DEV.mac&&S(x.mac).toLowerCase()===DEV.mac)||devs.find(x=>DEV.ip&&S(x.ip)===DEV.ip)||null;
+  renderDevice();
+  await older(100);
+})();
+</script>
+</body>
+</html>
