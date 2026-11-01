@@ -1502,3 +1502,58 @@ int discovery_summary(char *label, size_t len, uint32_t *first_up_s)
     xSemaphoreGive(s_mux);
     return n;
 }
+
+_Static_assert(DISCOVERY_VENDOR_LEN == OUI_NAME_MAX, "DISCOVERY_VENDOR_LEN: as OUI_NAME_MAX");
+
+// Packets an hour over first to last seen, at least DISCOVERY_RATE_MIN_S.
+static uint32_t dev_per_hour(const disc_dev_t *d)
+{
+    uint32_t span = d->last_up > d->first_up ? d->last_up - d->first_up : 0;
+    if (span < DISCOVERY_RATE_MIN_S) span = DISCOVERY_RATE_MIN_S;
+    uint64_t r = (uint64_t)d->total * 3600u / span;
+    return r > UINT32_MAX ? UINT32_MAX : (uint32_t)r;
+}
+
+int discovery_top_talkers(discovery_talker_t *out, int max)
+{
+    if (!S || !out || max <= 0) return 0;
+    int n = 0;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    for (int i = 0; i < DISCOVERY_DEV_MAX; i++) {
+        const disc_dev_t *d = &S->dev[i];
+        if (!d->used) continue;
+        uint32_t r = dev_per_hour(d);
+        int at = n < max ? n : max;             // insertion point, busiest first
+        while (at > 0 && out[at - 1].per_hour < r) at--;
+        if (at >= max) continue;
+        int last = n < max ? n : max - 1;
+        memmove(&out[at + 1], &out[at], sizeof(out[0]) * (size_t)(last - at));
+        discovery_talker_t *t = &out[at];
+        t->ip = d->ip;
+        memcpy(t->mac, d->mac, 6);
+        t->per_hour = r;
+        strlcpy(t->label, d->label, sizeof(t->label));
+        strlcpy(t->vendor, d->vendor, sizeof(t->vendor));
+        if (n < max) n++;
+    }
+    xSemaphoreGive(s_mux);
+    return n;
+}
+
+bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len)
+{
+    if (!buf || !len) return false;
+    buf[0] = '\0';
+    if (!S || (!ip && !mac)) return false;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    for (int i = 0; i < DISCOVERY_DEV_MAX; i++) {
+        const disc_dev_t *d = &S->dev[i];
+        if (!d->used || !d->label[0]) continue;
+        if ((mac && d->mac_known && !memcmp(d->mac, mac, 6)) || (ip && d->ip == ip)) {
+            strlcpy(buf, d->label, len);
+            break;
+        }
+    }
+    xSemaphoreGive(s_mux);
+    return buf[0] != '\0';
+}

@@ -28,7 +28,6 @@ static const char *TAG = "UI";
 #define UI_TASK_PRIO    2
 #define UI_QUEUE_DEPTH  16
 #define UI_SEED_ROWS    200     // the whole flash ring, to count sources at boot
-#define UI_SRC_MAX      64      // distinct sources counted; more shows "64+"
 #define HOLD_MS         2000    // ACKNOWLEDGE: a brush must not fire it
 #define HOLD_DRAIN_MS   250     // an early release empties a full fill in this time
 
@@ -97,10 +96,8 @@ _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "T
 // GREEN (no incident):
 //   y   0..27   status bar: name, IP : port, clock, condition pill
 //   y  28..30   running light (RUNLIGHT_H)
-//   y  34..57   key figures
-//   y  66..81   one muted line on the last incident, if there was one
-//   y  82..316  the dashboard (build_dash(): today's tiers, 24 h chart,
-//               watching panel, the newest alert or probe as a headline)
+//   y  34..315  the dashboard (build_dash(), see "GREEN dashboard"): tiles,
+//               top offenders and LAN talkers, a footer of figures
 // RED (unacknowledged), the whole screen, black, no status bar:
 //   y   0..159  the alert emblem, "ALERT / CONDITION: RED"
 //   y 163..257  the details (DET_*): code and name; source and vendor; the
@@ -114,9 +111,6 @@ _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "T
 //   y 250..299  IGNORE ERROR, IGNORE DEVICE
 //   y 303..318  "Resolve from the dashboard", with who acknowledged
 #define STATUS_H        28
-#define FIG_Y_IDLE      34
-#define FIG_H           24
-#define LAST_Y_IDLE     66
 
 #define RED_EMB_Y       0
 #define RED_EMB_H       160
@@ -146,9 +140,6 @@ typedef struct {
     bool      holding;      // from press start until done, release or slide-off
 } hold_t;
 static hold_t s_h_ack;
-// Key figures, and the armed screen's last-incident line
-static lv_obj_t *s_figs, *s_f_events, *s_f_sources, *s_f_sd, *s_f_wifi;
-static lv_obj_t *s_last;
 
 // One alert emblem (see build_emblem()): drawn once, static, but for the
 // sweep segment in each side bar.
@@ -172,9 +163,6 @@ static lv_timer_t *s_rl;
 static lv_color_t  s_rl_col;        // the state colour
 
 static alarm_info_t s_alarm;            // last state applied, for the age line
-static uint32_t     s_src[UI_SRC_MAX];  // distinct sources seen
-static int          s_src_n;
-static bool         s_src_more;
 
 // Backlight: forced full on while RED, and while the face light is up
 static bool s_bl_red, s_bl_lit;
@@ -244,14 +232,6 @@ static void fmt_age(uint32_t first, char *buf, size_t len)
 
 static const char *type_name(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?"; }
 
-// ── Sources ───────────────────────────────────────────────────────────────────
-
-static void source_add(uint32_t ip)
-{
-    for (int i = 0; i < s_src_n; i++) if (s_src[i] == ip) return;
-    if (s_src_n < UI_SRC_MAX) s_src[s_src_n++] = ip;
-    else s_src_more = true;
-}
 
 // ── Condition ─────────────────────────────────────────────────────────────────
 //
@@ -315,54 +295,19 @@ static void fmt_who(const alarm_info_t *a, char *buf, size_t len)
     }
 }
 
-// ── Key figures ───────────────────────────────────────────────────────────────
+// ── Dashboard timer ───────────────────────────────────────────────────────────
 
-// On every batch of events: cheap, in RAM.
 static void set_text(lv_obj_t *l, const char *t);
-
-static void refresh_counts(void)
-{
-    char b[48];
-    snprintf(b, sizeof(b), "#" HEX_SUB " Events#  %lu", (unsigned long)log_store_total_count());
-    set_text(s_f_events, b);
-    snprintf(b, sizeof(b), "#" HEX_SUB " Sources#  %d%s", s_src_n, s_src_more ? "+" : "");
-    set_text(s_f_sources, b);
-}
-
-// Every 2 s: the counts plus the microSD and Wi-Fi state. Unchanged text is
-// not set again, so the row repaints only when a figure moves.
-static void refresh_figures(void)
-{
-    refresh_counts();
-
-    char b[48];
-    sd_status_t sd;
-    sd_log_status(&sd);
-    if (sd.mounted) {
-        unsigned long tenths = (unsigned long)(sd.free_bytes / 100000000ULL);   // 0.1 GB
-        snprintf(b, sizeof(b), "#" HEX_SUB " SD#  %lu.%lu GB free", tenths / 10, tenths % 10);
-    } else {
-        strlcpy(b, "#" HEX_SUB " SD#  no card", sizeof(b));
-    }
-    set_text(s_f_sd, b);
-
-    wifi_ap_record_t ap;
-    if (wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
-        snprintf(b, sizeof(b), "#" HEX_SUB " Wi-Fi#  %d dBm", (int)ap.rssi);
-    else
-        strlcpy(b, "#" HEX_SUB " Wi-Fi#  --", sizeof(b));
-    set_text(s_f_wifi, b);
-}
-
-static void dash_refresh(void);
+static void dash_refresh(bool force);
 static void kpi_seed_once(void);
+static void show(lv_obj_t *o, bool on);
 
+// Every 2 s; dash_refresh() decides what is due.
 static void figures_cb(lv_timer_t *t)
 {
     (void)t;
-    refresh_figures();
     kpi_seed_once();
-    dash_refresh();
+    dash_refresh(false);
 }
 
 // ── Hold to confirm ───────────────────────────────────────────────────────────
@@ -821,37 +766,62 @@ static void refr_timing_init(void)
     disp->driver->monitor_cb = refr_monitor_cb;
 }
 
-// ── Armed dashboard ───────────────────────────────────────────────────────────
+// ── GREEN dashboard ───────────────────────────────────────────────────────────
 //
-// What the armed screen shows under the key figures and the last-incident
-// line: today's counts per tier and of port scans, attacks per hour over the
-// last 24 h (sd_log_stats(), LAN discovery excluded), what the box is
-// watching, and the newest alert or probe as a headline. All on this task;
-// refreshed from the 2 s figures timer, each label only when its text changes
-// and the chart only when a bar changes, so the SPI panel repaints little.
+// Summary metrics only, no log, after the Pi-hole dashboard: dark rounded
+// cards, big numbers, thin frequency bars.
+//   y  34..81   four tiles: alerts, probes and port scans today, LAN devices
+//   y  88..293  two cards, 5 rows each:
+//               x   4..237  top offenders today (SEV1 and SEV2 sources):
+//                           label or vendor, IP, alerts, a bar against the top
+//               x 242..475  LAN talkers (discovery_top_talkers()): label or
+//                           vendor, IP and packets an hour, 1 to 5 activity
+//                           lights (under 30, 100, 300, 600 an hour, then 5),
+//                           a bar against the busiest
+//   y 300..315  ports listening, uptime, microSD free, Wi-Fi RSSI
+// All on this task, from the 2 s figures timer: the tiles and offenders when
+// they changed, the talkers and the footer once a minute (or on entering the
+// view). Text is set only when it differs, a bar or a light only when it
+// moves, so the SPI panel repaints little.
 
-#define DASH_KPI_Y      82
-#define DASH_KPI_H      50
-#define DASH_MAIN_Y     136
-#define DASH_MAIN_H     160
-#define CHART_W         284
-#define CHART_H         120     // the bars; title above, hour ticks below
-#define WATCH_X         292
-#define WATCH_W         184
-#define DASH_LINE_Y     301
+#define DASH_TILE_Y     34
+#define DASH_TILE_H     48
+#define DASH_TILE_W     115
+#define DASH_TILE_PITCH 119
+#define DASH_CARD_Y     88
+#define DASH_CARD_H     206
+#define DASH_CARD_W     234
+#define DASH_CARD_X0    4
+#define DASH_CARD_X1    242
+#define DASH_ROWS       5
+#define DASH_ROW_Y0     24      // in the card, under its header
+#define DASH_ROW_H      36
+#define DASH_NAME_W     156
+#define DASH_BAR_W      218     // x 8..225 in the card
+#define DASH_DOTS       5
+#define DASH_DOT        8
+#define DASH_DOT_GAP    4
+#define DASH_FOOT_Y     300
+#define DASH_SLOW_MS    60000   // talkers and footer
 #define KPI_SRC_MAX     32      // sources counted today; more are not ranked
-#define CHART_EVERY_MS  60000   // the hour can roll over with no new event
-#define COL_CHART       lv_color_hex(0x38bdf8)
+#define COL_SKY         lv_color_hex(0x38bdf8)
+#define COL_TRACK       lv_color_hex(0x334155)
 
-static lv_obj_t *s_idle;                    // the armed view: everything below the light
-static lv_obj_t *s_kpi_val[4];
-static lv_obj_t *s_chart, *s_chart_max, *s_chart_tick[4];
-static lv_chart_series_t *s_chart_ser;
-static lv_obj_t *s_w_listen, *s_w_up, *s_w_lan, *s_w_lan_new, *s_w_top_lbl, *s_w_top, *s_w_top_who;
-static lv_obj_t *s_dash_line;
-static sd_stats_t *s_stats;                 // PSRAM copy for the chart
-static bool     s_chart_dirty = true;
-static uint32_t s_chart_at, s_chart_hour;
+typedef struct {
+    lv_obj_t *root, *name, *val, *sub, *fill;
+    lv_obj_t *dot[DASH_DOTS];               // talkers only
+    uint8_t   lit;                          // lights shown, 0 = not yet set
+} dash_row_t;
+
+static lv_obj_t  *s_idle;                   // the green view: everything below the light
+static lv_obj_t  *s_tile_val[4];
+static dash_row_t s_off[DASH_ROWS], s_talk[DASH_ROWS];
+static lv_obj_t  *s_off_empty, *s_talk_empty, *s_foot;
+static bool       s_off_dirty = true;
+static uint32_t   s_slow_at;
+static bool       s_slow_done;
+
+typedef struct { uint32_t ip; uint8_t mac[6]; uint32_t n; } kpi_src_t;
 
 // Today's counts, in RAM: seeded from the flash ring at boot, then one per
 // event; reset at local midnight.
@@ -859,10 +829,9 @@ static struct {
     uint32_t day;                           // local YYYY*1000+yday, 0 = clock not set
     uint32_t tier[3];                       // alerts, probes, discovery
     uint32_t scans;
-    struct { uint32_t ip; uint8_t mac[6]; uint32_t n; } src[KPI_SRC_MAX];
+    kpi_src_t src[KPI_SRC_MAX];
     int      src_n;
 } s_kpi;
-static attack_log_t s_last_atk;             // newest alert or probe; timestamp 0 = none
 
 static uint32_t local_day(uint32_t ts)
 {
@@ -886,20 +855,19 @@ static void kpi_roll(void)
     if (today && today != s_kpi.day) {
         memset(&s_kpi, 0, sizeof(s_kpi));
         s_kpi.day = today;
+        s_off_dirty = true;
     }
 }
 
 static void kpi_add(const attack_log_t *e)
 {
     describe_tier_t t = describe_tier(e);
-    if (t != TIER_SEV3 && e->timestamp >= s_last_atk.timestamp) s_last_atk = *e;
-    if (t != TIER_SEV3) s_chart_dirty = true;
-
     kpi_roll();
     if (!s_kpi.day || local_day(e->timestamp) != s_kpi.day) return;   // not today
-    s_kpi.tier[t - 1]++;
+    if (t >= TIER_SEV1 && t <= TIER_SEV3) s_kpi.tier[t - 1]++;
     if (e->type == ATTACK_SCAN && !strncmp(e->payload, "Port scan:", 10)) s_kpi.scans++;
     if (t == TIER_SEV3 || !e->src_ip) return;
+    s_off_dirty = true;
     for (int i = 0; i < s_kpi.src_n; i++) {
         if (s_kpi.src[i].ip == e->src_ip) {
             s_kpi.src[i].n++;
@@ -928,6 +896,7 @@ static void kpi_seed_once(void)
     memset(&s_kpi, 0, sizeof(s_kpi));
     for (int i = n - 1; i >= 0; i--) kpi_add(&r[i]);
     heap_caps_free(r);
+    s_off_dirty = true;
 }
 
 // Trap and tripwire ports configured on (a port that failed to bind still counts).
@@ -955,120 +924,129 @@ static void fmt_span(uint32_t s, char *buf, size_t len)
     else                snprintf(buf, len, "%lum", (unsigned long)(s / 60));
 }
 
-// Attacks per hour, oldest left. Repaints only when a bar or the hour changed.
-static void chart_update(void)
+// A row's name and line under it, the bar at v of max.
+static void row_set(dash_row_t *r, const char *name, const char *sub, uint32_t v, uint32_t max)
 {
-    if (!s_stats) return;
-    uint32_t now = (uint32_t)time(NULL);
-    if (now < 1600000000) return;           // no clock, no hours
-    sd_log_stats(s_stats);
-    uint32_t hour = now / 3600, max = 0;
-    bool diff = false;
-    lv_coord_t *ys = lv_chart_get_y_array(s_chart, s_chart_ser);
-    for (int i = 0; i < 24; i++) {
-        uint32_t h = hour - 23 + (uint32_t)i, slot = h % 24;
-        uint32_t v = s_stats->hour_key[slot] == h ? s_stats->hour_count[slot] : 0;
-        if (v > max) max = v;
-        if (v > 30000) v = 30000;
-        if (ys[i] != (lv_coord_t)v) { ys[i] = (lv_coord_t)v; diff = true; }
-    }
-    char buf[24];
-    snprintf(buf, sizeof(buf), "max %lu", (unsigned long)max);
-    set_text(s_chart_max, buf);
-    if (hour != s_chart_hour) {             // the 0, 6, 12, 18 ticks move with the hour
-        s_chart_hour = hour;
-        lv_obj_update_layout(s_chart);
-        lv_coord_t w = lv_obj_get_content_width(s_chart), x0 = lv_obj_get_x(s_chart);
-        int k = 0;
-        for (int i = 0; i < 24 && k < 4; i++) {
-            time_t t = (time_t)(hour - 23 + (uint32_t)i) * 3600;
-            struct tm tm;
-            localtime_r(&t, &tm);
-            if (tm.tm_hour % 6) continue;
-            snprintf(buf, sizeof(buf), "%d", tm.tm_hour);
-            set_text(s_chart_tick[k], buf);
-            lv_obj_set_x(s_chart_tick[k], x0 + (lv_coord_t)(w * (2 * i + 1) / 48) - 6);
-            k++;
-        }
-        diff = true;
-    }
-    if (diff) {
-        lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, max < 4 ? 4 : (lv_coord_t)(max > 30000 ? 30000 : max));
-        lv_chart_refresh(s_chart);
-    }
+    char b[64];
+    strlcpy(b, name, sizeof(b));
+    for (char *c = b; *c; c++) if (*c == '#') *c = ' ';     // label recolor marker
+    fit_words(b, &lv_font_montserrat_14, DASH_NAME_W);
+    set_text(r->name, b);
+    set_text(r->sub, sub);
+    lv_coord_t w = max ? (lv_coord_t)((uint64_t)DASH_BAR_W * v / max) : 0;
+    lv_obj_set_width(r->fill, w < 2 ? 2 : w);               // unchanged: no repaint
+    show(r->root, true);
 }
 
-static void dash_refresh(void)
+// Activity lights: 1 under 30 an hour, then 100, 300, 600; 5 above that.
+// Lit in green, amber from 3, red from 4.
+static void row_lights(dash_row_t *r, uint32_t per_hour)
+{
+    uint8_t n = per_hour < 30 ? 1 : per_hour < 100 ? 2 : per_hour < 300 ? 3 : per_hour < 600 ? 4 : 5;
+    if (n == r->lit) return;
+    r->lit = n;
+    lv_color_t on = n >= 4 ? COL_RED : n == 3 ? COL_AMBER : COL_GREEN;
+    for (int i = 0; i < DASH_DOTS; i++)
+        lv_obj_set_style_bg_color(r->dot[i], i < n ? on : COL_TRACK, 0);
+}
+
+static void offenders_update(void)
+{
+    int idx[DASH_ROWS], n = 0;
+    for (int i = 0; i < s_kpi.src_n; i++) {          // top DASH_ROWS by count, insertion
+        int at = n < DASH_ROWS ? n : DASH_ROWS;
+        while (at > 0 && s_kpi.src[idx[at - 1]].n < s_kpi.src[i].n) at--;
+        if (at >= DASH_ROWS) continue;
+        int last = n < DASH_ROWS ? n : DASH_ROWS - 1;
+        memmove(&idx[at + 1], &idx[at], sizeof(idx[0]) * (size_t)(last - at));
+        idx[at] = i;
+        if (n < DASH_ROWS) n++;
+    }
+    for (int k = 0; k < DASH_ROWS; k++) {
+        if (k >= n) { show(s_off[k].root, false); continue; }
+        const kpi_src_t *s = &s_kpi.src[idx[k]];
+        char name[48], ip[16], cnt[12];
+        if (!discovery_label_for(s->ip, mac_zero(s->mac) ? NULL : s->mac, name, sizeof(name))) {
+            const char *v = wifi_manager_mac_vendor(s->mac);
+            strlcpy(name, v[0] ? v : "unknown device", sizeof(name));
+        }
+        fmt_ip(s->ip, ip, sizeof(ip));
+        snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)s->n);
+        set_text(s_off[k].val, cnt);
+        row_set(&s_off[k], name, ip, s->n, s_kpi.src[idx[0]].n);
+    }
+    show(s_off_empty, n == 0);
+}
+
+static void talkers_update(void)
+{
+    static discovery_talker_t *t;           // about 0.5 KB, PSRAM, kept
+    if (!t && !(t = heap_caps_malloc(sizeof(*t) * DASH_ROWS, MALLOC_CAP_SPIRAM))) return;
+    int n = discovery_top_talkers(t, DASH_ROWS);
+    for (int k = 0; k < DASH_ROWS; k++) {
+        if (k >= n) { show(s_talk[k].root, false); continue; }
+        char name[64], sub[40], ip[16];
+        if (t[k].label[0])       strlcpy(name, t[k].label, sizeof(name));
+        else if (t[k].vendor[0]) snprintf(name, sizeof(name), "%s device", t[k].vendor);
+        else                     strlcpy(name, "unknown device", sizeof(name));
+        if (t[k].ip) fmt_ip(t[k].ip, ip, sizeof(ip));
+        else         strlcpy(ip, "no IP", sizeof(ip));
+        snprintf(sub, sizeof(sub), "%s   %lu/h", ip, (unsigned long)t[k].per_hour);
+        row_set(&s_talk[k], name, sub, t[k].per_hour, t[0].per_hour);
+        row_lights(&s_talk[k], t[k].per_hour);
+    }
+    show(s_talk_empty, n == 0);
+}
+
+static void footer_update(void)
+{
+    char up[24], sd[24], wifi[16], b[160];
+    fmt_span((uint32_t)(esp_timer_get_time() / 1000000LL), up, sizeof(up));
+    sd_status_t st;
+    sd_log_status(&st);
+    if (st.mounted) {
+        unsigned long tenths = (unsigned long)(st.free_bytes / 100000000ULL);   // 0.1 GB
+        snprintf(sd, sizeof(sd), "%lu.%lu GB free", tenths / 10, tenths % 10);
+    } else {
+        strlcpy(sd, "no card", sizeof(sd));
+    }
+    wifi_ap_record_t ap;
+    if (wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+        snprintf(wifi, sizeof(wifi), "%d dBm", (int)ap.rssi);
+    else
+        strlcpy(wifi, "--", sizeof(wifi));
+    snprintf(b, sizeof(b), "#" HEX_SUB " Listening# %d ports   #" HEX_SUB " Up# %s   #" HEX_SUB " SD# %s   "
+             "#" HEX_SUB " Wi-Fi# %s", listening_ports(), up, sd, wifi);
+    set_text(s_foot, b);
+}
+
+static void dash_refresh(bool force)
 {
     if (lv_obj_has_flag(s_idle, LV_OBJ_FLAG_HIDDEN)) return;
-    char buf[DESCRIBE_MAX + 32], ago[24];
+    char buf[16];
     kpi_roll();
+    uint32_t v[4] = { s_kpi.tier[0], s_kpi.tier[1], s_kpi.scans,
+                      (uint32_t)discovery_summary(NULL, 0, NULL) };
     for (int i = 0; i < 4; i++) {
-        snprintf(buf, sizeof(buf), "%lu", (unsigned long)(i < 3 ? s_kpi.tier[i] : s_kpi.scans));
-        set_text(s_kpi_val[i], buf);
+        snprintf(buf, sizeof(buf), "%lu", (unsigned long)v[i]);
+        set_text(s_tile_val[i], buf);
     }
-
-    uint32_t up = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    fmt_span(up, buf, sizeof(buf));
-    set_text(s_w_up, buf);
-
-    char lab[40];
-    uint32_t first_up = 0;
-    int devs = discovery_summary(lab, sizeof(lab), &first_up);
-    snprintf(buf, sizeof(buf), "%d", devs);
-    set_text(s_w_lan, buf);
-    if (devs && lab[0]) {
-        fmt_span(up > first_up ? up - first_up : 0, ago, sizeof(ago));
-        for (char *c = lab; *c; c++) if (*c == '#') *c = ' ';
-        snprintf(buf, sizeof(buf), "newest %s, %s ago", lab, ago);
-    } else {
-        strlcpy(buf, "none yet", sizeof(buf));
+    if (force || s_off_dirty) {
+        s_off_dirty = false;
+        offenders_update();
     }
-    set_text(s_w_lan_new, buf);
-
-    int top = -1;
-    for (int i = 0; i < s_kpi.src_n; i++) if (top < 0 || s_kpi.src[i].n > s_kpi.src[top].n) top = i;
-    if (top >= 0) {
-        char ip[16];
-        fmt_ip(s_kpi.src[top].ip, ip, sizeof(ip));
-        snprintf(buf, sizeof(buf), "Top source today, %lu", (unsigned long)s_kpi.src[top].n);
-        set_text(s_w_top_lbl, buf);
-        set_text(s_w_top, ip);
-        const char *v = wifi_manager_mac_vendor(s_kpi.src[top].mac);
-        set_text(s_w_top_who, v[0] ? v : "vendor unknown");
-    } else {
-        set_text(s_w_top_lbl, "Top source today");
-        set_text(s_w_top, "none");
-        set_text(s_w_top_who, "");
-    }
-
-    if (s_last_atk.timestamp) {
-        char hl[DESCRIBE_MAX];
-        describe_event(&s_last_atk, hl, sizeof(hl));
-        time_t now = time(NULL);
-        if (s_last_atk.timestamp >= 1600000000 && now >= (time_t)s_last_atk.timestamp) {
-            fmt_span((uint32_t)(now - (time_t)s_last_atk.timestamp), ago, sizeof(ago));
-            snprintf(buf, sizeof(buf), "%s ago:  %s", ago, hl);
-        } else {
-            strlcpy(buf, hl, sizeof(buf));
-        }
-    } else {
-        strlcpy(buf, "No attacks yet", sizeof(buf));
-    }
-    set_text(s_dash_line, buf);
-
-    if (s_chart_dirty || lv_tick_elaps(s_chart_at) >= CHART_EVERY_MS) {
-        s_chart_dirty = false;
-        s_chart_at = lv_tick_get();
-        chart_update();
+    if (force || !s_slow_done || lv_tick_elaps(s_slow_at) >= DASH_SLOW_MS) {
+        s_slow_done = true;
+        s_slow_at = lv_tick_get();
+        talkers_update();
+        footer_update();
     }
 }
 
 // ── Alarm ─────────────────────────────────────────────────────────────────────
 
 // Every second: during an incident, the details' last line (count, first and
-// last seen, how long it has been open); when green, the line on the last
-// incident with how long ago it was last seen (left out before SNTP).
+// last seen, how long it has been open). Nothing when green.
 static void refresh_age(void)
 {
     char age[24] = "";
@@ -1083,21 +1061,6 @@ static void refresh_age(void)
         set_text(s_d_times, buf);
         return;
     }
-    if (!s_alarm.id) { set_text(s_last, ""); return; }
-    char ip[16];
-    fmt_ip(s_alarm.src_ip, ip, sizeof(ip));
-    time_t now = time(NULL);
-    if (s_alarm.last_ts >= 1600000000 && now >= (time_t)s_alarm.last_ts) {
-        unsigned long d = (unsigned long)(now - (time_t)s_alarm.last_ts);
-        if (d < 60)         snprintf(age, sizeof(age), ", %lus ago", d);
-        else if (d < 3600)  snprintf(age, sizeof(age), ", %lum ago", d / 60);
-        else if (d < 86400) snprintf(age, sizeof(age), ", %luh %02lum ago", d / 3600, d % 3600 / 60);
-        else                snprintf(age, sizeof(age), ", %lud ago", d / 86400);
-    }
-    char buf[DESCRIBE_MAX];
-    snprintf(buf, sizeof(buf), "Last incident #%lu, %s from %s%s",
-             (unsigned long)s_alarm.id, type_name(s_alarm.type), ip, age);
-    set_text(s_last, buf);
 }
 
 static void show(lv_obj_t *o, bool on)
@@ -1146,19 +1109,14 @@ static void view_incident(alarm_cond_t c)
     show(s_note, !red);
 }
 
-static void view_armed(bool last)
+static void view_armed(void)
 {
     s_emb = NULL;
     show(s_inc, false);
     show(s_bar, true);
     show(s_rl_track, true);
     show(s_idle, true);
-    lv_obj_align(s_figs, LV_ALIGN_TOP_MID, 0, FIG_Y_IDLE);
-    show(s_figs, true);
-    lv_obj_align(s_last, LV_ALIGN_TOP_MID, 0, LAST_Y_IDLE);
-    show(s_last, last);
-    s_chart_dirty = true;                   // the chart was not kept up while hidden
-    dash_refresh();
+    dash_refresh(true);                     // not kept up while hidden
 }
 
 // Once per change of condition or incident: what the panel now renders, so
@@ -1167,11 +1125,13 @@ static void log_view(alarm_cond_t c)
 {
     lv_obj_update_layout(lv_scr_act());
     if (c == ALARM_COND_GREEN) {
-        lv_area_t f;
-        lv_obj_get_coords(s_figs, &f);
-        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, dashboard shown, figures at y %d..%d, last line %s",
-                 (unsigned long)s_alarm.id, f.y1, f.y2,
-                 lv_obj_has_flag(s_last, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown");
+        int off = 0, talk = 0;
+        for (int i = 0; i < DASH_ROWS; i++) {
+            off  += !lv_obj_has_flag(s_off[i].root, LV_OBJ_FLAG_HIDDEN);
+            talk += !lv_obj_has_flag(s_talk[i].root, LV_OBJ_FLAG_HIDDEN);
+        }
+        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, dashboard: tiles y %d, %d offenders, %d talkers, footer y %d",
+                 (unsigned long)s_alarm.id, DASH_TILE_Y, off, talk, DASH_FOOT_Y);
         return;
     }
     lv_area_t e;
@@ -1214,7 +1174,7 @@ static void apply_alarm(const alarm_info_t *a)
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         set_text(s_pill_lbl, COND_NAME[c]);
         runlight_set(COL_GREEN);
-        view_armed(a->id != 0);
+        view_armed();
     }
     refresh_age();
     s_bl_red = c == ALARM_COND_RED;
@@ -1303,101 +1263,110 @@ static void clock_cb(lv_timer_t *t)
     refresh_age();
 }
 
-// A name on the left (14 px, muted) and its value right-aligned (20 px).
-static lv_obj_t *watch_row(lv_coord_t y, const char *name)
+// A dark rounded card with a 14 px title, and a caption on the right.
+static lv_obj_t *dash_card(lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
+                           const char *title, const char *caption)
 {
-    lv_obj_t *n = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_text(n, name);
-    lv_obj_set_pos(n, WATCH_X + 6, y + 3);
-    lv_obj_t *v = label(s_idle, &lv_font_montserrat_20, COL_TEXT);
-    lv_obj_set_width(v, 90);
-    lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(v, WATCH_X + WATCH_W - 6 - 90, y);
-    return v;
+    lv_obj_t *c = box(s_idle, COL_CARD);
+    lv_obj_set_pos(c, x, y);
+    lv_obj_set_size(c, w, h);
+    lv_obj_set_style_radius(c, 8, 0);
+    lv_obj_t *t = label(c, &lv_font_montserrat_14, COL_SUB);
+    lv_label_set_text(t, title);
+    lv_obj_set_pos(t, 8, 4);
+    if (caption) {
+        lv_obj_t *k = label(c, &lv_font_montserrat_12, COL_SUB);
+        lv_label_set_text(k, caption);
+        lv_obj_align(k, LV_ALIGN_TOP_RIGHT, -8, 6);
+    }
+    return c;
 }
 
-// The armed dashboard, below the key figures and the last-incident line:
-//   y  82..131  today: alerts, probes, discovery, port scans (4 tiles)
-//   y 136..295  attacks per hour, 24 h (x 4..287) | watching (x 292..475)
-//   y 301..316  the newest alert or probe, as a headline
+// One row of a card, y 24 + i * 36: name (14 px, x 8..163), the line under
+// it (12 px, y +17), the value (20 px, right, x 166..225) or 5 lights (8 px,
+// x 170..225), and a 3 px bar on a track (x 8..225, y +32). Hidden
+// until it has something to show.
+static void dash_row(dash_row_t *r, lv_obj_t *card, int i, bool lights)
+{
+    r->root = lv_obj_create(card);
+    lv_obj_remove_style_all(r->root);
+    lv_obj_set_pos(r->root, 0, DASH_ROW_Y0 + i * DASH_ROW_H);
+    lv_obj_set_size(r->root, DASH_CARD_W, DASH_ROW_H);
+    lv_obj_clear_flag(r->root, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    r->name = label(r->root, &lv_font_montserrat_14, COL_TEXT);
+    lv_label_set_long_mode(r->name, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(r->name, DASH_NAME_W);
+    lv_obj_set_pos(r->name, 8, 0);
+    r->sub = label(r->root, &lv_font_montserrat_12, COL_SUB);
+    lv_obj_set_pos(r->sub, 8, 17);
+    if (lights) {
+        for (int k = 0; k < DASH_DOTS; k++) {
+            r->dot[k] = box(r->root, COL_TRACK);
+            lv_obj_set_size(r->dot[k], DASH_DOT, DASH_DOT);
+            lv_obj_set_style_radius(r->dot[k], LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_pos(r->dot[k], 8 + DASH_BAR_W - DASH_DOTS * DASH_DOT - (DASH_DOTS - 1) * DASH_DOT_GAP
+                                      + k * (DASH_DOT + DASH_DOT_GAP), 5);
+        }
+    } else {
+        r->val = label(r->root, &lv_font_montserrat_20, COL_TEXT);
+        lv_obj_set_width(r->val, 60);
+        lv_obj_set_style_text_align(r->val, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_pos(r->val, 8 + DASH_BAR_W - 60, 1);
+    }
+    lv_obj_t *track = box(r->root, COL_TRACK);
+    lv_obj_set_pos(track, 8, 32);
+    lv_obj_set_size(track, DASH_BAR_W, 3);
+    lv_obj_set_style_radius(track, 1, 0);
+    r->fill = box(track, lights ? COL_SKY : COL_RED);
+    lv_obj_set_size(r->fill, 0, 3);
+    lv_obj_set_style_radius(r->fill, 1, 0);
+    lv_obj_add_flag(r->root, LV_OBJ_FLAG_HIDDEN);
+}
+
+static lv_obj_t *dash_empty(lv_obj_t *card, const char *text)
+{
+    lv_obj_t *l = label(card, &lv_font_montserrat_14, COL_SUB);
+    lv_label_set_text(l, text);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, 8);
+    return l;
+}
+
+// The green dashboard; layout in the section comment above dash_refresh().
 static void build_dash(void)
 {
-    static const char *KPI[4] = { "Alerts today", "Probes today", "Discovery today", "Port scans today" };
+    static const char *NAME[4] = { "Alerts today", "Probes today", "Port scans today", "LAN devices" };
+    const lv_color_t col[4] = { COL_RED, COL_AMBER, COL_TEXT, COL_SKY };
     for (int i = 0; i < 4; i++) {
         lv_obj_t *t = box(s_idle, COL_CARD);
-        lv_obj_set_size(t, 115, DASH_KPI_H);
-        lv_obj_set_pos(t, 4 + i * 119, DASH_KPI_Y);
-        lv_obj_set_style_radius(t, 6, 0);
-        lv_obj_t *n = label(t, &lv_font_montserrat_14, COL_SUB);
-        lv_label_set_text(n, KPI[i]);
-        lv_obj_set_pos(n, 6, 2);
-        s_kpi_val[i] = label(t, &lv_font_montserrat_28, COL_TEXT);
-        lv_label_set_text(s_kpi_val[i], "0");
-        lv_obj_set_pos(s_kpi_val[i], 6, 18);
+        lv_obj_set_size(t, DASH_TILE_W, DASH_TILE_H);
+        lv_obj_set_pos(t, 4 + i * DASH_TILE_PITCH, DASH_TILE_Y);
+        lv_obj_set_style_radius(t, 8, 0);
+        lv_obj_t *n = label(t, &lv_font_montserrat_12, COL_SUB);
+        lv_label_set_text(n, NAME[i]);
+        lv_obj_set_pos(n, 8, 3);
+        s_tile_val[i] = label(t, &lv_font_montserrat_28, col[i]);
+        lv_label_set_text(s_tile_val[i], "0");
+        lv_obj_set_pos(s_tile_val[i], 8, 16);
     }
 
-    lv_obj_t *cp = box(s_idle, COL_CARD);
-    lv_obj_set_size(cp, CHART_W, DASH_MAIN_H);
-    lv_obj_set_pos(cp, 4, DASH_MAIN_Y);
-    lv_obj_set_style_radius(cp, 6, 0);
-    lv_obj_t *title = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_text(title, "Attacks per hour, 24 h");
-    lv_obj_set_pos(title, 10, DASH_MAIN_Y + 3);
-    s_chart_max = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_obj_set_width(s_chart_max, 80);
-    lv_obj_set_style_text_align(s_chart_max, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(s_chart_max, 4 + CHART_W - 6 - 80, DASH_MAIN_Y + 3);
-
-    s_chart = lv_chart_create(s_idle);
-    lv_obj_set_size(s_chart, CHART_W - 12, CHART_H);
-    lv_obj_set_pos(s_chart, 10, DASH_MAIN_Y + 20);
-    lv_chart_set_type(s_chart, LV_CHART_TYPE_BAR);
-    lv_chart_set_point_count(s_chart, 24);
-    lv_chart_set_div_line_count(s_chart, 3, 0);
-    lv_obj_set_style_bg_opa(s_chart, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_chart, 0, 0);
-    lv_obj_set_style_radius(s_chart, 0, 0);
-    lv_obj_set_style_pad_all(s_chart, 0, 0);
-    lv_obj_set_style_pad_column(s_chart, 2, 0);            // gap between the bars
-    lv_obj_set_style_line_color(s_chart, lv_color_hex(0x334155), 0);
-    lv_obj_set_style_radius(s_chart, 0, LV_PART_ITEMS);
-    lv_obj_clear_flag(s_chart, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    s_chart_ser = lv_chart_add_series(s_chart, COL_CHART, LV_CHART_AXIS_PRIMARY_Y);
-    lv_chart_set_all_value(s_chart, s_chart_ser, 0);
-    lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 4);
-    for (int i = 0; i < 4; i++) {
-        s_chart_tick[i] = label(s_idle, &lv_font_montserrat_12, COL_SUB);
-        lv_obj_set_pos(s_chart_tick[i], 10, DASH_MAIN_Y + 20 + CHART_H + 2);
+    lv_obj_t *off = dash_card(DASH_CARD_X0, DASH_CARD_Y, DASH_CARD_W, DASH_CARD_H,
+                              "Top offenders today", "alerts");
+    lv_obj_t *talk = dash_card(DASH_CARD_X1, DASH_CARD_Y, DASH_CARD_W, DASH_CARD_H,
+                               "LAN talkers", "packets an hour");
+    for (int i = 0; i < DASH_ROWS; i++) {
+        dash_row(&s_off[i], off, i, false);
+        dash_row(&s_talk[i], talk, i, true);
     }
-    s_stats = heap_caps_malloc(sizeof(*s_stats), MALLOC_CAP_SPIRAM);
+    s_off_empty  = dash_empty(off, "No alerts today");
+    s_talk_empty = dash_empty(talk, "No LAN devices yet");
 
-    lv_obj_t *wp = box(s_idle, COL_CARD);
-    lv_obj_set_size(wp, WATCH_W, DASH_MAIN_H);
-    lv_obj_set_pos(wp, WATCH_X, DASH_MAIN_Y);
-    lv_obj_set_style_radius(wp, 6, 0);
-    char buf[16];
-    s_w_listen = watch_row(DASH_MAIN_Y + 4, "Listening");
-    snprintf(buf, sizeof(buf), "%d ports", listening_ports());
-    lv_label_set_text(s_w_listen, buf);
-    s_w_up  = watch_row(DASH_MAIN_Y + 28, "Uptime");
-    s_w_lan = watch_row(DASH_MAIN_Y + 52, "LAN devices");
-    s_w_lan_new = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_long_mode(s_w_lan_new, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_w_lan_new, WATCH_W - 12);
-    lv_obj_set_pos(s_w_lan_new, WATCH_X + 6, DASH_MAIN_Y + 75);
-    s_w_top_lbl = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_obj_set_pos(s_w_top_lbl, WATCH_X + 6, DASH_MAIN_Y + 96);
-    s_w_top = label(s_idle, &lv_font_montserrat_20, COL_TEXT);
-    lv_obj_set_pos(s_w_top, WATCH_X + 6, DASH_MAIN_Y + 113);
-    s_w_top_who = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_long_mode(s_w_top_who, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_w_top_who, WATCH_W - 12);
-    lv_obj_set_pos(s_w_top_who, WATCH_X + 6, DASH_MAIN_Y + 137);
-
-    s_dash_line = label(s_idle, &lv_font_montserrat_14, COL_TEXT);
-    lv_label_set_long_mode(s_dash_line, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_dash_line, 468);
-    lv_obj_set_pos(s_dash_line, 6, DASH_LINE_Y);
+    s_foot = label(s_idle, &lv_font_montserrat_14, COL_TEXT);
+    lv_label_set_recolor(s_foot, true);
+    lv_label_set_long_mode(s_foot, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_foot, 468);
+    lv_obj_set_style_text_align(s_foot, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_foot, 6, DASH_FOOT_Y);
 }
 
 static void build_incident(lv_obj_t *scr)
@@ -1486,27 +1455,6 @@ static void build_ui(void)
     lv_obj_set_pos(s_idle, 0, 0);
     lv_obj_clear_flag(s_idle, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    // Green: key figures
-    s_figs = box(s_idle, COL_CARD);
-    lv_obj_set_size(s_figs, 472, FIG_H);
-    lv_obj_align(s_figs, LV_ALIGN_TOP_MID, 0, FIG_Y_IDLE);
-    lv_obj_set_style_radius(s_figs, 6, 0);
-    lv_obj_set_flex_flow(s_figs, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_figs, LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t **fig[] = { &s_f_events, &s_f_sources, &s_f_sd, &s_f_wifi };
-    for (size_t i = 0; i < sizeof(fig) / sizeof(fig[0]); i++) {
-        *fig[i] = label(s_figs, &lv_font_montserrat_14, COL_TEXT);
-        lv_label_set_recolor(*fig[i], true);
-    }
-
-    // Green: the last incident, one muted line
-    s_last = label(s_idle, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_long_mode(s_last, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_last, 464);
-    lv_obj_set_style_text_align(s_last, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_last, LV_ALIGN_TOP_MID, 0, LAST_Y_IDLE);
-
     build_dash();
 
     // Running light: a dark track the full width, and the moving segment on
@@ -1568,16 +1516,6 @@ static void ui_task(void *arg)
     build_ui();
     refr_timing_init();
 
-    // Count sources over the whole flash ring. The event list fills when an
-    // incident is applied.
-    attack_log_t *recent = heap_caps_malloc(sizeof(attack_log_t) * UI_SEED_ROWS,
-                                            MALLOC_CAP_SPIRAM);
-    if (recent) {
-        int n = log_store_get_recent(recent, UI_SEED_ROWS);
-        for (int i = 0; i < n; i++) source_add(recent[i].src_ip);
-        heap_caps_free(recent);
-    }
-    refresh_figures();
 
     alarm_info_t a;
     alarm_get(&a);
@@ -1588,20 +1526,16 @@ static void ui_task(void *arg)
     int64_t last_us = esp_timer_get_time();
     for (;;) {
         umsg_t m;
-        bool events = false;
         while (xQueueReceive(s_q, &m, 0) == pdTRUE) {
             switch (m.kind) {
             case UMSG_EVENT:
-                source_add(m.e.src_ip);
                 kpi_add(&m.e);
-                events = true;
                 break;
             case UMSG_ALARM:    apply_alarm(&m.a);              break;
             case UMSG_NET:      lv_label_set_text(s_net, m.net); break;
             case UMSG_LIT_DONE: lit_off();                      break;
             }
         }
-        if (events) refresh_counts();
         if (s_lit && lv_tick_elaps(s_lit_at) >= LIT_TIMEOUT_MS) {
             ESP_LOGW(TAG, "Face light: no word from the camera in %d ms, white taken down", LIT_TIMEOUT_MS);
             lit_off();
