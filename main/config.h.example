@@ -166,6 +166,20 @@
 #define TRIPWIRE_MYSQL_PORT         3306    // MySQL, sends a 5.7 handshake
 #define TRIPWIRE_MSSQL_PORT         1433    // Microsoft SQL Server (client first)
 #define TRIPWIRE_JETDIRECT_PORT     9100    // HP JetDirect raw printing (client first)
+// MikroTik decoys, on MikroTik-only ports (the FTP, SSH, Telnet and HTTP traps
+// keep their own devices). Winbox and the API stay silent; the API decoy logs
+// only the command word and the user name, never the password. Bandwidth test
+// sends its 4-byte hello. MNDP and MAC-Telnet are UDP and never send: MNDP
+// reports solicitations and announcements (a YELLOW at most, Winbox looks for
+// neighbours too), MAC-Telnet packets meant for this board. The gateway's MAC
+// is whitelisted by itself (a MikroTik router announces itself every 60 s);
+// TRIPWIRE_MT_WHITELIST adds more, for example the PC running Winbox.
+#define TRIPWIRE_WINBOX_PORT        8291    // Winbox (client first)
+#define TRIPWIRE_ROSAPI_PORT        8728    // RouterOS API (client first)
+#define TRIPWIRE_BTEST_PORT         2000    // bandwidth-test server, sends its hello
+#define TRIPWIRE_MNDP_PORT          5678    // UDP, MikroTik neighbour discovery
+#define TRIPWIRE_MACTELNET_PORT     20561   // UDP, MAC-Telnet and MAC-Winbox
+#define TRIPWIRE_MT_WHITELIST       ""      // "aa:bb:cc:dd:ee:ff,11:22:33:44:55:66", up to 8
 
 // LAN discovery listeners (main/detect/discovery.c): log only, these sockets
 // never send. SSDP 1900, WS-Discovery 3702, LLMNR 5355, NBNS 137, Kasa UDP
@@ -347,7 +361,8 @@ _Static_assert(ADB_PORT == 0 || (ADB_PORT != TELNET_ALT_PORT && ADB_PORT != SSH_
     "ADB_PORT collides with an alternate port");
 
 // Tripwire ports: not on another trap, admin or HTTP port (tripwire.h also
-// checks that no two tripwire ports are the same)
+// checks that no two tripwire ports are the same, and the UDP ones against
+// the discovery listeners)
 #define TRIPWIRE_FREE_(p) ((p) == 0 || (PORT_FREE_(p) && (p) != TELNET_ALT_PORT && \
                            (p) != SSH_ALT_PORT && (p) != ADB_PORT && (p) != HTTP_ALT_PORT1 && \
                            (p) != HTTP_ALT_PORT2 && (p) != HTTP_ALT_PORT3))
@@ -358,6 +373,11 @@ _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_REDIS_PORT),     "TRIPWIRE_REDIS_PORT col
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MYSQL_PORT),     "TRIPWIRE_MYSQL_PORT collides with another port");
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_MSSQL_PORT),     "TRIPWIRE_MSSQL_PORT collides with another port");
 _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_WINBOX_PORT),    "TRIPWIRE_WINBOX_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_ROSAPI_PORT),    "TRIPWIRE_ROSAPI_PORT collides with another port");
+_Static_assert(TRIPWIRE_FREE_(TRIPWIRE_BTEST_PORT),     "TRIPWIRE_BTEST_PORT collides with another port");
+_Static_assert(TRIPWIRE_MNDP_PORT == 0 || TRIPWIRE_MNDP_PORT != TRIPWIRE_MACTELNET_PORT,
+    "TRIPWIRE_MNDP_PORT and TRIPWIRE_MACTELNET_PORT must differ");
 
 // Discovery: on or off (its ports are UDP and fixed by the protocols)
 _Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");

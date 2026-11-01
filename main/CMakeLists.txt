@@ -12,6 +12,8 @@
 #   honeypot/trap_listen.c  - 2323 and 2222 on the Telnet and SSH tasks
 #   honeypot/http_engine.c  - ports 80, 8080, 8000, 9000 in one task (replaces http_trap)
 #   honeypot/tripwire.c     - RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect tripwires
+#                             and the MikroTik decoys (Winbox, API, btest, MNDP, MAC-Telnet)
+#   honeypot/mikrotik.c     - MikroTik decoy readers, frame tap and whitelist
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
@@ -43,6 +45,7 @@ idf_component_register(
         "honeypot/trap_listen.c"
         "honeypot/adb_trap.c"
         "honeypot/tripwire.c"
+        "honeypot/mikrotik.c"
         "admin/admin_panel.c"
         "admin/api_ext.c"
         "admin/ws_server.c"

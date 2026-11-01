@@ -933,7 +933,7 @@ const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell
 const TCOUNT=TNAME.length;
 const TPORT=[554,80,23,22,21,'—','—',23,'many','trap','none',5555,'varies','UDP'];
 const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','Real SSH server — login captured','Fake vsFTPd 3.0.5','MITM / ARP cache poisoning','802.11 deauth/disassoc flood','Interactive fake shell — commands captured',
-  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL or JetDirect: any connection is the alert',
+  'Many ports from one source','SYN to a trap port, no login','One MAC asking for many hosts','Fake Android TV box, ADB open','RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect or the MikroTik decoys: any connection is the alert',
   'A device seen on SSDP, WS-Discovery, LLMNR, NBNS, DHCP or a vendor broadcast (log only)'];
 const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
@@ -972,7 +972,7 @@ function codeLead(x,c,hl){
 // The trap port the event hit. Taken from the event when it carries one ("port",
 // or the port in its payload's fixed prefix or suffix), else the type's port.
 const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
-  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z]{2,12} on (\d{1,5})\b/};
+  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z][A-Za-z -]{1,15} on (\d{1,5})\b/};
 function trapPort(e){
   const ok=n=>Number.isInteger(n)&&n>0&&n<65536;
   if(ok(+e.port))return +e.port;

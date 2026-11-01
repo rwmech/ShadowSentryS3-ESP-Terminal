@@ -37,7 +37,10 @@ CONFIG_LWIP_MAX_SOCKETS=50
 # the default 16
 CONFIG_LWIP_MAX_UDP_PCBS=24
 CONFIG_LWIP_MAX_LISTENING_TCP=32
-CONFIG_LWIP_MAX_ACTIVE_TCP=24
+# Active TCP PCBs: 19 established at worst, 3 more admin connections (alert-web) and
+# the 2 raw-pcb MikroTik decoys (no sockets) = 24 of 28. Under MEMP_MEM_MALLOC this is
+# only a cap: nothing is allocated at rest
+CONFIG_LWIP_MAX_ACTIVE_TCP=28
 CONFIG_ESP_TASK_WDT_EN=n
 # wolfSSL: compile in wolfSSH support (wc_SSH_KDF etc.) so the real SSH server builds
 CONFIG_ESP_ENABLE_WOLFSSH=y

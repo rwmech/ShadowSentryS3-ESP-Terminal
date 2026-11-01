@@ -158,7 +158,7 @@ const JH={'X-ShadowSentry':'1','Content-Type':'application/json'};
 const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery'];
 const TPORT=[554,80,23,22,21,0,0,23,0,0,0,5555,0,0];
 const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
-  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z]{2,12} on (\d{1,5})\b/};
+  7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z][A-Za-z -]{1,15} on (\d{1,5})\b/};
 function trapPort(o){
   const ok=n=>Number.isInteger(n)&&n>0&&n<65536;
   if(ok(+o.port))return +o.port;
