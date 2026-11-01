@@ -183,7 +183,8 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     else if (ip) wifi_manager_lookup_mac(ip, s_ev.src_mac);
     if (user && user[0]) strlcpy(s_ev.username, user, sizeof(s_ev.username));
 
-    char held_s[16] = "";
+    EXT_RAM_BSS_ATTR static char held_s[16], ips[16];   // this task only: off the stack, under log_store_append()
+    held_s[0] = '\0';
     if (held) snprintf(held_s, sizeof(held_s), " (+%u held)", (unsigned)held);
     int o = snprintf(s_ev.payload, sizeof(s_ev.payload), "%s on %u%s: %s",
                      svc->name, (unsigned)svc->port, held_s, lead);
@@ -195,7 +196,6 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     memcpy(s_ev.payload + o, hex, fit * 2);
     s_ev.payload[o + fit * 2] = '\0';
 
-    char ips[16];
     ip_text(ip, ips, sizeof(ips));
     ESP_LOGW(TAG, "[%s] %s on %u%s: %s%s", ips, svc->name, (unsigned)svc->port, held_s, lead, hex);
     log_store_append(&s_ev);
@@ -208,18 +208,23 @@ static void emit(int idx, uint32_t ip, const uint8_t *mac, uint16_t held,
     }
 }
 
+// A held connection's console line. Not inlined, so its buffer is not in
+// report()'s frame, which sits under emit() and log_store_append().
+static void __attribute__((noinline)) say_held(int idx, uint32_t ip, int n)
+{
+    char ips[16];
+    ip_text(ip, ips, sizeof(ips));
+    ESP_LOGI(TAG, "[%s] %s on %u, %d B (held, not logged): %s%s",
+             ips, SVC[idx].name, (unsigned)SVC[idx].port, n, s_lead, s_hex);
+}
+
 // The rate limit, then the event or a console line for a held one.
 static void report(int idx, uint32_t ip, const uint8_t *mac, uint32_t hold_s, int n,
                    const char *user, bool quiet_when_held)
 {
     uint16_t held = 0;
     if (!hold_check(ip, (uint8_t)idx, now_ms(), hold_s, &held)) {
-        if (!quiet_when_held) {
-            char ips[16];
-            ip_text(ip, ips, sizeof(ips));
-            ESP_LOGI(TAG, "[%s] %s on %u, %d B (held, not logged): %s%s",
-                     ips, SVC[idx].name, (unsigned)SVC[idx].port, n, s_lead, s_hex);
-        }
+        if (!quiet_when_held) say_held(idx, ip, n);
         return;
     }
     emit(idx, ip, mac, held, user, s_lead, s_hex);
@@ -323,6 +328,15 @@ static void wl_note(const trip_svc_t *svc, const uint8_t mac[6])
              svc->name, ms, is_gw ? "the gateway" : "TRIPWIRE_MT_WHITELIST");
 }
 
+// Not inlined, so its buffer is not in handle_datagram()'s frame.
+static void __attribute__((noinline)) say_other_session(const mt_mactelnet_t *m)
+{
+    char dm[18];
+    wifi_manager_format_mac(m->dst, dm, sizeof(dm));
+    ESP_LOGI(TAG, "MAC-Telnet %s for %s, not this device: counted, not reported (said once)",
+             mikrotik_mactelnet_ptype(m->ptype), dm);
+}
+
 // A datagram from the ring (mt_decoy.c's frame tap); d->mac is the frame's source.
 static void handle_datagram(const mt_dgram_t *d)
 {
@@ -352,18 +366,13 @@ static void handle_datagram(const mt_dgram_t *d)
             break;
         }
     } else {
-        mt_mactelnet_t m;
+        EXT_RAM_BSS_ATTR static mt_mactelnet_t m;   // this task only: off the stack
         if (!mikrotik_mactelnet_parse(d->data, n, &m)) {
             snprintf(s_lead, sizeof(s_lead), "other, %u B: ", (unsigned)d->full_len);
             hex_of(d->data, n < UDP_HEX_MAX ? n : UDP_HEX_MAX, s_hex);
         } else if (memcmp(m.dst, s_my_mac, 6)) {
             // Someone else's session (mactelnet broadcasts them): counted only.
-            if (s_mt_other++ == 0) {
-                char dm[18];
-                wifi_manager_format_mac(m.dst, dm, sizeof(dm));
-                ESP_LOGI(TAG, "MAC-Telnet %s for %s, not this device: counted, not reported (said once)",
-                         mikrotik_mactelnet_ptype(m.ptype), dm);
-            }
+            if (s_mt_other++ == 0) say_other_session(&m);
             return;
         } else {
             snprintf(s_lead, sizeof(s_lead), "%s to this device, %u B",
@@ -402,7 +411,7 @@ static void decoys_drain(void)
 void tripwire_task(void *arg)
 {
     (void)arg;
-    int      sock[SVC_N];
+    EXT_RAM_BSS_ATTR static int sock[SVC_N];    // off the stack, which log_store_append() needs
     EXT_RAM_BSS_ATTR static char list[320];     // startup line only: off the stack, in PSRAM
     size_t   lo = 0;
     int      open = 0;
