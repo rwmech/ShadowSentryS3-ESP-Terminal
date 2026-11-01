@@ -11,13 +11,28 @@
 
 static const char *TAG = "IGNORE";
 
-#define NVS_NS   "ignore"
-#define NVS_KEY  "list"
+#define NVS_NS       "ignore"
+#define NVS_KEY      "list2"    // ignore_entry_t with a code
+#define NVS_KEY_OLD  "list"     // before codes: old_entry_t, migrated at boot
+
+typedef struct {                // the entry before codes (56 B)
+    uint32_t ip;
+    uint8_t  mac[6];
+    uint8_t  _pad[2];
+    uint32_t added_ts;
+    char     note[IGNORE_NOTE_MAX];
+} old_entry_t;
 
 static ignore_entry_t   *s_list;        // PSRAM, IGNORE_MAX entries, guarded by s_mutex
 static volatile int      s_n;           // entries in use; read without the lock as a fast path
 static SemaphoreHandle_t s_mutex;       // the table
 static SemaphoreHandle_t s_save_mutex;  // NVS writes, so a slow flash write never holds s_mutex
+
+static bool code_ok(const char *c)
+{
+    return c && c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9' && c[2] == '-' &&
+           c[3] >= '0' && c[3] <= '9' && c[4] >= '0' && c[4] <= '9' && c[5] == '\0';
+}
 
 static bool mac_given(const uint8_t *m)
 {
@@ -62,26 +77,56 @@ void ignore_init(void)
     configASSERT(s_mutex && s_save_mutex);
 
     nvs_handle_t h;
+    bool migrate = false;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         size_t len = IGNORE_MAX * sizeof(*s_list);
         if (nvs_get_blob(h, NVS_KEY, s_list, &len) == ESP_OK && len % sizeof(*s_list) == 0) {
-            int n = (int)(len / sizeof(*s_list));
-            for (int i = 0; i < n; i++) s_list[i].note[IGNORE_NOTE_MAX - 1] = '\0';
-            s_n = n;
+            s_n = (int)(len / sizeof(*s_list));
+        } else {
+            // The list from before codes: same fields, no code, so every
+            // entry becomes a whole-device entry.
+            old_entry_t *old = heap_caps_calloc(IGNORE_MAX, sizeof(*old), MALLOC_CAP_SPIRAM);
+            len = IGNORE_MAX * sizeof(*old);
+            if (old && nvs_get_blob(h, NVS_KEY_OLD, old, &len) == ESP_OK && len % sizeof(*old) == 0) {
+                int n = (int)(len / sizeof(*old));
+                for (int i = 0; i < n; i++) {
+                    s_list[i].ip       = old[i].ip;
+                    memcpy(s_list[i].mac, old[i].mac, 6);
+                    s_list[i].added_ts = old[i].added_ts;
+                    memcpy(s_list[i].note, old[i].note, IGNORE_NOTE_MAX);
+                }
+                s_n = n;
+                migrate = true;
+            }
+            heap_caps_free(old);
         }
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "%d ignored source%s", s_n, s_n == 1 ? "" : "s");
+    for (int i = 0; i < s_n; i++) {
+        s_list[i].note[IGNORE_NOTE_MAX - 1] = '\0';
+        if (!code_ok(s_list[i].code)) memset(s_list[i].code, 0, IGNORE_CODE_MAX);
+    }
+    if (migrate && save() == ESP_OK) {
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_key(h, NVS_KEY_OLD);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        ESP_LOGW(TAG, "Ignore list migrated: %d entr%s, whole device each", s_n, s_n == 1 ? "y" : "ies");
+    }
+    ESP_LOGI(TAG, "%d ignore entr%s", s_n, s_n == 1 ? "y" : "ies");
 }
 
-esp_err_t ignore_add(uint32_t ip, const uint8_t *mac, const char *note)
+esp_err_t ignore_add(uint32_t ip, const uint8_t *mac, const char *code, const char *note)
 {
     if (!s_mutex) return ESP_ERR_INVALID_STATE;
     bool has_mac = mac_given(mac);
     if (!ip && !has_mac) return ESP_ERR_INVALID_ARG;
+    if (code && code[0] && !code_ok(code)) return ESP_ERR_INVALID_ARG;
 
     ignore_entry_t e = { .ip = ip };
     if (has_mac) memcpy(e.mac, mac, 6);
+    if (code && code[0]) memcpy(e.code, code, IGNORE_CODE_MAX);
     time_t now = time(NULL);
     e.added_ts = now >= 1600000000 ? (uint32_t)now : 0;
     size_t k = 0;
@@ -93,7 +138,8 @@ esp_err_t ignore_add(uint32_t ip, const uint8_t *mac, const char *note)
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
-        if (s_list[i].ip == e.ip && !memcmp(s_list[i].mac, e.mac, 6)) {
+        if (s_list[i].ip == e.ip && !memcmp(s_list[i].mac, e.mac, 6) &&
+            !strcmp(s_list[i].code, e.code)) {
             xSemaphoreGive(s_mutex);
             return ESP_OK;                      // already there
         }
@@ -102,7 +148,8 @@ esp_err_t ignore_add(uint32_t ip, const uint8_t *mac, const char *note)
     s_list[s_n] = e;
     s_n = s_n + 1;
     xSemaphoreGive(s_mutex);
-    ESP_LOGW(TAG, "Source added to the ignore list (%d in use)", s_n);
+    ESP_LOGW(TAG, "%s added to the ignore list (%d in use)",
+             e.code[0] ? "Code" : "Source", s_n);
     return save();
 }
 
@@ -129,14 +176,16 @@ int ignore_list(ignore_entry_t *out, int max)
     return n;
 }
 
-bool ignore_match(uint32_t ip, const uint8_t mac[6])
+bool ignore_match(uint32_t ip, const uint8_t mac[6], const char *code)
 {
     if (!s_mutex || s_n == 0) return false;
     bool has_mac = mac_given(mac);
     bool hit = false;
+    if (!code) code = "";
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (int i = 0; i < s_n && !hit; i++) {
         const ignore_entry_t *e = &s_list[i];
+        if (e->code[0] && strcmp(e->code, code)) continue;      // another code only
         if (ip && e->ip == ip) hit = true;
         else if (has_mac && mac_given(e->mac) && !memcmp(e->mac, mac, 6)) hit = true;
     }

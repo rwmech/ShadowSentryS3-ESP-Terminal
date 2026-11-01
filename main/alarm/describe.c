@@ -1,5 +1,6 @@
 #include "describe.h"
 #include "http_engine.h"
+#include "tripwire.h"
 #include "wifi_manager.h"
 #include "lwip/ip4_addr.h"
 #include <stdarg.h>
@@ -13,6 +14,157 @@
 
 #define TOK_MAX     24      // a quoted command or user name
 #define PATH_MAX_Q  32      // a quoted path
+
+// ── Codes ─────────────────────────────────────────────────────────────────────
+
+// The code table, in code order. HTTP rows carry the engine's label key and
+// tripwire rows the service name; the lookups below match on those.
+typedef struct {
+    const char *code;
+    const char *name;
+    uint8_t     tier;
+    const char *key;        // HTTP label key or tripwire service, else NULL
+} code_row_t;
+
+static const code_row_t CODES[] = {
+    { "17-01", "ARP sweep",          TIER_SEV2, NULL },
+    { "17-02", "Port scan",          TIER_SEV1, NULL },
+    { "17-03", "Probe",              TIER_SEV2, NULL },
+    { "17-04", "Scan ended",         TIER_SEV2, NULL },
+    { "20-01", "SSH login",          TIER_SEV1, NULL },
+    { "20-02", "Telnet login",       TIER_SEV1, NULL },
+    { "20-03", "FTP login",          TIER_SEV1, NULL },
+    { "20-04", "RTSP auth",          TIER_SEV1, NULL },
+    { "20-05", "Shell command",      TIER_SEV1, NULL },
+    { "20-06", "Shell session",      TIER_SEV1, NULL },
+    { "30-01", "Web login",          TIER_SEV1, "login_post" },
+    { "30-02", "Web dotfile",        TIER_SEV2, "dotfile_path" },
+    { "30-03", "Web traversal",      TIER_SEV2, "dotdot_path" },
+    { "30-04", "Web odd method",     TIER_SEV2, "odd_method" },
+    { "30-05", "Web oversize",       TIER_SEV2, "oversize" },
+    { "30-06", "Web non-HTTP",       TIER_SEV2, "non_http" },
+    { "30-07", "Web scanner",        TIER_SEV2, "scanner_ua" },
+    { "30-08", "Web script",         TIER_SEV2, "library_ua" },
+    { "30-09", "Web request",        TIER_SEV2, "unclassified" },
+    { "40-01", "ADB",                TIER_SEV1, NULL },
+    { "40-02", "RDP tripwire",       TIER_SEV1, "RDP" },
+    { "40-03", "VNC tripwire",       TIER_SEV1, "VNC" },
+    { "40-04", "SMB tripwire",       TIER_SEV1, "SMB" },
+    { "40-05", "Redis tripwire",     TIER_SEV1, "Redis" },
+    { "40-06", "MySQL tripwire",     TIER_SEV1, "MySQL" },
+    { "40-07", "MSSQL tripwire",     TIER_SEV1, "MSSQL" },
+    { "40-08", "JetDirect tripwire", TIER_SEV1, "JetDirect" },
+    { "40-09", "Tripwire",           TIER_SEV1, NULL },     // a service added later
+    { "50-01", "ARP spoof",          TIER_SEV1, NULL },
+    { "50-02", "Wi-Fi deauth",       TIER_SEV1, NULL },
+    { "60-01", "LAN discovery",      TIER_SEV3, NULL },
+};
+#define CODE_N ((int)(sizeof(CODES) / sizeof(CODES[0])))
+
+enum {      // indexes into CODES, for the fixed per-type picks
+    C_ARP_SWEEP, C_PORT_SCAN, C_PROBE, C_SCAN_ENDED,
+    C_SSH, C_TELNET, C_FTP, C_RTSP, C_SHELL_CMD, C_SHELL_SESSION,
+    C_WEB_LOGIN, C_WEB_FIRST = C_WEB_LOGIN, C_WEB_UNCLASSIFIED = C_WEB_LOGIN + 8,
+    C_ADB, C_TRIP_FIRST, C_TRIP_OTHER = C_TRIP_FIRST + 7,
+    C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY, C_COUNT
+};
+_Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
+
+static const code_row_t UNKNOWN = { "00-00", "Event", TIER_SEV2, NULL };
+
+static const char *payload_str(const attack_log_t *e, char *buf, size_t len)
+{
+    size_t n = strnlen(e->payload, sizeof(e->payload));
+    if (n >= len) n = len - 1;
+    memcpy(buf, e->payload, n);
+    buf[n] = '\0';
+    return buf;
+}
+
+static const code_row_t *row_by_key(int first, int last, const char *key)
+{
+    for (int i = first; key && i <= last; i++)
+        if (CODES[i].key && !strcmp(CODES[i].key, key)) return &CODES[i];
+    return NULL;
+}
+
+static const code_row_t *code_row(const attack_log_t *e)
+{
+    if (!e) return &UNKNOWN;
+    char p[sizeof(e->payload) + 1];
+    switch (e->type) {
+    case ATTACK_ARP_SWEEP:
+        payload_str(e, p, sizeof(p));
+        return &CODES[strncmp(p, "ARP sweep ended", 15) ? C_ARP_SWEEP : C_SCAN_ENDED];
+    case ATTACK_SCAN:
+        payload_str(e, p, sizeof(p));
+        return &CODES[strncmp(p, "Scan ended", 10) ? C_PORT_SCAN : C_SCAN_ENDED];
+    case ATTACK_PROBE:     return &CODES[C_PROBE];
+    case ATTACK_SSH:       return &CODES[C_SSH];
+    case ATTACK_TELNET:    return &CODES[C_TELNET];
+    case ATTACK_FTP:       return &CODES[C_FTP];
+    case ATTACK_RTSP:      return &CODES[C_RTSP];
+    case ATTACK_SHELL:
+        payload_str(e, p, sizeof(p));
+        return &CODES[strncmp(p, "shell session", 13) ? C_SHELL_CMD : C_SHELL_SESSION];
+    case ATTACK_HTTP: {
+        payload_str(e, p, sizeof(p));
+        const code_row_t *r = row_by_key(C_WEB_FIRST, C_WEB_UNCLASSIFIED, http_engine_category_key(p));
+        if (r) return r;
+        // Upstream's single-port trap: a POST carries credentials.
+        return &CODES[strncmp(p, "POST ", 5) ? C_WEB_UNCLASSIFIED : C_WEB_LOGIN];
+    }
+    case ATTACK_ADB:       return &CODES[C_ADB];
+    case ATTACK_TRIPWIRE: {
+        payload_str(e, p, sizeof(p));
+        const code_row_t *r = row_by_key(C_TRIP_FIRST, C_TRIP_OTHER - 1, tripwire_service_key(p));
+        return r ? r : &CODES[C_TRIP_OTHER];
+    }
+    case ATTACK_ARP:       return &CODES[C_ARP_SPOOF];
+    case ATTACK_WIFI:      return &CODES[C_WIFI_DEAUTH];
+    case ATTACK_DISCOVERY: return &CODES[C_DISCOVERY];
+    default:               return &UNKNOWN;
+    }
+}
+_Static_assert(ATTACK_DISCOVERY + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
+
+const char *describe_code(const attack_log_t *e)
+{
+    return code_row(e)->code;
+}
+
+static const code_row_t *row_by_code(const char *code)
+{
+    if (!code) return NULL;
+    for (int i = 0; i < CODE_N; i++)
+        if (!strcmp(CODES[i].code, code)) return &CODES[i];
+    return NULL;
+}
+
+const char *describe_code_name(const char *code)
+{
+    const code_row_t *r = row_by_code(code);
+    return r ? r->name : NULL;
+}
+
+int describe_code_tier(const char *code)
+{
+    const code_row_t *r = row_by_code(code);
+    return r ? r->tier : 0;
+}
+
+int describe_code_count(void)
+{
+    return CODE_N;
+}
+
+const char *describe_code_at(int i, const char **name, int *tier)
+{
+    if (i < 0 || i >= CODE_N) return NULL;
+    if (name) *name = CODES[i].name;
+    if (tier) *tier = CODES[i].tier;
+    return CODES[i].code;
+}
 
 // ── Tiers ─────────────────────────────────────────────────────────────────────
 

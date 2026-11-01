@@ -227,7 +227,7 @@ void telegram_notify(const attack_log_t *entry)
     if (!s_queue || !settings_telegram_enabled()) return;
     // The dashboard's "Alert on" switches and the ignore list apply here too.
     if ((unsigned)entry->type >= ATTACK_TYPE_COUNT ||
-        !alarm_should_alert((uint8_t)entry->type, entry->src_ip, entry->src_mac)) return;
+        !alarm_should_alert(entry)) return;
     // Non-blocking: drop if the queue is full rather than stalling the caller.
     if (xQueueSend(s_queue, entry, 0) != pdTRUE)
         ESP_LOGD(TAG, "Queue full — notification dropped");
