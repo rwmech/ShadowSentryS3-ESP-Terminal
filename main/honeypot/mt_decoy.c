@@ -1,10 +1,10 @@
-// MikroTik decoys: raw TCP listeners, datagram ring, whitelist and bounded readers. See mikrotik.h.
+// MikroTik decoys: raw TCP listeners, datagram ring, whitelist and bounded readers. See mt_decoy.h.
 //
 // Everything parsed here comes from the network and is hostile: every length
 // is checked against the bytes received before it is read, and only printable
 // ASCII is copied out.
 
-#include "mikrotik.h"
+#include "mt_decoy.h"
 #include "tripwire.h"           // TRIPWIRE_MNDP_PORT, TRIPWIRE_MACTELNET_PORT, TRIPWIRE_MT_WHITELIST
 #include "wifi_manager.h"
 #include "detect.h"             // detect_note_logged()

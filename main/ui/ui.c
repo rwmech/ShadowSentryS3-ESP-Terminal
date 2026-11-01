@@ -68,7 +68,7 @@ static volatile bool s_debug_paused;   // POST /api/debug/panel: skip lv_timer_h
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
-    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
+    "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery", "New device", "Router",
 };
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
 

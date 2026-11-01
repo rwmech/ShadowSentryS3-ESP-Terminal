@@ -15,7 +15,7 @@ extern "C" {
  * the others) and survives OTA updates.
  *
  * Applied immediately: admin password, timezone, alarm timings, sounds,
- * brightness, Discord, WhatsApp, Pi-hole. Applied after a reboot: Wi-Fi,
+ * brightness, Discord, WhatsApp, Pi-hole, MikroTik. Applied after a reboot: Wi-Fi,
  * Telegram.
  *
  * Wi-Fi safety net: if saved Wi-Fi credentials don't get an IP within
@@ -57,6 +57,12 @@ typedef struct {
     char     pihole_password[129];  // secret: an app password, printable ASCII, no spaces
     char     pihole_tls_sha256[65]; // https only: the certificate's SHA-256, 64 lowercase hex digits
     bool     pihole_enabled;        // needs a URL and a password
+    // MikroTik router, read only (admin/mikrotik.c)
+    char     mikrotik_url[96];      // "" = off, else http://host[:port] or https://host[:port], no path
+    char     mikrotik_user[33];     // REST user, printable ASCII, no ':'
+    char     mikrotik_password[65]; // secret
+    char     mikrotik_cert_sha256[65]; // "" or 64 lowercase hex: the pinned certificate (https only)
+    bool     mikrotik_enabled;      // the switch; on only when URL, user and password are set too
 } settings_t;
 
 // Load defaults, then NVS overrides. Call once, after nvs_flash_init().
@@ -102,6 +108,12 @@ bool settings_pihole_enabled(void);
 // '-', at most 63), an optional :port (1-65535), an optional trailing '/' and
 // nothing else. False if it is not of that form. host may be NULL.
 bool settings_pihole_url_parse(const char *u, bool *https, char *host, size_t host_cap, uint16_t *port);
+// MikroTik is configured and switched on: a valid URL, a user, a password.
+bool settings_mikrotik_enabled(void);
+
+// A SHA-256 fingerprint as typed (any case; ':', '-' and spaces ignored) into
+// out as 64 lowercase hex digits. "" stays "". False, and out "", otherwise.
+bool settings_sha256_norm(const char *in, char out[65]);
 
 // Register a callback run after every successful save (e.g. apply brightness).
 void settings_on_change(void (*cb)(void));

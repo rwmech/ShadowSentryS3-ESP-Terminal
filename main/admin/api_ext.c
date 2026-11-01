@@ -19,6 +19,7 @@
 #include "ignore.h"
 #include "detect.h"
 #include "whatsapp.h"
+#include "mikrotik.h"
 #include "notify.h"
 #include "ui.h"
 #include "wifi_monitor.h"
@@ -376,6 +377,13 @@ static void get_settings(int sock)
     JB_LIT(&j, "\"pihole_tls_sha256\":"); jb_str(&j, s.pihole_tls_sha256, sizeof(s.pihole_tls_sha256)); JB_LIT(&j, ",");
     jb_bool(&j, "pihole_enabled", s.pihole_enabled);           JB_LIT(&j, ",");
     jb_bool(&j, "pihole_active", settings_pihole_enabled());   JB_LIT(&j, ",");
+    // MikroTik: the password never leaves; the pin is a public fingerprint.
+    JB_LIT(&j, "\"mikrotik_url\":");  jb_str(&j, s.mikrotik_url, sizeof(s.mikrotik_url));   JB_LIT(&j, ",");
+    JB_LIT(&j, "\"mikrotik_user\":"); jb_str(&j, s.mikrotik_user, sizeof(s.mikrotik_user)); JB_LIT(&j, ",");
+    jb_bool(&j, "mikrotik_password_set", s.mikrotik_password[0]); JB_LIT(&j, ",");
+    JB_LIT(&j, "\"mikrotik_cert_sha256\":"); jb_str(&j, s.mikrotik_cert_sha256, sizeof(s.mikrotik_cert_sha256)); JB_LIT(&j, ",");
+    jb_bool(&j, "mikrotik_enabled", s.mikrotik_enabled);          JB_LIT(&j, ",");
+    jb_bool(&j, "mikrotik_active", settings_mikrotik_enabled());  JB_LIT(&j, ",");
     jb_bool(&j, "reboot_pending", settings_reboot_pending());
     JB_LIT(&j, ",\"running_wifi_ssid\":");
     char ssid[sizeof(live->wifi_ssid)];
@@ -609,6 +617,20 @@ static void post_settings(int sock, const char *req, int req_len)
     }
     if (!err) err = take_bool(root, "pihole_enabled", &s.pihole_enabled);
     if (ph_clear) s.pihole_enabled = false;
+    if (!err) err = take_str(root, "mikrotik_url", s.mikrotik_url, sizeof(s.mikrotik_url), false);
+    if (!err) err = take_str(root, "mikrotik_user", s.mikrotik_user, sizeof(s.mikrotik_user), false);
+    if (!err) err = take_str(root, "mikrotik_password", s.mikrotik_password, sizeof(s.mikrotik_password), true);
+    bool mt_clear = false;      // blank means "unchanged", so clearing needs saying
+    if (!err) err = take_bool(root, "mikrotik_password_clear", &mt_clear);
+    if (mt_clear) s.mikrotik_password[0] = '\0';
+    if (!err) {
+        char pin[100] = "";     // as typed: colons and spaces allowed, normalised below
+        err = take_str(root, "mikrotik_cert_sha256", pin, sizeof(pin), false);
+        const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, "mikrotik_cert_sha256");
+        if (!err && it && cJSON_IsString(it) && !settings_sha256_norm(pin, s.mikrotik_cert_sha256))
+            err = "MikroTik certificate pin: 64 hex digits (SHA-256), or empty";
+    }
+    if (!err) err = take_bool(root, "mikrotik_enabled", &s.mikrotik_enabled);
     s.brightness = (uint8_t)bright;
     bool pw_changed = false;
     {
@@ -621,6 +643,7 @@ static void post_settings(int sock, const char *req, int req_len)
     wipe_item(root, "discord_webhook");
     wipe_item(root, "whatsapp_apikey");
     wipe_item(root, "pihole_password");
+    wipe_item(root, "mikrotik_password");
     cJSON_Delete(root);
 
     bool reboot = false;
@@ -633,6 +656,8 @@ static void post_settings(int sock, const char *req, int req_len)
         return;
     }
     ESP_LOGI(TAG, "Settings saved from the dashboard%s", pw_changed ? " (admin password changed)" : "");
+    mikrotik_start();               // configured just now: start it (admin task, internal stack)
+    mikrotik_settings_changed();    // running: poll again with the new settings
     jb_t j;
     jb_init(&j);
     jb_printf(&j, "{\"ok\":true,\"reboot\":%s,\"password_changed\":%s}",

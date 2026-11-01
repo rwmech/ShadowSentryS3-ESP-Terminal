@@ -60,13 +60,27 @@ static const code_row_t CODES[] = {
     { "50-01", "ARP spoof",          TIER_SEV1, NULL },
     { "50-02", "Wi-Fi deauth",       TIER_SEV1, NULL },
     { "60-01", "LAN discovery",      TIER_SEV3, NULL },
-    // MikroTik decoys (tripwire.c, mikrotik.c). MNDP is SEV2: Winbox clients
+    // Rows below are appended, so the ones above keep their index (alarm_info_t.codes bit).
+    // MikroTik decoys (tripwire.c, mt_decoy.c). MNDP is SEV2: Winbox clients
     // send neighbour discovery too.
     { "40-10", "Winbox",             TIER_SEV1, "Winbox" },
     { "40-11", "RouterOS API",       TIER_SEV1, "RouterOS API" },
     { "40-12", "Bandwidth test",     TIER_SEV1, "Bandwidth test" },
     { "40-13", "MNDP discovery",     TIER_SEV2, "MNDP" },
     { "40-14", "MAC-Telnet",         TIER_SEV1, "MAC-Telnet" },
+    { "60-02", "New device on network", TIER_SEV3, NULL },
+    // Router integrity (admin/mikrotik_watch.c): critical and high are SEV1, medium SEV2.
+    { "55-01", "Router scheduler",   TIER_SEV1, NULL },
+    { "55-02", "Router users",       TIER_SEV1, NULL },
+    { "55-03", "Router proxy",       TIER_SEV1, NULL },
+    { "55-04", "Router NAT",         TIER_SEV1, NULL },
+    { "55-05", "Router service",     TIER_SEV1, NULL },
+    { "55-06", "Router firewall",    TIER_SEV1, NULL },
+    { "55-07", "Router DNS",         TIER_SEV1, NULL },
+    { "55-08", "Router tunnel",      TIER_SEV1, NULL },
+    { "55-09", "Router logging",     TIER_SEV1, NULL },
+    { "55-10", "Router login",       TIER_SEV2, NULL },
+    { "55-11", "Router version",     TIER_SEV2, NULL },
 };
 #define CODE_N ((int)(sizeof(CODES) / sizeof(CODES[0])))
 
@@ -76,7 +90,8 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_WEB_LOGIN, C_WEB_FIRST = C_WEB_LOGIN, C_WEB_UNCLASSIFIED = C_WEB_LOGIN + 8,
     C_ADB, C_TRIP_FIRST, C_TRIP_OTHER = C_TRIP_FIRST + 7,
     C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY,
-    C_MT_FIRST, C_MT_LAST = C_MT_FIRST + 4, C_COUNT
+    C_MT_FIRST, C_MT_LAST = C_MT_FIRST + 4,
+    C_NEW_DEVICE, C_ROUTER_FIRST, C_ROUTER_LAST = C_ROUTER_FIRST + 10, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
 
@@ -135,10 +150,19 @@ static const code_row_t *code_row(const attack_log_t *e)
     case ATTACK_ARP:       return &CODES[C_ARP_SPOOF];
     case ATTACK_WIFI:      return &CODES[C_WIFI_DEAUTH];
     case ATTACK_DISCOVERY: return &CODES[C_DISCOVERY];
+    case ATTACK_NEW_DEVICE: return &CODES[C_NEW_DEVICE];
+    case ATTACK_ROUTER: {
+        // "[55-NN] <detail>": the watcher names the code.
+        payload_str(e, p, sizeof(p));
+        char code[DESCRIBE_CODE_LEN] = "";
+        if (p[0] == '[' && strlen(p) > 6 && p[6] == ']') { memcpy(code, p + 1, 5); code[5] = 0; }
+        for (int i = C_ROUTER_FIRST; i <= C_ROUTER_LAST; i++) if (!strcmp(CODES[i].code, code)) return &CODES[i];
+        return &CODES[C_ROUTER_FIRST];
+    }
     default:               return &UNKNOWN;
     }
 }
-_Static_assert(ATTACK_DISCOVERY + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
+_Static_assert(ATTACK_ROUTER + 1 == ATTACK_TYPE_COUNT, "describe.c: give the new attack type a code in CODES[] and code_row()");
 
 const char *describe_code(const attack_log_t *e)
 {
@@ -435,6 +459,16 @@ static void mt_detail(sb_t *s, const char *key, const char *p)
     else                                sb_fmt(s, "%s", t);
 }
 
+static void new_device_detail(sb_t *s, const char *p)
+{
+    // "New device <name> on <where>" (admin/mikrotik.c); the router's text,
+    // so cleaned like attacker text.
+    char d[64];
+    const char *q = !strncmp(p, "New device ", 11) ? p + 11 : p;
+    clean(d, sizeof(d), q, strlen(q));
+    sb_fmt(s, "%s", d[0] ? d : "a device joined");
+}
+
 size_t describe_event(const attack_log_t *e, char *out, size_t len)
 {
     if (!out || !len) return 0;
@@ -530,6 +564,16 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
     case ATTACK_DISCOVERY:
         discovery_detail(&s, p);
         break;
+    case ATTACK_NEW_DEVICE:
+        new_device_detail(&s, p);
+        break;
+    case ATTACK_ROUTER: {
+        char d[80];
+        const char *q = (p[0] == '[' && strlen(p) > 8) ? p + 8 : p;
+        clean(d, sizeof(d), q, strlen(q));
+        sb_fmt(&s, "%s", d[0] ? d : "configuration changed");
+        break;
+    }
     default:
         sb_fmt(&s, "type %d", (int)e->type);
         break;

@@ -2,7 +2,7 @@
 
 #include "tripwire.h"
 #include "trap_listen.h"
-#include "mikrotik.h"           // MikroTik decoys: raw TCP listeners, datagram ring, readers
+#include "mt_decoy.h"           // MikroTik decoys: raw TCP listeners, datagram ring, readers
 #include "log_store.h"
 #include "telegram.h"
 #include "wifi_manager.h"
@@ -53,7 +53,7 @@ static const char VNC_BANNER[] = "RFB 003.008\n";
 // How a service is served.
 enum {
     TW_SOCK,        // a listen socket here; first bytes as hex
-    TW_WINBOX,      // MikroTik decoys, served by mikrotik.c without sockets
+    TW_WINBOX,      // MikroTik decoys, served by mt_decoy.c without sockets
     TW_API,
     TW_BTEST,
     TW_MNDP,
@@ -80,7 +80,7 @@ static const trip_svc_t SVC[] = {
     { "JetDirect",      TRIPWIRE_JETDIRECT_PORT, NULL, 0, TW_SOCK },
     { "Winbox",         TRIPWIRE_WINBOX_PORT,    NULL, 0, TW_WINBOX },
     { "RouterOS API",   TRIPWIRE_ROSAPI_PORT,    NULL, 0, TW_API },
-    { "Bandwidth test", TRIPWIRE_BTEST_PORT,     NULL, 0, TW_BTEST },      // mikrotik.c sends the hello
+    { "Bandwidth test", TRIPWIRE_BTEST_PORT,     NULL, 0, TW_BTEST },      // mt_decoy.c sends the hello
     { "MNDP",           TRIPWIRE_MNDP_PORT,      NULL, 0, TW_MNDP },
     { "MAC-Telnet",     TRIPWIRE_MACTELNET_PORT, NULL, 0, TW_MACTELNET },
 };
@@ -269,7 +269,7 @@ static mt_mndp_t s_mndp;
 #define UDP_HEX_MAX 32                      // bytes of hex for a datagram we cannot read
 #define CNT_REPORT_MS 60000                 // drop counters: at most one line a minute
 
-// A finished TCP decoy connection from mikrotik.c.
+// A finished TCP decoy connection from mt_decoy.c.
 static void handle_tcp(const mt_tcp_result_t *r)
 {
     static const uint8_t KIND[MT_TCP_N] = { [MT_TCP_WINBOX] = TW_WINBOX, [MT_TCP_API] = TW_API,
@@ -321,7 +321,7 @@ static void wl_note(const trip_svc_t *svc, const uint8_t mac[6])
              svc->name, ms, is_gw ? "the gateway" : "TRIPWIRE_MT_WHITELIST");
 }
 
-// A datagram from the ring (mikrotik.c's frame tap); d->mac is the frame's source.
+// A datagram from the ring (mt_decoy.c's frame tap); d->mac is the frame's source.
 static void handle_datagram(const mt_dgram_t *d)
 {
     int idx = -1;

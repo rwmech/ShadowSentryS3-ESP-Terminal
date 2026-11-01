@@ -46,9 +46,9 @@
  *   JetDirect  9100  client first, no banner
  *
  * MikroTik decoys (MikroTik-specific ports only; the FTP, SSH, Telnet and
- * HTTP traps keep presenting their own devices). Served by mikrotik.c with
+ * HTTP traps keep presenting their own devices). Served by mt_decoy.c with
  * no socket and no file descriptor (raw lwIP pcbs for TCP, a copy from the
- * station input wrapper for UDP; see mikrotik.h); this task reads their
+ * station input wrapper for UDP; see mt_decoy.h); this task reads their
  * results every TRIPWIRE_POLL_MS and logs them like the others:
  *   Winbox          8291  client first; silent. Logs the first frame's
  *                         first bytes and its length (the bytes of the

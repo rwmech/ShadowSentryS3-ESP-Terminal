@@ -14,7 +14,7 @@
 #include "trap_listen.h"            // TELNET_ALT_PORT, SSH_ALT_PORT, ADB_PORT
 #include "http_engine.h"            // HTTP_ENG_PORT1..3 (0 when the engine is off)
 #include "tripwire.h"               // TRIPWIRE_*_PORT, TRIPWIRE_LISTEN (0 when tripwires are off)
-#include "mikrotik.h"               // mikrotik_frame_tap(): datagrams for the MNDP and MAC-Telnet decoys
+#include "mt_decoy.h"               // mikrotik_frame_tap(): datagrams for the MNDP and MAC-Telnet decoys
 #include "ss_lwip_hooks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

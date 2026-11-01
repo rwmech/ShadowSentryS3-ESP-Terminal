@@ -126,6 +126,29 @@
 #define PIHOLE_URL                  "http://ph.local"
 #define PIHOLE_APP_PASSWORD         ""
 // #define PIHOLE_ENABLE            0
+// ── MikroTik router (read only) ───────────────────────────────────────────────
+//
+// The RouterOS v7 REST API, read only: DHCP leases, ARP, the bridge host table
+// (switch port) and the Wi-Fi registration tables every 5 minutes, and one
+// device's connection tracking on demand. Tells you which port or AP a device
+// is on and what it talks to outside. Nothing is ever written to the router.
+// Use a read-only user restricted to this board's address (README, "MikroTik").
+//
+// MIKROTIK_URL: the router's www service, no path:
+//   "http://192.168.0.1:8080"  plain HTTP (the www service): Basic credentials
+//                              cross the LAN in the clear
+//   "https://192.168.0.1"      HTTPS (www-ssl), verified by certificate pin
+// MIKROTIK_USER and MIKROTIK_PASSWORD: "" for either disables the router.
+// MIKROTIK_CERT_SHA256: https only. The SHA-256 fingerprint of the router's
+// certificate, 64 hex digits (colons allowed). "" means trust on first use:
+// the first certificate seen is recorded, shown in Settings, and any other one
+// is refused until you pin it or forget the recorded one.
+// The dashboard's Settings page can set or clear all four at run time.
+
+#define MIKROTIK_URL                ""
+#define MIKROTIK_USER               ""
+#define MIKROTIK_PASSWORD           ""
+#define MIKROTIK_CERT_SHA256        ""
 
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
@@ -373,6 +396,15 @@ _Static_assert(sizeof(PIHOLE_URL) <= 96,
     "PIHOLE_URL must be at most 95 characters");
 _Static_assert(sizeof(PIHOLE_APP_PASSWORD) <= 129,
     "PIHOLE_APP_PASSWORD must be at most 128 characters");
+_Static_assert(sizeof(MIKROTIK_URL) <= 96,
+    "MIKROTIK_URL must be at most 95 characters");
+_Static_assert(sizeof(MIKROTIK_USER) <= 33,
+    "MIKROTIK_USER must be at most 32 characters");
+_Static_assert(sizeof(MIKROTIK_PASSWORD) <= 65,
+    "MIKROTIK_PASSWORD must be at most 64 characters");
+_Static_assert(sizeof(MIKROTIK_CERT_SHA256) == 1 || sizeof(MIKROTIK_CERT_SHA256) == 65 ||
+               sizeof(MIKROTIK_CERT_SHA256) == 96,
+    "MIKROTIK_CERT_SHA256 must be empty or 64 hex digits (or 32 colon-separated pairs)");
 
 _Static_assert(LOG_RING_SIZE >= 10 && LOG_RING_SIZE <= 500,
     "LOG_RING_SIZE must be 10–500  (500 entries ≈ 117 KB RAM)");

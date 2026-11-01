@@ -35,10 +35,11 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 # The admin port holds up to 4 connections at once (ADMIN_CONN_MAX, admin_panel.c),
 # 3 more than before: 52 at worst, leaving 11 descriptors for files (SPIFFS 4,
 # FAT 4, stdio 3), and 22 established TCP connections of 24.
-# Recount (merge lane, 2026-11-01): TCP listeners 20, TCP connections 21 (traps 10,
-# admin 4, WebSocket 3 with ADMIN_WS_MAX_CLIENTS 2, outbound 5 with Pi-hole), UDP 11
-# (discovery 10, the WebSocket httpd's control socket 1) = 52 of 53, one spare.
-# The MikroTik decoys use raw pcbs: no sockets
+# Recount (merge lane, 2026-11-01): TCP listeners 20, TCP connections 22 (traps 10,
+# admin 4, WebSocket 3 with ADMIN_WS_MAX_CLIENTS 2, outbound 6: GeoIP, Telegram,
+# Discord, WhatsApp, Pi-hole, MikroTik REST), UDP 11 (discovery 10, the WebSocket
+# httpd's control socket 1) = 53 of 53, no spare. The MikroTik decoys use raw pcbs:
+# no sockets
 CONFIG_LWIP_MAX_SOCKETS=53
 # UDP PCBs: 10 discovery listeners plus DHCP, DNS, SNTP and mDNS come to about 15 of
 # the default 16

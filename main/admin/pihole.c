@@ -1,6 +1,7 @@
 // Pi-hole v6 client. See pihole.h.
 
 #include "pihole.h"
+#include "correlate.h"          // correlate_pihole_device(), the device intelligence hook
 #include "settings.h"
 #include "json_esc.h"
 #include "discovery.h"
@@ -1081,4 +1082,42 @@ size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t c
     jw_raw(&j, ",\"as_of\":%lu}", (unsigned long)s_cur->as_of);
     xSemaphoreGive(s_mux);
     return j.full ? cap : j.o;
+}
+
+// ── Device intelligence (correlate.h) ─────────────────────────────────────────
+
+// correlate.c's weak hook, from the published table: a read under s_mux, no
+// request. Pi-hole v6's top_clients counts cover FTL's in-memory window (24 h
+// by default); the top domains are counted over the device's last top_of
+// queries and carry no blocked flag or answer address, so blocked is false and
+// ip[] 0 for each.
+bool correlate_pihole_device(uint32_t ip, const uint8_t *mac, correlate_dns_t *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+    if (!s_mux || !settings_pihole_enabled()) return false;
+    char ips[16] = "";
+    if (ip) fmt_ip(ip, ips, sizeof(ips));
+    bool found = false;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    const ph_dev_t *d = s_cur ? find(s_cur, mac, ips) : NULL;
+    if (d) {
+        found = true;
+        out->as_of = s_cur->as_of;
+        out->server_ip = s_ip;                      // network order, 0 when not resolved
+        if (d->queries >= 0) {                      // unknown counts leave window_s 0: no DNS-bypass test
+            out->window_s = 24 * 3600;
+            out->total = d->queries > UINT16_MAX ? UINT16_MAX : (uint16_t)d->queries;
+            out->blocked = d->blocked < 0 ? 0 : d->blocked > UINT16_MAX ? UINT16_MAX : (uint16_t)d->blocked;
+        }
+        if (d->top_ts) {
+            for (int i = 0; i < d->n_top && out->n < CORRELATE_DNS_MAX; i++) {
+                correlate_dns_q_t *q = &out->q[out->n++];
+                strlcpy(q->domain, d->top[i].d, sizeof(q->domain));
+                q->ts = d->top_ts > 1 ? d->top_ts : 0;
+            }
+        }
+    }
+    xSemaphoreGive(s_mux);
+    return found;
 }

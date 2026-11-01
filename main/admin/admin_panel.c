@@ -14,6 +14,7 @@
 #include "wifi_roam.h"
 #include "web_assets.h"
 #include "api_pihole.h"
+#include "api_mikrotik.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -463,6 +464,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_crash_handle(sock, buf, len)) return;     // crash records, debug crash
     if (api_pihole_handle(sock, buf, len)) return;    // Pi-hole status, test, refresh, device
     if (web_assets_handle(sock, buf, len)) return;    // device page, analysis.js (gzip)
+    if (api_mikrotik_handle(sock, buf, len)) return;  // router status and device intelligence
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);
