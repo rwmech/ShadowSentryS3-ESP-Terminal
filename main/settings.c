@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "esp_attr.h"
 #include "config.h"
 #include "log_store.h"        // ATTACK_DISCOVERY, ATTACK_TYPE_COUNT
 #include "nvs.h"
@@ -74,8 +75,10 @@ _Static_assert((PIHOLE_ENABLE) == 0 || (PIHOLE_ENABLE) == 1, "PIHOLE_ENABLE must
 #define MIKROTIK_CERT_SHA256 ""
 #endif
 
-static settings_t        s_live;     // what is running now
-static settings_t        s_saved;    // what NVS holds: the next boot runs this
+// Both copies in PSRAM (EXT_RAM_BSS_ATTR, a no-op without
+// CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY): 1.1 KB each, read by tasks only.
+EXT_RAM_BSS_ATTR static settings_t s_live;     // what is running now
+EXT_RAM_BSS_ATTR static settings_t s_saved;    // what NVS holds: the next boot runs this
 static SemaphoreHandle_t s_mutex;
 static bool              s_wifi_overridden = false;
 static bool              s_wa_at_boot;   // WhatsApp configured at boot: its task runs only then

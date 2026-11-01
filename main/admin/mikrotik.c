@@ -13,6 +13,7 @@
 // record), every value is cut to a fixed size, and callers escape on output.
 
 #include "mikrotik.h"
+#include "esp_attr.h"
 #include "mikrotik_watch.h"
 #include "settings.h"
 #include "wifi_manager.h"
@@ -166,7 +167,7 @@ static mt_state_t       *S;
 static SemaphoreHandle_t s_lock;            // hosts[front], slots
 static QueueHandle_t     s_q;
 static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;   // s_stat
-static mikrotik_status_t s_stat;
+EXT_RAM_BSS_ATTR static mikrotik_status_t s_stat;    // PSRAM
 static volatile bool     s_running;
 static uint32_t          s_test_next;
 

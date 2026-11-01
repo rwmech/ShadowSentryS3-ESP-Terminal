@@ -7,6 +7,7 @@
 // every length is checked and every string is JSON-escaped on the way out.
 
 #include "api_ext.h"
+#include "esp_attr.h"
 #include "json_esc.h"
 #include "settings.h"
 #include "sd_log.h"
@@ -102,7 +103,7 @@ static void jb_printf(jb_t *j, const char *fmt, ...)
 // so one static buffer serves; it holds max up to 170 bytes fully escaped.
 static void jb_str(jb_t *j, const char *s, size_t max)
 {
-    static char esc[1024];
+    EXT_RAM_BSS_ATTR static char esc[1024];      // PSRAM
     JB_LIT(j, "\"");
     size_t n = json_esc(s, max, esc, sizeof(esc));
     jb_raw(j, esc, n);

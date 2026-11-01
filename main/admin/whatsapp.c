@@ -6,6 +6,7 @@
 // sender, the pacing and the hourly cap. Big buffers are PSRAM.
 
 #include "whatsapp.h"
+#include "esp_attr.h"
 #include "notify.h"
 #include "settings.h"
 #include "wifi_manager.h"
@@ -41,7 +42,7 @@ static bool               s_running;
 // Task-only state.
 static char              *s_url, *s_text;
 static settings_t        *s_set;
-static notify_msg_t       s_msg;
+EXT_RAM_BSS_ATTR static notify_msg_t s_msg;    // PSRAM, as the task's stack
 static TickType_t         s_next_ok;            // pacing: no send before this tick
 static int64_t            s_window_start;       // monotonic s
 static int                s_window_count;

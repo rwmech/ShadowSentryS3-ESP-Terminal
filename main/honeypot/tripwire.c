@@ -1,6 +1,7 @@
 // Tripwire listeners: log the first bytes of any connection and close. See tripwire.h.
 
 #include "tripwire.h"
+#include "esp_attr.h"
 #include "trap_listen.h"
 #include "mt_decoy.h"           // MikroTik decoys: raw TCP listeners, datagram ring, readers
 #include "log_store.h"
@@ -114,7 +115,7 @@ typedef struct {
     uint8_t  used;
 } hold_t;
 
-static hold_t s_hold[TRIPWIRE_HOLD_SLOTS];
+EXT_RAM_BSS_ATTR static hold_t s_hold[TRIPWIRE_HOLD_SLOTS];     // PSRAM
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -145,10 +146,11 @@ static bool hold_check(uint32_t ip, uint8_t svc, uint32_t now, uint32_t hold_s, 
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
-static uint8_t      s_rx[TRIPWIRE_RX_MAX];
-static char         s_hex[TRIPWIRE_RX_MAX * 2 + 1];
-static char         s_lead[128];            // readable part of the payload, before any hex
-static attack_log_t s_ev;
+// In PSRAM (EXT_RAM_BSS_ATTR): this task's SPIFFS writes copy them first.
+EXT_RAM_BSS_ATTR static uint8_t      s_rx[TRIPWIRE_RX_MAX];
+EXT_RAM_BSS_ATTR static char         s_hex[TRIPWIRE_RX_MAX * 2 + 1];
+EXT_RAM_BSS_ATTR static char         s_lead[128];    // readable part of the payload, before any hex
+EXT_RAM_BSS_ATTR static attack_log_t s_ev;
 static uint32_t     s_stack_low = UINT32_MAX;
 
 static void hex_of(const uint8_t *b, size_t n, char *out)
@@ -401,7 +403,7 @@ void tripwire_task(void *arg)
 {
     (void)arg;
     int      sock[SVC_N];
-    static char list[320];          // startup line only: off the stack
+    EXT_RAM_BSS_ATTR static char list[320];     // startup line only: off the stack, in PSRAM
     size_t   lo = 0;
     int      open = 0;
 
