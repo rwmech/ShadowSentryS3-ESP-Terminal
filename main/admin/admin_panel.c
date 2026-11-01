@@ -12,6 +12,7 @@
 #include "api_crash.h"
 #include "crash.h"
 #include "wifi_roam.h"
+#include "web_assets.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -31,6 +32,7 @@
 #include "mbedtls/base64.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
+#include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,9 +41,7 @@
 
 static const char *TAG = "ADMIN";
 
-// Dashboard HTML — linked by CMake EMBED_TXTFILES directive in main/CMakeLists.txt
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+// Dashboard HTML: served gzip-compressed by web_assets.c (fork).
 
 // ── JSON helper ───────────────────────────────────────────────────────────────
 
@@ -182,22 +182,6 @@ static void serve_status_json(int sock)
         len);
     send(sock, hdr, hdr_len, 0);
     send(sock, json, len, 0);
-}
-
-static void serve_dashboard(int sock)
-{
-    size_t html_len = (size_t)(index_html_end - index_html_start);
-    char hdr[256];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html; charset=utf-8\r\n"
-        "X-Frame-Options: DENY\r\n"                             // no clickjacking
-        "Content-Security-Policy: frame-ancestors 'none'\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n\r\n",
-        html_len);
-    send(sock, hdr, hdr_len, 0);
-    send(sock, index_html_start, html_len, 0);
 }
 
 static void serve_attacks_json(int sock)
@@ -399,28 +383,63 @@ static void handle_request(int sock, char *buf, int len);
 // headers runs to ~1 KB), so read until the blank line or the buffer is full.
 #define ADMIN_REQ_MAX 2048
 
-static void handle_client(int sock)
+// ── Connections (fork) ────────────────────────────────────────────────────────
+//
+// Browsers open speculative (preconnect) sockets that send nothing for a
+// while. Read with a blocking recv() one connection at a time, each of those
+// held the loop for up to ADMIN_RECV_TIMEOUT_S while real requests queued
+// behind it. Now up to ADMIN_CONN_MAX accepted connections are held at once
+// and read without blocking under select(); whichever has a complete request
+// head is handled. Handlers still run one at a time on this task (they share
+// static and PSRAM buffers), so a long one (OTA, a device-log scan of 3 s at
+// most) still holds the loop while it runs, but nothing waits on an idle socket.
+#ifndef ADMIN_CONN_MAX
+#define ADMIN_CONN_MAX      4       // held at once; counted in CONFIG_LWIP_MAX_SOCKETS
+#endif
+#define ADMIN_IDLE_MS       2000    // no new byte this long, head not complete: closed
+#define ADMIN_EVICT_MS      500     // all slots busy: a silent one this old makes room
+#define ADMIN_POLL_MS       200
+
+typedef struct {
+    int     fd;                     // -1: free
+    int     len;                    // head bytes so far
+    int64_t opened, last;           // accepted, last byte (esp_timer, us)
+    char   *buf;                    // ADMIN_REQ_MAX, PSRAM
+} admin_conn_t;
+
+static admin_conn_t s_conn[ADMIN_CONN_MAX];
+
+static void conn_close(admin_conn_t *c)
 {
-    static char *buf;   // PSRAM, allocated once; single-threaded accept loop
-    if (!buf) buf = heap_caps_malloc(ADMIN_REQ_MAX, MALLOC_CAP_SPIRAM);
-    if (!buf) return;
+    memset(c->buf, 0, (size_t)c->len + 1);  // it held the Authorization header, maybe passwords
+    close(c->fd);
+    c->fd = -1;
+    c->len = 0;
+}
+
+// A complete head: blocking reads with the usual timeout again (handlers read
+// request bodies), then handled inline.
+static void conn_serve(admin_conn_t *c)
+{
     struct timeval tv = {.tv_sec = ADMIN_RECV_TIMEOUT_S, .tv_usec = 0};
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    c->buf[c->len] = '\0';
+    handle_request(c->fd, c->buf, c->len);
+    conn_close(c);
+}
 
-    int len = 0;
-    int64_t deadline = esp_timer_get_time() + ADMIN_RECV_TIMEOUT_S * 1000000LL;
-    while (len < ADMIN_REQ_MAX - 1 && esp_timer_get_time() < deadline) {
-        int n = recv(sock, buf + len, ADMIN_REQ_MAX - 1 - len, 0);
-        if (n <= 0) break;
-        len += n;
-        buf[len] = '\0';
-        if (strstr(buf, "\r\n\r\n")) break;
+// Take what is waiting, without blocking; serve or close as it turns out.
+static void conn_read(admin_conn_t *c, int64_t now)
+{
+    int n = recv(c->fd, c->buf + c->len, ADMIN_REQ_MAX - 1 - c->len, MSG_DONTWAIT);
+    if (n > 0) {
+        c->len += n;
+        c->buf[c->len] = '\0';
+        c->last = now;
+        if (strstr(c->buf, "\r\n\r\n") || c->len >= ADMIN_REQ_MAX - 1) conn_serve(c);
+        return;
     }
-    if (len <= 0) return;
-    buf[len] = '\0';
-
-    handle_request(sock, buf, len);
-    memset(buf, 0, (size_t)len);   // it held the Authorization header, maybe passwords
+    if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) conn_close(c);
 }
 
 static void handle_request(int sock, char *buf, int len)
@@ -441,6 +460,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_devlog_handle(sock, buf, len)) return;    // one device's log lines
     if (api_tasks_handle(sock, buf, len)) return;     // per-task CPU share (no console)
     if (api_crash_handle(sock, buf, len)) return;     // crash records, debug crash
+    if (web_assets_handle(sock, buf, len)) return;    // device page, analysis.js (gzip)
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);
@@ -453,7 +473,7 @@ static void handle_request(int sock, char *buf, int len)
         ESP_LOGI(TAG, "Logs cleared via admin panel");
         send_204(sock);
     } else if (strncmp(buf, "GET", 3) == 0) {
-        serve_dashboard(sock);
+        web_assets_dashboard(sock, buf);
     } else {
         send_404(sock);
     }
@@ -482,14 +502,61 @@ void admin_panel_task(void *arg)
     ESP_LOGI(TAG, "Admin panel on port %d (user: admin) — "
                   "http://<device-ip>:%d", ADMIN_PORT, ADMIN_PORT);
 
+    for (int i = 0; i < ADMIN_CONN_MAX; i++) {
+        s_conn[i].fd = -1;
+        s_conn[i].buf = heap_caps_calloc(1, ADMIN_REQ_MAX, MALLOC_CAP_SPIRAM);
+        configASSERT(s_conn[i].buf);
+    }
     while (1) {
-        struct sockaddr_in client;
-        socklen_t clen = sizeof(client);
-        int csock = accept(srv, (struct sockaddr *)&client, &clen);
-        if (csock < 0) continue;
+        int64_t now = esp_timer_get_time();
+        fd_set rd;
+        FD_ZERO(&rd);
+        int maxfd = -1, slot = -1, evict = -1;
+        for (int i = 0; i < ADMIN_CONN_MAX; i++) {
+            admin_conn_t *c = &s_conn[i];
+            if (c->fd < 0) { if (slot < 0) slot = i; continue; }
+            FD_SET(c->fd, &rd);
+            if (c->fd > maxfd) maxfd = c->fd;
+            if (!c->len && now - c->opened > ADMIN_EVICT_MS * 1000LL &&
+                (evict < 0 || c->opened < s_conn[evict].opened)) evict = i;
+        }
+        // Listen only when a connection can be taken, so a full table never spins.
+        if (slot >= 0 || evict >= 0) {
+            FD_SET(srv, &rd);
+            if (srv > maxfd) maxfd = srv;
+        }
+        struct timeval tv = {.tv_sec = 0, .tv_usec = ADMIN_POLL_MS * 1000};
+        int n = select(maxfd + 1, &rd, NULL, NULL, &tv);
+        if (n < 0) { vTaskDelay(pdMS_TO_TICKS(ADMIN_POLL_MS)); continue; }
 
-        ESP_LOGD(TAG, "Admin connection from %s", inet_ntoa(client.sin_addr));
-        handle_client(csock);
-        close(csock);
+        if (n > 0 && FD_ISSET(srv, &rd)) {
+            if (slot < 0) {                                 // make room: the oldest silent one
+                ESP_LOGD(TAG, "Admin: dropped a connection that sent nothing");
+                conn_close(&s_conn[evict]);
+                slot = evict;
+            }
+            struct sockaddr_in client;
+            socklen_t clen = sizeof(client);
+            int csock = accept(srv, (struct sockaddr *)&client, &clen);
+            if (csock >= 0) {
+                ESP_LOGD(TAG, "Admin connection from %s", inet_ntoa(client.sin_addr));
+                admin_conn_t *c = &s_conn[slot];
+                c->fd = csock;
+                c->len = 0;
+                c->opened = c->last = esp_timer_get_time();
+            }
+        }
+        for (int i = 0; i < ADMIN_CONN_MAX; i++) {
+            admin_conn_t *c = &s_conn[i];
+            if (c->fd < 0) continue;
+            int64_t t = esp_timer_get_time();       // a handler above may have taken a while
+            bool stale = t - c->last > ADMIN_IDLE_MS * 1000LL ||
+                         t - c->opened > ADMIN_RECV_TIMEOUT_S * 1000000LL;
+            // Read when select says so, and once more before closing a stale one
+            // (bytes may have come in while a handler ran).
+            if ((n > 0 && FD_ISSET(c->fd, &rd)) || stale) conn_read(c, t);
+            if (c->fd >= 0 && (t - c->last > ADMIN_IDLE_MS * 1000LL ||
+                               t - c->opened > ADMIN_RECV_TIMEOUT_S * 1000000LL)) conn_close(c);
+        }
     }
 }

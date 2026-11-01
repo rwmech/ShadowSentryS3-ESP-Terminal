@@ -90,6 +90,14 @@ tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
 .md summary{cursor:pointer;color:var(--muted);font-size:13px}
 .md pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px var(--mono);color:var(--muted);margin-top:6px}
 progress{width:220px}
+/* Loading spinner, as on the dashboard */
+.spin{display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border-radius:50%;
+  border:2px solid var(--g-dim);border-top-color:var(--g);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+.loading{color:var(--muted);font-size:14px;padding:6px 0}
+.loading.err{color:var(--red)}
+.loading .btn{margin-left:10px}
 </style>
 </head>
 <body>
@@ -102,16 +110,16 @@ progress{width:220px}
 <main>
   <div class="card">
     <div class="ctl" style="justify-content:space-between">
-      <div><div class="idt" id="id-label">Loading...</div><div class="tsub" id="id-sub"></div></div>
+      <div><div class="idt" id="id-label"><span class="spin"></span>Loading...</div><div class="tsub" id="id-sub"></div></div>
       <div class="ctl"><button class="btn" type="button" id="ai-btn">Get AI advice</button></div>
     </div>
     <div class="tsub" id="ai-msg" hidden></div>
     <div class="kv" id="id-kv"></div>
   </div>
-  <div class="card"><div class="card-title">Analysis</div><div id="an"></div></div>
+  <div class="card"><div class="card-title">Analysis</div><div id="an"><div class="loading"><span class="spin"></span>Loading the device table...</div></div></div>
   <div class="card">
     <div class="card-title">Issue summary</div>
-    <div class="tsub" id="sum-note">Loading the log...</div>
+    <div class="tsub" id="sum-note"><span class="spin"></span>Loading the log...</div>
     <div class="grid2">
       <div><div class="tsub" id="ch-title"></div><div class="bars" id="ch"></div><div class="bar-lbl" id="ch-lbl"></div></div>
       <div>
@@ -139,11 +147,22 @@ progress{width:220px}
     <div class="ml" id="ml"></div>
   </div>
 </main>
+<script src="/analysis.js"></script>
 <script>
 // ── Helpers (as in the dashboard) ──
+// The admin server answers one request at a time: at most 2 in flight, in order.
+(function(){
+  const raw=window.fetch.bind(window),q=[];let live=0;
+  const next=()=>{while(live<2&&q.length){const j=q.shift();live++;
+    raw(...j.a).then(j.ok,j.no).finally(()=>{live--;next();});}};
+  window.fetch=(...a)=>new Promise((ok,no)=>{q.push({a,ok,no});next();});
+})();
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){const x=document.createElement(tag);if(cls)x.className=cls;if(text!==undefined&&text!==null)x.textContent=String(text);return x;}
 const S=v=>v==null?'':String(v);
+function spinner(text){const d=el('div','loading');d.append(el('span','spin'),document.createTextNode(text||'Loading...'));return d;}
+function failBox(text,retry){const d=el('div','loading err',text);
+  if(retry){const b=el('button','btn','Retry');b.type='button';b.onclick=retry;d.append(b);}return d;}
 const isMac=m=>!!m&&m!=='unknown'&&m!=='00:00:00:00:00:00';
 function fmt(ts){
   if(!ts)return'-';
@@ -211,83 +230,11 @@ const qMac=(Q.get('mac')||'').toLowerCase(),qIp=Q.get('ip')||'';
 const DEV={mac:/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(qMac)&&isMac(qMac)?qMac:'',ip:/^\d{1,3}(\.\d{1,3}){3}$/.test(qIp)?qIp:''};
 let _dev=null,_ai=null,_ign=null;
 
-// ── Analysis: the dashboard's rule table (main/index.html, Devices tab), copied. Keep in step with it. ──
-const DV_BRAND=[[/webOS|\bLG\b|LG Electronics/i,'LG'],[/PlayStation|Sony|BDP|Bravia/i,'Sony'],[/HDHomeRun|SiliconDust/i,'SiliconDust'],
-  [/Roku/i,'Roku'],[/Sonos/i,'Sonos'],[/Chromecast|CrKey|Google|Nest/i,'Google'],[/Samsung|Tizen|SEC_HHP/i,'Samsung'],
-  [/Philips|\bHue\b|IpBridge|Signify/i,'Philips'],[/Xbox|Windows|Microsoft|MSFT/i,'Microsoft'],[/Amazon|Fire TV|Echo/i,'Amazon'],
-  [/Apple|iPhone|iPad/i,'Apple'],[/Belkin|WeMo/i,'Belkin'],[/TP-?Link|Kasa/i,'TP-Link'],[/LIFX/i,'LIFX']];
-const DV_LOOK=[
-  {q:/urn:Belkin:/i,brand:'Belkin',t:'Searching for Belkin WeMo smart plugs (LG Home Dashboard style device discovery)'},
-  {p:'kasa',brand:'TP-Link',t:'Probing for TP-Link Kasa plugs',google:'Probing for TP-Link Kasa plugs; on a Google or Nest device this is usually a leftover smart-home integration'},
-  {p:'lifx',brand:'LIFX',t:'Looking for LIFX bulbs'},
-  {p:'playstation',brand:'Sony',t:'Looking for a PlayStation (Remote Play or the PlayStation App)'},
-  {q:/roku:ecp/i,brand:'Roku',t:'Looking for Roku players'},
-  {q:/ZonePlayer|Sonos/i,brand:'Sonos',t:'Looking for Sonos speakers'},
-  {q:/IpBridge|\bhue\b/i,brand:'Philips',t:'Looking for Philips Hue bridges'},
-  {q:/samsung\.com/i,brand:'Samsung',t:'Looking for Samsung devices'},
-  {q:/dial-multiscreen|:dial:/i,t:'Looking for cast targets (DIAL)'},
-  {q:/MediaServer|ContentDirectory/i,t:'Looking for DLNA media servers'},
-  {q:/MediaRenderer|AVTransport|RenderingControl/i,t:'Looking for DLNA media renderers (screens and speakers to play to)'},
-  {q:/InternetGatewayDevice|WANIPConnection|WANPPPConnection/i,t:'Looking for the router\'s UPnP port-mapping service',
-    risk:'Opens router ports by UPnP if the router allows it: check whether UPnP is on',w:1},
-  {q:/ssdp:all|upnp:rootdevice/i,t:'Looking for every UPnP device'},
-];
-const DV_SAY=[[/MediaRenderer/i,'a DLNA media renderer'],[/MediaServer/i,'a DLNA media server'],[/dial/i,'a DIAL cast target'],
-  [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
-const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
-  dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname'};
-const DV_CHATTY=360,DV_MIN_SPAN=600;
-function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}
+// ── Analysis: main/analysis.js (GET /analysis.js), shared with the dashboard ──
 function dvAnalysis(x){
-  const id=[],beh=[],risk=[],rate=[];let w=0;
-  const qs=(x.queries||[]).map(String),pr=x.protos||{},vendor=S(x.vendor),label=S(x.label),host=S(x.host);
-  const own=(DV_BRAND.find(([re])=>re.test(label+' '+host+' '+vendor))||[])[1]||'';
-  const span=(+x.first_ago_s||0)-(+x.last_ago_s||0),total=+x.total||0;
-  const flag=(t,weight)=>{risk.push(t);w=Math.max(w,weight);};
-  id.push(vendor?'MAC vendor: '+vendor:'MAC vendor unknown');
-  if(label&&x.label_src!=='mac-vendor')id.push('Model hint: "'+label+'", from '+(DV_SRC[x.label_src]||S(x.label_src)||'?'));
-  if(host&&host!==label)id.push('Hostname: '+host);
-  const vc=(qs.join(' ').match(/class=(\S+)/)||[])[1]||'';
-  const av=vc.match(/android-dhcp-(\d+)/i);
-  if(vc)id.push('DHCP vendor class: '+vc+(av?' (Android '+av[1]+')':/MSFT/i.test(vc)?' (Windows)':''));
-  if(x.random_mac)id.push('Randomised MAC: a phone, or privacy mode on');
-  const looked=new Set();
-  for(const r of DV_LOOK){
-    const hit=r.p?pr[r.p]:qs.some(q=>/^M-SEARCH/i.test(q)&&r.q.test(q));
-    if(!hit)continue;
-    beh.push(r.google&&own==='Google'?r.google:r.t);
-    if(r.brand&&r.brand!==own)looked.add(r.brand==='Belkin'?'Belkin WeMo':r.brand==='TP-Link'?'TP-Link Kasa':r.brand);
-    if(r.risk)flag(r.risk,r.w);
-  }
-  if(pr['ssdp-search']&&!qs.some(q=>/^M-SEARCH/i.test(q)&&DV_LOOK.some(r=>r.q&&r.q.test(q))))beh.push('Searching for UPnP devices');
-  if(pr['ssdp-notify']){
-    const as=DV_SAY.filter(([re])=>qs.some(q=>/^NOTIFY/i.test(q)&&re.test(q))).map(s=>s[1]);
-    beh.push('Announcing itself'+(as.length?' as '+as.join(', '):'')+(span>=DV_MIN_SPAN?', '+dvRate(pr['ssdp-notify'],span)+' times an hour':''));
-  }
-  if(qs.some(q=>/^(Probe|Resolve)\b/.test(q)))beh.push('Looking for WS-Discovery devices (printers, scanners, PCs)');
-  if(qs.some(q=>/^Hello\b/.test(q)))beh.push('Announcing itself over WS-Discovery');
-  const wpad=qs.some(q=>/\bwpad\b/i.test(q));
-  if(wpad)beh.push('Proxy auto-discovery lookup (WPAD)');
-  const names=qs.filter(q=>/^(A|AAAA|ANY|PTR) /.test(q)||/^query /.test(q)).filter(q=>!/\bwpad\b/i.test(q));
-  if(names.length)beh.push('Broadcast name lookups that DNS did not answer: '+names.join('; '));
-  if(qs.some(q=>/^(register|refresh) /.test(q)))beh.push('Registers its NetBIOS name on the LAN');
-  if(pr.dhcp)beh.push('Asked for an address by DHCP');
-  if(!beh.length)beh.push('Nothing beyond the packets counted below');
-  if(av&&+av[1]<=8)flag('Android '+av[1]+'.x, no security updates for years',2);
-  if(wpad)flag('WPAD can be answered by a hostile host to intercept web traffic (the honeypot never answers)',1);
-  if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', '),2);
-  if(span>=DV_MIN_SPAN&&total*3600/span>DV_CHATTY)flag('Very chatty multicast: '+dvRate(total,span)+' packets an hour in all',1);
-  if(!vendor&&x.random_mac)flag('Can\'t identify; check your router\'s client list',1);
-  if(span>=DV_MIN_SPAN){for(const [k,v] of Object.entries(pr))rate.push(k+': '+dvRate(+v||0,span)+' an hour ('+v+' in '+dur(span)+')');}
-  else rate.push('Seen over '+span+' s only, too short for a rate: '+Object.entries(pr).map(([k,v])=>k+' '+v).join(', '));
-  const known=own||vendor||(label&&x.label_src!=='mac-vendor');
-  const sug=w>=2?['Isolate (guest or IoT network)','sg-iso']:w===1||!known?['Watch','sg-watch']:['Known and benign: name it','sg-ok'];
-  const box=el('div','an'),sec=(h,items)=>{const s=el('div'),u=el('ul');s.append(el('h5','',h));items.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);};
-  sec('Identity',id);sec('Behaviour',beh);sec('Risk notes',risk.length?risk:['None from these rules']);
-  const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
-  const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
-  box.append(el('div','an-foot','Worked out in this page by fixed rules from the device table. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
-  _ai={id,beh,risk,rate,sug:sug[0],qs};
+  if(!window.ssAnalysis)return el('div','muted','Analysis unavailable (analysis.js did not load).');
+  const box=ssAnalysis(x,'Worked out by fixed rules from the device table. The device keeps the last 4 distinct queries, so older behaviour may not show.');
+  _ai=box._ai;
   return box;
 }
 
@@ -458,9 +405,12 @@ function status(extra){
 async function older(limit){
   if(_busy||!_more)return;
   _busy=true;$('older').disabled=true;if(!_scanning)$('full').disabled=true;
+  $('ml-note').replaceChildren(spinner('Reading the card'+(_lines.length?', further back':'')+'...'));
   try{const {meta,bad}=await loadChunk(limit);
     status((meta.timed_out?'Stopped at the 3 s time box; Load older goes on from there':'')+(bad?(meta.timed_out?'; ':'')+bad+' unreadable lines':''));}
-  catch(e){status('Could not read the log: '+e.message);}
+  catch(e){$('ml-note').replaceChildren(failBox('Could not read the log: '+e.message,()=>older(limit)));
+    if(!_lines.length)$('sum-note').replaceChildren(failBox('The log could not be read.',()=>older(limit)));
+    _busy=false;$('older').disabled=_scanning;$('full').disabled=false;return;}
   _busy=false;$('older').disabled=_scanning;$('full').disabled=false;
   renderSummary();
 }

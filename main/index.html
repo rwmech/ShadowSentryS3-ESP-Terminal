@@ -449,6 +449,14 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .dv-tog{display:flex;align-items:center;gap:6px;font-size:14px;margin:4px 0;cursor:pointer}
 .dv-tog input{width:16px;height:16px}
 .dv-msg{font-size:14px;color:var(--amber);min-height:1em}
+/* Loading spinner (alert-web): on every panel until its data or an error with Retry */
+.spin{display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border-radius:50%;
+  border:2px solid var(--g-dim);border-top-color:var(--g);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+.loading{color:var(--muted);font-size:14px;padding:10px 0}
+.loading.err{color:var(--red)}
+.loading .btn{margin-left:10px}
 /* Device tools and AI advice (alert-web) */
 .dv-tools{margin-top:14px}
 .ai-msg{padding:0 22px 16px;font-size:13px;color:var(--muted)}
@@ -660,7 +668,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="timeline-card">
       <div class="card-title">&#9889; Live Attack Feed</div>
       <div class="feed" id="feed">
-        <div class="feed-empty">Waiting for attackers…</div>
+        <div class="loading"><span class="spin"></span>Loading the feed...</div>
       </div>
     </div>
 
@@ -675,18 +683,20 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
              style="display:block;border-radius:8px;object-fit:cover;background:#000;border:1px solid var(--border)">
       </a>
       <div class="kv">
-        <div id="snap-what" class="muted">Loading&hellip;</div>
+        <div id="snap-what" class="muted"><span class="spin"></span>Loading&hellip;</div>
         <div id="snap-when" class="muted"></div>
         <div id="snap-file" class="muted"></div>
       </div>
     </div>
   </div>
+  <script src="/analysis.js"></script><!-- Fork: device analysis rules, shared with /device -->
   <script>
   (function(){
     const g=id=>document.getElementById(id);
     const NAME={ack:'Acknowledged',clear:'Cleared / re-armed'};
     let shown=-1;
     async function snapLoad(){
+      if(g('page-dash').hidden)return;          // only the visible tab refreshes
       try{
         const r=await fetch('/api/snap/last.json',{cache:'no-store'});if(!r.ok)throw 0;
         const d=await r.json();
@@ -731,7 +741,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
           </tr>
         </thead>
         <tbody id="tbody">
-          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="7"><span class="spin"></span>Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -876,7 +886,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="card-title">Vendor database</div>
     <div class="msg" id="ou-msg"></div>
     <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">MAC vendor names from the IEEE registry, kept on the microSD card. Build it on a PC with tools/make_oui.py, then upload the oui.bin here (or with tools/oui_upload.py). Without it a short built-in list is used.</div>
-    <div class="kv" id="ou-status">Loading...</div>
+    <div class="kv" id="ou-status"><div class="loading"><span class="spin"></span>Loading...</div></div>
     <div class="ctl" style="margin-top:10px">
       <input type="file" id="ou-file" accept=".bin">
       <button class="btn" type="button" onclick="uploadOui()">Update vendor database</button>
@@ -916,6 +926,22 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 </div>
 
 <script>
+// Fork (alert-web): the admin server answers one request at a time, so a burst
+// only queues on the board. At most 2 requests in flight from this page, in call
+// order, /api/status first (the banner and the heartbeat).
+(function(){
+  const raw=window.fetch.bind(window),q=[];let live=0;
+  const next=()=>{while(live<2&&q.length){const j=q.shift();live++;
+    raw(...j.a).then(j.ok,j.no).finally(()=>{live--;next();});}};
+  window.fetch=(...a)=>new Promise((ok,no)=>{
+    const j={a,ok,no};String(a[0]).startsWith('/api/status')?q.unshift(j):q.push(j);next();});
+})();
+// Spinner and error-with-Retry, for every panel that waits on the board.
+function spinner(text){const d=document.createElement('div');d.className='loading';
+  const sp=document.createElement('span');sp.className='spin';d.append(sp,document.createTextNode(text||'Loading...'));return d;}
+function failBox(text,retry){const d=document.createElement('div');d.className='loading err';d.append(document.createTextNode(text));
+  if(retry){const b=document.createElement('button');b.className='btn';b.type='button';b.textContent='Retry';b.onclick=retry;d.append(b);}return d;}
+function boxRow(tb,cols,box){const tr=document.createElement('tr'),c=document.createElement('td');tr.className='empty-row';c.colSpan=cols;c.append(box);tr.append(c);tb.replaceChildren(tr);}
 // Every POST carries this header; the device refuses POSTs without it (CSRF guard).
 const POSTH={method:'POST',headers:{'X-ShadowSentry':'1'}};
 function ip4(n){return[(n>>>0)&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255].join('.')}
@@ -1217,10 +1243,14 @@ async function load(){
     setVal('s-rtsp',bt[0]||0);setVal('s-http',bt[1]||0);setVal('s-telnet',bt[2]||0);setVal('s-ssh',bt[3]||0);setVal('s-ftp',bt[4]||0);
     updateDonut(bt);
     const fe=en.filter(matchF);
+    const feed=document.getElementById('feed');
+    if(feed.querySelector('.loading'))feed.innerHTML='<div class="feed-empty">'+(_filter===null?'Waiting for attackers…':'No matching events…')+'</div>';
     updateFeed(fe);updateTable(fe);setOnline(true);
   }catch{
     setOnline(false);
-    document.getElementById('tbody').innerHTML='<tr class="empty-row"><td colspan="7" style="color:var(--red)">&#9888; Device unreachable</td></tr>';
+    boxRow(document.getElementById('tbody'),7,failBox('\u26a0 Device unreachable',load));
+    const feed=document.getElementById('feed');
+    if(feed.querySelector('.loading'))feed.replaceChildren(failBox('Could not load the feed',load));
   }
 }
 async function clearLogs(){
@@ -1336,7 +1366,10 @@ function ignoreAlarm(scope){
     await alarmReply(r);
   });
 }
-load();loadStatus();setInterval(load,10000);setInterval(loadStatus,5000);
+// Status first (small: the banner and the heartbeat); the visible tab's data
+// follows from showPage(); only the visible tab refreshes.
+loadStatus();setInterval(loadStatus,5000);
+setInterval(()=>{if(!document.getElementById('page-dash').hidden)load();},10000);
 
 // live push — WebSocket on the dedicated port; falls back silently to polling
 function applyEntry(e){
@@ -1382,6 +1415,7 @@ function showPage(p){
   if(!PAGES.includes(p))p='dash';
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
+  if(p==='dash')load();
   if(p==='logs'){loadSummary();loadDays();}
   if(p==='settings'){loadSettings();loadIgnore();loadOui();loadCrashes();}
   if(p==='devices')loadDevices();
@@ -1395,9 +1429,10 @@ setInterval(()=>{if(!$('page-devices').hidden)loadDevices();},10000);
 const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
 async function loadDevices(){
   let d;
+  if(!$('dv-body').querySelector('tr.dv-row'))boxRow($('dv-body'),6,spinner('Loading the devices...'));
   const ig=fetch('/api/ignore',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(j)_ign=j.entries||[];}).catch(()=>{});
   try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw 0;d=await r.json();}
-  catch{$('dv-note').textContent='Devices unavailable';return;}
+  catch{$('dv-note').textContent='';boxRow($('dv-body'),6,failBox('Devices unavailable',loadDevices));return;}
   await ig;
   const ls=(d.listeners||[]).map(l=>String(l.name)+' '+l.port+(l.open?'':' ('+(l.error||'closed')+')'));
   $('dv-note').textContent='Listening, log only: '+ls.join(', ')+'. mDNS: '+String(d.mdns||'')+'. '+
@@ -1421,97 +1456,10 @@ async function loadDevices(){
     return dvRows(tr,x);}));
 }
 // ── Device analysis (Devices tab, click a row) ──
-// Plain-language notes on one device, worked out here from the /api/devices
-// fields: no firmware change, no device RAM. Descriptive only. The device keeps
-// its last 4 distinct queries, so older behaviour may not show.
-// Brand of a label, hostname or MAC vendor, for "other makers' gear".
-const DV_BRAND=[[/webOS|\bLG\b|LG Electronics/i,'LG'],[/PlayStation|Sony|BDP|Bravia/i,'Sony'],[/HDHomeRun|SiliconDust/i,'SiliconDust'],
-  [/Roku/i,'Roku'],[/Sonos/i,'Sonos'],[/Chromecast|CrKey|Google|Nest/i,'Google'],[/Samsung|Tizen|SEC_HHP/i,'Samsung'],
-  [/Philips|\bHue\b|IpBridge|Signify/i,'Philips'],[/Xbox|Windows|Microsoft|MSFT/i,'Microsoft'],[/Amazon|Fire TV|Echo/i,'Amazon'],
-  [/Apple|iPhone|iPad/i,'Apple'],[/Belkin|WeMo/i,'Belkin'],[/TP-?Link|Kasa/i,'TP-Link'],[/LIFX/i,'LIFX']];
-// What it searches for. q: tested on each M-SEARCH query; p: a protocol it sent;
-// brand: whose gear that is; w: risk weight of the note (2 isolate, 1 watch).
-const DV_LOOK=[
-  {q:/urn:Belkin:/i,brand:'Belkin',t:'Searching for Belkin WeMo smart plugs (LG Home Dashboard style device discovery)'},
-  {p:'kasa',brand:'TP-Link',t:'Probing for TP-Link Kasa plugs',google:'Probing for TP-Link Kasa plugs; on a Google or Nest device this is usually a leftover smart-home integration'},
-  {p:'lifx',brand:'LIFX',t:'Looking for LIFX bulbs'},
-  {p:'playstation',brand:'Sony',t:'Looking for a PlayStation (Remote Play or the PlayStation App)'},
-  {q:/roku:ecp/i,brand:'Roku',t:'Looking for Roku players'},
-  {q:/ZonePlayer|Sonos/i,brand:'Sonos',t:'Looking for Sonos speakers'},
-  {q:/IpBridge|\bhue\b/i,brand:'Philips',t:'Looking for Philips Hue bridges'},
-  {q:/samsung\.com/i,brand:'Samsung',t:'Looking for Samsung devices'},
-  {q:/dial-multiscreen|:dial:/i,t:'Looking for cast targets (DIAL)'},
-  {q:/MediaServer|ContentDirectory/i,t:'Looking for DLNA media servers'},
-  {q:/MediaRenderer|AVTransport|RenderingControl/i,t:'Looking for DLNA media renderers (screens and speakers to play to)'},
-  {q:/InternetGatewayDevice|WANIPConnection|WANPPPConnection/i,t:'Looking for the router\'s UPnP port-mapping service',
-    risk:'Opens router ports by UPnP if the router allows it: check whether UPnP is on',w:1},
-  {q:/ssdp:all|upnp:rootdevice/i,t:'Looking for every UPnP device'},
-];
-// What it announces itself as, from NOTIFY queries.
-const DV_SAY=[[/MediaRenderer/i,'a DLNA media renderer'],[/MediaServer/i,'a DLNA media server'],[/dial/i,'a DIAL cast target'],
-  [/InternetGatewayDevice/i,'a UPnP router'],[/ZonePlayer/i,'a Sonos speaker'],[/HDHomeRun|SiliconDust/i,'an HDHomeRun tuner']];
-const DV_SRC={server:'its SSDP SERVER header','user-agent':'its USER-AGENT header','dhcp-class':'its DHCP vendor class',
-  dhcp:'its DHCP hostname',netbios:'its NetBIOS name',host:'its hostname'};
-const DV_CHATTY=360;      // packets an hour, all protocols: more than one every 10 s
-const DV_MIN_SPAN=600;    // seconds seen before a rate means anything
-function dvRate(n,span){const r=n*3600/span;return r<10?r.toFixed(1):String(Math.round(r));}
+// The rules are in main/analysis.js (GET /analysis.js), shared with the device page.
 function dvAnalysis(x){
-  const id=[],beh=[],risk=[],rate=[];let w=0;
-  const qs=(x.queries||[]).map(String),pr=x.protos||{},vendor=String(x.vendor||''),label=String(x.label||''),host=String(x.host||'');
-  const own=(DV_BRAND.find(([re])=>re.test(label+' '+host+' '+vendor))||[])[1]||'';
-  const span=(+x.first_ago_s||0)-(+x.last_ago_s||0),total=+x.total||0;
-  const flag=(t,weight)=>{risk.push(t);w=Math.max(w,weight);};
-  // Identity
-  id.push(vendor?'MAC vendor: '+vendor:'MAC vendor unknown');
-  if(label&&x.label_src!=='mac-vendor')id.push('Model hint: "'+label+'", from '+(DV_SRC[x.label_src]||String(x.label_src||'?')));
-  if(host&&host!==label)id.push('Hostname: '+host);
-  const vc=(qs.join(' ').match(/class=(\S+)/)||[])[1]||'';
-  const av=vc.match(/android-dhcp-(\d+)/i);
-  if(vc)id.push('DHCP vendor class: '+vc+(av?' (Android '+av[1]+')':/MSFT/i.test(vc)?' (Windows)':''));
-  if(x.random_mac)id.push('Randomised MAC: a phone, or privacy mode on');
-  // Behaviour
-  const looked=new Set();
-  for(const r of DV_LOOK){
-    const hit=r.p?pr[r.p]:qs.some(q=>/^M-SEARCH/i.test(q)&&r.q.test(q));
-    if(!hit)continue;
-    beh.push(r.google&&own==='Google'?r.google:r.t);
-    if(r.brand&&r.brand!==own)looked.add(r.brand==='Belkin'?'Belkin WeMo':r.brand==='TP-Link'?'TP-Link Kasa':r.brand);
-    if(r.risk)flag(r.risk,r.w);
-  }
-  if(pr['ssdp-search']&&!qs.some(q=>/^M-SEARCH/i.test(q)&&DV_LOOK.some(r=>r.q&&r.q.test(q))))beh.push('Searching for UPnP devices');
-  if(pr['ssdp-notify']){
-    const as=DV_SAY.filter(([re])=>qs.some(q=>/^NOTIFY/i.test(q)&&re.test(q))).map(s=>s[1]);
-    beh.push('Announcing itself'+(as.length?' as '+as.join(', '):'')+(span>=DV_MIN_SPAN?', '+dvRate(pr['ssdp-notify'],span)+' times an hour':''));
-  }
-  if(qs.some(q=>/^(Probe|Resolve)\b/.test(q)))beh.push('Looking for WS-Discovery devices (printers, scanners, PCs)');
-  if(qs.some(q=>/^Hello\b/.test(q)))beh.push('Announcing itself over WS-Discovery');
-  const wpad=qs.some(q=>/\bwpad\b/i.test(q));
-  if(wpad)beh.push('Proxy auto-discovery lookup (WPAD)');
-  const names=qs.filter(q=>/^(A|AAAA|ANY|PTR) /.test(q)||/^query /.test(q)).filter(q=>!/\bwpad\b/i.test(q));
-  if(names.length)beh.push('Broadcast name lookups that DNS did not answer: '+names.join('; '));
-  if(qs.some(q=>/^(register|refresh) /.test(q)))beh.push('Registers its NetBIOS name on the LAN');
-  if(pr.dhcp)beh.push('Asked for an address by DHCP');
-  if(!beh.length)beh.push('Nothing beyond the packets counted below');
-  // Risk notes
-  if(av&&+av[1]<=8)flag('Android '+av[1]+'.x, no security updates for years',2);
-  if(wpad)flag('WPAD can be answered by a hostile host to intercept web traffic (the honeypot never answers)',1);
-  if(looked.size)flag('Scans for other makers\' IoT gear: '+[...looked].join(', '),2);
-  if(span>=DV_MIN_SPAN&&total*3600/span>DV_CHATTY)flag('Very chatty multicast: '+dvRate(total,span)+' packets an hour in all',1);
-  if(!vendor&&x.random_mac)flag('Can\'t identify; check your router\'s client list',1);
-  // Rates
-  if(span>=DV_MIN_SPAN){
-    for(const [k,v] of Object.entries(pr))rate.push(k+': '+dvRate(+v||0,span)+' an hour ('+v+' in '+dur(span)+')');
-  }else rate.push('Seen over '+span+' s only, too short for a rate: '+Object.entries(pr).map(([k,v])=>k+' '+v).join(', '));
-  // Suggestion
-  const known=own||vendor||(label&&x.label_src!=='mac-vendor');
-  const sug=w>=2?['Isolate (guest or IoT network)','sg-iso']:w===1||!known?['Watch','sg-watch']:['Known and benign: name it','sg-ok'];
-  const box=el('div','an'),sec=(h,items)=>{const s=el('div'),u=el('ul');s.append(el('h5','',h));items.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);};
-  sec('Identity',id);sec('Behaviour',beh);sec('Risk notes',risk.length?risk:['None from these rules']);
-  const s=el('div');s.append(el('h5','','Suggestion'),el('div','sg '+sug[1],sug[0]),el('h5','','Rates'));
-  const u=el('ul');rate.forEach(t=>u.append(el('li','',t)));s.append(u);box.append(s);
-  box.append(el('div','an-foot','Worked out in this page from the table above, by fixed rules. The device keeps the last 4 distinct queries, so older behaviour may not show.'));
-  box._ai={id,beh,risk,rate,sug:sug[0],qs};
-  return box;
+  return window.ssAnalysis?ssAnalysis(x,'Worked out in this page from the table above, by fixed rules. The device keeps the last 4 distinct queries, so older behaviour may not show.')
+    :Object.assign(el('div','muted','Analysis unavailable (analysis.js did not load).'),{_ai:null});
 }
 // A device row and its analysis row under it; a click opens or closes it, and
 // the open ones stay open across the 10 s refresh.
@@ -1632,8 +1580,9 @@ function bars(id,vals,labels){
 }
 const dkey=d=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
 async function loadSummary(){
+  if(!$('sum-cards').querySelector('.stat-card'))$('sum-cards').replaceChildren(spinner('Loading the summary...'));
   try{const r=await fetch('/api/summary');if(!r.ok)throw 0;renderSummary(await r.json());}
-  catch{$('sum-cards').replaceChildren(el('div','muted','Summary unavailable'));}
+  catch{$('sum-cards').replaceChildren(failBox('Summary unavailable',loadSummary));}
 }
 function renderSummary(d){
   const a=d.alarm||{};
@@ -1704,6 +1653,7 @@ function fillCodeFilter(){
 function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
 async function loadDays(){
   const sel=$('lg-day'),cur=sel.value;
+  if(!_loaded)boxRow($('lg-body'),9,spinner('Listing the day files...'));
   try{
     const r=await fetch('/api/logs');if(!r.ok)throw 0;const d=await r.json();
     _days=d.files||[];_tail=+d.tail_bytes||_tail;
@@ -1712,12 +1662,12 @@ async function loadDays(){
     updDl();
     if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),9,'No lines');}
     else if(!_loaded)loadDay();
-  }catch{note('Could not list the log files.');}
+  }catch{note('');boxRow($('lg-body'),9,failBox('Could not list the log files',loadDays));}
 }
 async function loadDay(){
   const name=$('lg-day').value;if(!name)return;
   const full=$('lg-full').checked,f=_days.find(x=>x.name===name)||{};
-  note('Loading '+name+'...');
+  note('');boxRow($('lg-body'),9,spinner('Loading '+name+'...'));
   try{
     const r=await fetch('/api/logs/file?f='+encodeURIComponent(name)+(full?'':'&tail=1'));
     if(!r.ok)throw 0;
@@ -1730,7 +1680,7 @@ async function loadDay(){
     _loaded={name,cut:!full&&(+f.size||0)>_tail,bad};
     fillCodeFilter();
     renderDay();
-  }catch{note('Could not load '+name+'.');}
+  }catch{boxRow($('lg-body'),9,failBox('Could not load '+name,loadDay));}
 }
 // Discovery is hidden unless "Show discovery" is ticked (kept in localStorage),
 // or the kind or type filter asks for it. Discovery lines are the kind
@@ -1816,6 +1766,7 @@ function showMsg(kind,text){const m=$('st-msg');m.className='msg '+kind;m.textCo
 TNAME.forEach((n,i)=>{const l=el('label'),c=el('input');c.type='checkbox';c.id='st-al-'+i;l.append(c,document.createTextNode(n));$('st-alerts').append(l);});
 let _clientIp='';
 async function loadSettings(){
+  const m=$('st-msg');m.className='msg ok';m.replaceChildren(spinner('Loading the settings...'));
   try{
     const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();
     $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();
@@ -1843,8 +1794,9 @@ async function loadSettings(){
     $('st-allow').value=(s.admin_allow||[]).join(', ');
     $('st-allow-hint').textContent='IPv4s, comma separated, up to 8. When set, ports 9999 and 9998 drop connections from anyone else, so a scan shows them filtered. '+
       'It must include your address ('+(_clientIp||'unknown')+'). Locked out? On the USB serial console type: admin-allow clear';
+    m.className='msg';m.textContent='';
     if(s.reboot_pending)showMsg('ok','Saved Wi-Fi or Telegram changes are waiting for a reboot.');
-  }catch{showMsg('err','Could not load the settings.');}
+  }catch{m.className='msg err';m.replaceChildren(failBox('Could not load the settings',loadSettings));}
 }
 async function saveSettings(ev){
   ev.preventDefault();
@@ -1921,12 +1873,13 @@ async function loadCrashes(){
 // ── Vendor database (GET/POST /api/oui) ──
 function ouMsg(kind,text){const m=$('ou-msg');m.className='msg '+kind;m.textContent=text;}
 async function loadOui(){
+  $('ou-status').replaceChildren(spinner('Loading...'));
   try{const r=await fetch('/api/oui',{cache:'no-store'});if(!r.ok)throw 0;const d=await r.json();
     $('ou-status').replaceChildren(...(d.present?[
       'Present: '+d.count+' prefixes, '+kb(d.size)+', built '+fmt(d.build_ts),
       'Lookups '+d.lookups+', cache hits '+d.hits+', names cached '+kb(d.pool_used)]
       :[d.card?'Not on the card: the built-in list is used.':'No microSD card: the built-in list is used.']).map(t=>el('div','',t)));}
-  catch{$('ou-status').textContent='Status unavailable';}
+  catch{$('ou-status').replaceChildren(failBox('Status unavailable',loadOui));}
 }
 function uploadOui(){
   const f=$('ou-file').files[0];
@@ -1969,8 +1922,9 @@ function fillIgnCodes(){
   if(all.includes(cur))sel.value=cur;
 }
 async function loadIgnore(){
+  boxRow($('ig-body'),6,spinner('Loading the ignore list...'));
   try{const r=await fetch('/api/ignore');if(!r.ok)throw 0;renderIgnore(await r.json());}
-  catch{igMsg('err','Could not load the ignore list.');}
+  catch{boxRow($('ig-body'),6,failBox('Could not load the ignore list',loadIgnore));}
 }
 const ignRemoveBody=x=>({action:'remove',index:x.index,ip:x.ip||'',mac:x.mac||'',code:ignCode(x)});
 async function postIgnore(body){

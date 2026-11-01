@@ -15,10 +15,6 @@
 
 static const char *TAG = "DEVLOG";
 
-// The device page (main/device.html, embedded as text: NUL-terminated).
-extern const uint8_t device_html_start[] asm("_binary_device_html_start");
-extern const uint8_t device_html_end[]   asm("_binary_device_html_end");
-
 #define SEND_TIMEOUT_S      10      // a client that stops reading can't hold the admin task
 #define DEVLOG_LIMIT_DEF    200
 #define DEVLOG_LIMIT_MAX    1000
@@ -343,13 +339,6 @@ static bool scan_file(scan_t *s, const char *name, uint32_t start)
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-static void serve_device_page(int sock)
-{
-    size_t n = (size_t)(device_html_end - device_html_start);
-    if (n && device_html_start[n - 1] == '\0') n--;          // EMBED_TXTFILES adds a NUL
-    if (send_head(sock, "200 OK", "text/html; charset=utf-8", n)) send_all(sock, device_html_start, n);
-}
-
 static void serve_device_log(int sock, const char *q, size_t qn)
 {
     scan_t s;
@@ -462,12 +451,10 @@ bool api_devlog_handle(int sock, const char *req, int req_len)
     const char *q;
     size_t qn;
     int m = match_get(req, req_len, "/api/logs/device", &q, &qn);
-    int page = m < 0 ? match_get(req, req_len, "/device", &q, &qn) : -1;
-    if (m < 0 && page < 0) return false;
+    if (m < 0) return false;
 
     struct timeval tv = { .tv_sec = SEND_TIMEOUT_S, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    if (page >= 0) { serve_device_page(sock); return true; }   // the page reads its own query
     if (m == 0) { send_error(sock, "400 Bad Request", "query too long"); return true; }
     serve_device_log(sock, q, qn);
     return true;
