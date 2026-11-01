@@ -270,7 +270,7 @@ static void serve_attacks_json(int sock)
                 (unsigned long)entries[i].timestamp,
                 (unsigned long)entries[i].src_ip,
                 (int)entries[i].type,
-                ignore_match(entries[i].src_ip, entries[i].src_mac) ? "true" : "false",
+                ignore_match(entries[i].src_ip, entries[i].src_mac, describe_code(&entries[i])) ? "true" : "false",
                 user_j, pass_j, pay_j,
                 mac_j, vendor_j,
                 gi.cc, ctry_j, org_j2, gi.asn, gi.tag,
@@ -432,7 +432,7 @@ static void handle_request(int sock, char *buf, int len)
         handle_ota(sock, buf, len);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/ack")) {
         discord_note_dashboard_ack();   // so the Discord embed can say where
-        alarm_ack();
+        alarm_ack(ALARM_BY_DASHBOARD);
         ESP_LOGI(TAG, "Incident acknowledged via admin panel");
         send_204(sock);
     } else if (strncmp(buf, "POST", 4) == 0 && strstr(buf, " /api/clear")) {

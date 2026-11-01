@@ -30,6 +30,11 @@ void buzzer_alarm(void);
 // The siren, played even when the alarm sound is switched off.
 void buzzer_test(void);
 
+// YELLOW incident opened (SEV2 events only): one soft tone (~300 ms), never
+// the siren, if the alarm sound setting is on. Queued to the buzzer task;
+// skipped if there is no buzzer task or the buzzer is busy.
+void buzzer_yellow(void);
+
 // Unacknowledged-incident reminder: the same siren, if the setting is on.
 void buzzer_remind(void);
 

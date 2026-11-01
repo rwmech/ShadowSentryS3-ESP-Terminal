@@ -25,6 +25,7 @@ typedef enum { MSG_EVENT, MSG_ACK, MSG_CLEAR } msg_kind_t;
 
 typedef struct {
     msg_kind_t kind;
+    uint8_t    by;          // alarm_by_t, for ACK and CLEAR
     uint32_t   ip;
     uint8_t    mac[6];
     uint8_t    type;
@@ -58,31 +59,65 @@ bool alarm_closed_by_rearm(void)
     return s_rearmed;
 }
 
+static alarm_cond_t cond_of(alarm_state_t st)
+{
+    return st == ALARM_ACTIVE ? ALARM_COND_RED : st == ALARM_ACKED ? ALARM_COND_YELLOW : ALARM_COND_GREEN;
+}
+
 void alarm_get(alarm_info_t *out)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     *out = s_info;
     xSemaphoreGive(s_mutex);
+    out->cond = cond_of(out->state);
 }
 
-void alarm_ack(void)
+const char *alarm_cond_key(alarm_cond_t c)
+{
+    return c == ALARM_COND_RED ? "red" : c == ALARM_COND_YELLOW ? "yellow" : "green";
+}
+
+const char *alarm_by_key(uint8_t by)
+{
+    return by == ALARM_BY_PANEL ? "panel" : by == ALARM_BY_DASHBOARD ? "dashboard" : "";
+}
+
+void alarm_ack(alarm_by_t by)
 {
     if (!s_queue) return;
-    alarm_msg_t m = { .kind = MSG_ACK };
+    alarm_msg_t m = { .kind = MSG_ACK, .by = (uint8_t)by };
+    xQueueSend(s_queue, &m, 0);
+}
+
+void alarm_resolve(alarm_by_t by)
+{
+    if (!s_queue) return;
+    alarm_msg_t m = { .kind = MSG_CLEAR, .by = (uint8_t)by };
     xQueueSend(s_queue, &m, 0);
 }
 
 void alarm_clear(void)
 {
-    if (!s_queue) return;
-    alarm_msg_t m = { .kind = MSG_CLEAR };
-    xQueueSend(s_queue, &m, 0);
+    alarm_resolve(ALARM_BY_PANEL);
 }
 
-bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6])
+esp_err_t alarm_ignore_error(alarm_by_t by)
 {
-    if (type < 32 && !(settings_get()->alert_mask & (1u << type))) return false;
-    return !ignore_match(src_ip, src_mac);
+    (void)by;
+    return ESP_ERR_NOT_SUPPORTED;       // TODO(alert-core): step 0 stub
+}
+
+esp_err_t alarm_ignore_device(alarm_by_t by)
+{
+    (void)by;
+    return ESP_ERR_NOT_SUPPORTED;       // TODO(alert-core): step 0 stub
+}
+
+bool alarm_should_alert(const attack_log_t *e)
+{
+    if (!e) return false;
+    if ((unsigned)e->type < 32 && !(settings_get()->alert_mask & (1u << e->type))) return false;
+    return !ignore_match(e->src_ip, e->src_mac, describe_code(e));
 }
 
 // log_store listener: runs on the appending honeypot task (as small as 3 KB of
@@ -90,7 +125,7 @@ bool alarm_should_alert(uint8_t type, uint32_t src_ip, const uint8_t src_mac[6])
 // ignored sources never reach the queue: logged, no incident.
 static void on_event(const attack_log_t *e)
 {
-    if (!alarm_should_alert((uint8_t)e->type, e->src_ip, e->src_mac)) return;
+    if (!alarm_should_alert(e)) return;
     alarm_msg_t m = { .kind = MSG_EVENT, .ip = e->src_ip,
                       .type = (uint8_t)e->type, .ts = e->timestamp };
     memcpy(m.mac, e->src_mac, sizeof(m.mac));
@@ -140,6 +175,7 @@ static void open_incident(const alarm_msg_t *m, int64_t now)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_info.state    = ALARM_ACTIVE;
+    s_info.acked_by = ALARM_BY_NONE;
     s_info.id++;
     s_info.src_ip   = m->ip;
     memcpy(s_info.src_mac, m->mac, sizeof(s_info.src_mac));
@@ -180,6 +216,7 @@ static void alarm_task(void *arg)
             if (s_info.state == ALARM_ACTIVE) {
                 xSemaphoreTake(s_mutex, portMAX_DELAY);
                 s_info.state = ALARM_ACKED;
+                s_info.acked_by = m.by;
                 xSemaphoreGive(s_mutex);
                 persist();
                 ESP_LOGI(TAG, "Incident #%lu acknowledged", (unsigned long)s_info.id);

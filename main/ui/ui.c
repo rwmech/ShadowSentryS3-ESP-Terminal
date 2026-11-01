@@ -482,7 +482,7 @@ static void hold_track_cb(lv_event_t *ev)
 static void ack_done(void)
 {
     lv_label_set_text(s_c_ack_lbl, "Acknowledging...");
-    alarm_ack();
+    alarm_ack(ALARM_BY_PANEL);
 }
 
 static void rearm_done(void)
@@ -618,7 +618,7 @@ static void ignore_mb_cb(lv_event_t *ev)
 
     char note[IGNORE_NOTE_MAX];
     snprintf(note, sizeof(note), "panel, incident #%lu", (unsigned long)s_ign.id);
-    esp_err_t r = ignore_add(s_ign.ip, mac_zero(s_ign.mac) ? NULL : s_ign.mac, note);
+    esp_err_t r = ignore_add(s_ign.ip, mac_zero(s_ign.mac) ? NULL : s_ign.mac, "", note);
     if (r != ESP_OK) {
         lv_obj_t *e = lv_msgbox_create(NULL, "Not ignored",
             r == ESP_ERR_NO_MEM ? "The ignore list is full (32). Remove entries on the dashboard Settings page."
@@ -633,7 +633,7 @@ static void ignore_mb_cb(lv_event_t *ev)
     bool same = (s_ign.ip && a.src_ip == s_ign.ip) ||
                 (!mac_zero(s_ign.mac) && !memcmp(a.src_mac, s_ign.mac, 6));
     if (a.state != ALARM_IDLE && same) {
-        alarm_ack();        // queued in order: ACTIVE -> ACKED -> IDLE
+        alarm_ack(ALARM_BY_PANEL);   // queued in order: ACTIVE -> ACKED -> IDLE
         alarm_clear();
     }
 }
