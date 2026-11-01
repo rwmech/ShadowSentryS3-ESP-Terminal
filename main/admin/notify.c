@@ -7,6 +7,7 @@
 // queue. The backend table is filled at boot, before the first send.
 
 #include "notify.h"
+#include "crash.h"
 #include "alarm.h"
 #include "log_store.h"
 #include "settings.h"
@@ -157,6 +158,16 @@ void notify_boot(const char *ip_str)
              SHADOWSENTRY_VERSION, app->version,
              s_reason,
              ip, ADMIN_PORT);
+    // The crash this boot followed (storage/crash.c): cause, task, top PC.
+    crash_summary_t c;
+    if (crash_last(&c) && c.this_boot) {
+        size_t n = strlen(text);
+        if (c.pc)
+            snprintf(text + n, sizeof(text) - n, "\nCrash: %s in task %s at PC 0x%08lx (GET /api/crashes)",
+                     c.cause, c.task[0] ? c.task : "?", (unsigned long)c.pc);
+        else
+            snprintf(text + n, sizeof(text) - n, "\nCrash: %s", c.cause);
+    }
     notify_send(NOTIFY_BOOT, title, text, sev);
 }
 

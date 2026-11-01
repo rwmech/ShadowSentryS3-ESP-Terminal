@@ -1,4 +1,5 @@
 #include "wifi_manager.h"
+#include "wifi_roam.h"
 #include "oui.h"
 #include "config.h"
 #include "settings.h"
@@ -131,6 +132,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                                   reason != WIFI_REASON_AUTH_LEAVE &&                 // 3
                                   reason != WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY && // 4
                                   reason != WIFI_REASON_ASSOC_LEAVE);                 // 8
+            // Fork: our own roam's disconnect, and a failed reconnect right
+            // after it, are not attacks (main/wifi_roam.c).
+            if (wifi_roam_note_disconnect()) deauth_reason = false;
             if (deauth_reason) {
                 s_deauth_disc_count++;
             }
@@ -223,6 +227,18 @@ void wifi_manager_init(void)
     wifi_cfg.sta.sae_pwe_h2e          = WPA3_SAE_PWE_BOTH;
     wifi_cfg.sta.pmf_cfg.capable      = true;
     wifi_cfg.sta.pmf_cfg.required     = false;
+
+    // Fork: join the strongest AP for the SSID, not the first one found, and
+    // let the AP steer us (802.11k/v) when the IDF is built with it. The RSSI
+    // re-roam is in main/wifi_roam.c. Config storage in RAM: it is set on
+    // every boot anyway, and a roam's esp_wifi_set_config() then writes no NVS.
+    wifi_cfg.sta.scan_method          = WIFI_ALL_CHANNEL_SCAN;
+    wifi_cfg.sta.sort_method          = WIFI_CONNECT_AP_BY_SIGNAL;
+#if CONFIG_ESP_WIFI_11KV_SUPPORT
+    wifi_cfg.sta.rm_enabled           = 1;
+    wifi_cfg.sta.btm_enabled          = 1;
+#endif
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));

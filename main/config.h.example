@@ -264,6 +264,21 @@
 #define WIFI_MON_DEAUTH_THRESHOLD      3     // broadcast deauth/disassoc within the span
 #define WIFI_MON_COOLDOWN_S            60    // min seconds between Wi-Fi alerts
 
+// ── Wi-Fi roaming ─────────────────────────────────────────────────────────────
+//
+// The station always joins the strongest AP for the SSID (all-channel scan,
+// sorted by RSSI). With several APs on one SSID it can still sit on a far one
+// after a drop, so main/wifi_roam.c re-roams: when the signal stays below
+// WIFI_ROAM_RSSI_DBM for WIFI_ROAM_LOW_S seconds, it scans, and moves to a
+// BSSID at least WIFI_ROAM_GAIN_DB stronger; at most one scan and roam every
+// WIFI_ROAM_INTERVAL_S. The Wi-Fi threat monitor does not count a roam's own
+// disconnect as a deauth. All values optional (defaults in main/wifi_roam.h).
+#define WIFI_ROAM_ENABLE               1     // 0 = no re-roam (the strongest-AP join stays)
+#define WIFI_ROAM_RSSI_DBM             (-75) // weak below this
+#define WIFI_ROAM_LOW_S                60    // weak for this long before a scan
+#define WIFI_ROAM_GAIN_DB              8     // a candidate must be this much stronger
+#define WIFI_ROAM_INTERVAL_S           300   // at most one scan and roam per this
+
 // ── Panel camera (OV2640) ─────────────────────────────────────────────────────
 //
 // The panel photographs whoever presses ACKNOWLEDGE, or confirms IGNORE ERROR
@@ -362,6 +377,13 @@ _Static_assert(TRIPWIRE_FREE_(TRIPWIRE_JETDIRECT_PORT), "TRIPWIRE_JETDIRECT_PORT
 // Discovery: on or off (its ports are UDP and fixed by the protocols)
 _Static_assert(DISCOVERY_ENABLE == 0 || DISCOVERY_ENABLE == 1, "DISCOVERY_ENABLE must be 0 or 1");
 _Static_assert(DISCOVERY_DHCP == 0 || DISCOVERY_DHCP == 1, "DISCOVERY_DHCP must be 0 or 1");
+
+// Wi-Fi roaming
+_Static_assert(WIFI_ROAM_ENABLE == 0 || WIFI_ROAM_ENABLE == 1, "WIFI_ROAM_ENABLE must be 0 or 1");
+_Static_assert(WIFI_ROAM_RSSI_DBM >= -95 && WIFI_ROAM_RSSI_DBM <= -40, "WIFI_ROAM_RSSI_DBM must be -95..-40");
+_Static_assert(WIFI_ROAM_LOW_S >= 10 && WIFI_ROAM_LOW_S <= 3600, "WIFI_ROAM_LOW_S must be 10..3600");
+_Static_assert(WIFI_ROAM_GAIN_DB >= 3 && WIFI_ROAM_GAIN_DB <= 30, "WIFI_ROAM_GAIN_DB must be 3..30");
+_Static_assert(WIFI_ROAM_INTERVAL_S >= 60 && WIFI_ROAM_INTERVAL_S <= 86400, "WIFI_ROAM_INTERVAL_S must be 60..86400");
 
 // Panel camera flash
 _Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");

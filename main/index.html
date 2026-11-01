@@ -770,7 +770,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option><option>wifi</option><option>crash</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <select id="lg-code" onchange="renderDay()" title="Filter by error code"><option value="">All codes</option></select>
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
@@ -889,6 +889,12 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <button class="btn" type="button" onclick="uploadOui()">Update vendor database</button>
       <progress id="ou-prog" max="100" value="0" hidden></progress>
     </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-title">Crashes</div>
+    <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">Panics and watchdog resets recorded on the board (the last 20). Each full report is also on the microSD card under /sd/crash; decode its PCs on a PC with tools/decode_crash.py and the firmware.elf of that build.</div>
+    <div class="kv" id="cr-list">Loading...</div>
+    <details style="margin-top:8px"><summary>Latest full report</summary><pre id="cr-report" style="white-space:pre-wrap;font-size:12px;margin:8px 0 0"></pre></details>
   </div>
 </main>
 
@@ -1384,7 +1390,7 @@ function showPage(p){
   PAGES.forEach(x=>{$('page-'+x).hidden=x!==p;$('tab-'+x).classList.toggle('on',x===p);});
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
   if(p==='logs'){loadSummary();loadDays();}
-  if(p==='settings'){loadSettings();loadIgnore();loadOui();}
+  if(p==='settings'){loadSettings();loadIgnore();loadOui();loadCrashes();}
   if(p==='devices')loadDevices();
 }
 window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
@@ -1824,6 +1830,8 @@ function logView(o){
     v.det=(o.label?S(o.label)+': ':'')+S(o.total)+' packets in '+Math.round((+o.period_s||0)/60)+' min ('+
       Object.entries(o.packets||{}).map(([a,b])=>S(a)+' '+S(b)).join(', ')+'), '+S(o.new_queries)+' new queries';}
   else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
+  else if(kind==='wifi'){v.type='Wi-Fi '+S(o.event);v.det=S(o.ssid)+': '+S(o.from)+' '+S(o.from_rssi)+' dBm to '+S(o.to)+' '+S(o.rssi)+' dBm, channel '+S(o.channel)+' ('+S(o.by)+')';}
+  else if(kind==='crash'){v.type='crash';v.det=S(o.cause)+(o.task?' in '+S(o.task):'')+(o.pc?' at '+S(o.pc):'')+', reset: '+S(o.reset);}
   v.key=isDisco(o)?[kind,v.code,v.ip,v.mac,v.type,v.det].join('\x1f'):null;
   v.n=1;v.t0=v.t1=v.ts;
   return v;
@@ -1956,6 +1964,17 @@ async function testDiscord(){
     };
     setTimeout(poll,1500);
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
+}
+// ── Crashes (GET /api/crashes), textContent only ──
+async function loadCrashes(){
+  try{const r=await fetch('/api/crashes',{cache:'no-store'});if(!r.ok)throw 0;const d=await r.json();
+    const list=(d.crashes||[]).slice().reverse();
+    $('cr-list').replaceChildren(...(list.length?list.map(c=>el('div','',
+      fmt(+c.ts||+c.boot_ts||0)+'  '+String(c.cause||'?')+(c.task?' in '+c.task:'')+(c.pc?' at '+c.pc:'')+
+      ', reset: '+String(c.reset||'?')+(c.fw?', firmware '+c.fw:'')+(c.ts?'':' (time of the report)'))):
+      [el('div','','No crash recorded.')]));
+    $('cr-report').textContent=d.latest?String(d.latest)+(d.latest_this_boot?'':'\n(from an earlier boot)'):'None.';}
+  catch{$('cr-list').textContent='Crash records unavailable';}
 }
 // ── Vendor database (GET/POST /api/oui) ──
 function ouMsg(kind,text){const m=$('ou-msg');m.className='msg '+kind;m.textContent=text;}
