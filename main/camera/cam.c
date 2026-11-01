@@ -36,9 +36,13 @@ static const char *TAG = "CAM";
 #define CAM_INIT_TRIES    4             // the last one at QVGA (Elecrow's size)
 #define CAM_RETRY_MS      300
 
+#define CAM_SETTLE_MAX_MS 2000
+
 typedef struct {
     uint32_t ts;
     char     action[CAM_ACTION_MAX];
+    uint16_t settle_ms;                 // let auto exposure settle first (cam_snap_lit)
+    cam_done_cb_t done;                 // called after the capture, NULL for none
 } cam_req_t;
 
 static QueueHandle_t     s_q;
@@ -61,7 +65,9 @@ static void pending_add(int d)
 
 bool cam_ready(void) { return s_ready; }
 
-bool cam_snap(const char *action)
+bool cam_snap(const char *action) { return cam_snap_lit(action, 0, NULL); }
+
+bool cam_snap_lit(const char *action, int settle_ms, cam_done_cb_t done)
 {
     if (!s_ready) return false;
 
@@ -73,7 +79,11 @@ bool cam_snap(const char *action)
     taskEXIT_CRITICAL(&s_mux);
     if (!go) return false;
 
-    cam_req_t r = { .ts = (uint32_t)time(NULL) };
+    cam_req_t r = {
+        .ts        = (uint32_t)time(NULL),
+        .settle_ms = (uint16_t)(settle_ms <= 0 ? 0 : settle_ms > CAM_SETTLE_MAX_MS ? CAM_SETTLE_MAX_MS : settle_ms),
+        .done      = done,
+    };
     size_t n = 0;
     for (; action && action[n] && n < CAM_ACTION_MAX - 1; n++) {
         char c = action[n];
@@ -164,11 +174,30 @@ static void snap_path(const cam_req_t *r, char *buf, size_t len)
     }
 }
 
+// cam_snap_lit(): the panel has just turned white. The sensor's auto exposure
+// adjusts over a few frames, so take and drop frames for settle_ms; the frame
+// kept starts after that.
+static int settle(int ms)
+{
+    int dropped = 0;
+    int64_t end = esp_timer_get_time() + (int64_t)ms * 1000;
+    while (esp_timer_get_time() < end) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (!fb) break;
+        esp_camera_fb_return(fb);
+        dropped++;
+    }
+    return dropped;
+}
+
 static void capture(const cam_req_t *r)
 {
     int64_t t0 = esp_timer_get_time();
+    int dropped = r->settle_ms ? settle(r->settle_ms) : 0;
+    int64_t t1 = esp_timer_get_time();
     camera_fb_t *fb = grab_fresh();
     if (!fb) {
+        if (r->done) r->done(false);
         ESP_LOGW(TAG, "snapshot \"%s\" failed: no frame", r->action);
         return;
     }
@@ -179,7 +208,11 @@ static void capture(const cam_req_t *r)
     if (keep) memcpy(keep, fb->buf, n);
     if (disk) memcpy(disk, fb->buf, n);
     esp_camera_fb_return(fb);
-    int ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (r->done) r->done(true);             // the frame is taken: the light can go
+    int ms = (int)((esp_timer_get_time() - t1) / 1000);
+    if (r->settle_ms)
+        ESP_LOGI(TAG, "lit snapshot: %d frames dropped in %d ms of settling, request to frame %d ms",
+                 dropped, (int)((t1 - t0) / 1000), (int)((esp_timer_get_time() - t0) / 1000));
 
     char path[CAM_FILE_MAX];
     snap_path(r, path, sizeof(path));

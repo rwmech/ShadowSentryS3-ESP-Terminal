@@ -6,7 +6,6 @@
 #include "sd_log.h"
 #include "cam.h"
 #include "wifi_manager.h"
-#include "ignore.h"
 #include "describe.h"
 #include "discovery.h"
 #include "tripwire.h"           // with http_engine.h and trap_listen.h: the port config
@@ -28,10 +27,9 @@ static const char *TAG = "UI";
 #define UI_TASK_STACK   8192
 #define UI_TASK_PRIO    2
 #define UI_QUEUE_DEPTH  16
-#define UI_FEED_ROWS    3       // the panel is for status and control, not a log
 #define UI_SEED_ROWS    200     // the whole flash ring, to count sources at boot
 #define UI_SRC_MAX      64      // distinct sources counted; more shows "64+"
-#define HOLD_MS         2000    // ACKNOWLEDGE and RE-ARM: a brush must not fire them
+#define HOLD_MS         2000    // ACKNOWLEDGE: a brush must not fire it
 #define HOLD_DRAIN_MS   250     // an early release empties a full fill in this time
 
 // Running light under the status bar: driven by an lv_timer on this task, so
@@ -41,26 +39,19 @@ static const char *TAG = "UI";
 #define RUNLIGHT_HEAD_W     72      // bright head, 15 % of the width
 #define RUNLIGHT_TRAIL_W    48      // fading trail behind it
 #define RUNLIGHT_STEP_MS    33
-#define RUNLIGHT_SWEEP_MS   2000    // armed, acknowledged: left to right, repeat
-#define RUNLIGHT_ALARM_MS   700     // alarm: one way in 0.7 s, then back
+#define RUNLIGHT_SWEEP_MS   2000    // green: left to right, repeat
 #define UI_MEASURE_MS       10000   // boot: loop cost without, then with the light
 
-// Side light bars while an incident is unacknowledged, in place of a
-// full-screen strobe: a full repaint over SPI at 18 bpp is slow, and small
-// flashing areas in bursts stay clear of photosensitivity limits. Left
-// double-flashes red, then right double-flashes blue, 2 cycles a second.
-// Each flash only recolours one bar, which nothing else overlaps, so LVGL
-// redraws just that rectangle.
-#define FLASH_W         40
-#define FLASH_Y         (RUNLIGHT_Y + RUNLIGHT_H)   // full height below the light
-#define FLASH_INSET     44      // the incident view keeps this clear of each edge
-#define FLASH_TICK_MS   10      // timer period; the pattern is read off the tick
-#define FLASH_SIDE_MS   250     // each side's half of the 500 ms cycle
-#define FLASH_ON_MS     80      // on 80, off 60, on 80, then dark to the half's end
-#define FLASH_OFF_MS    60
-#define FLASH_MEASURE_MS 2000   // after the bars start: log their refresh cost
+// During an incident the running light is hidden and the only thing that
+// moves is the alert emblem's sweep: a light segment running along its side
+// bars, left to right (EMB_SWEEP_RED_MS / _YELLOW_MS a pass). Each step
+// invalidates the segment's old and new place inside one bar, nothing else.
+#define EMB_SWEEP_RED_MS     1200
+#define EMB_SWEEP_YELLOW_MS  2000
+#define SWEEP_MEASURE_DELAY_MS 1500 // after a view change: let its full repaint pass
+#define SWEEP_MEASURE_MS     2000   // then log the sweep's refresh cost over this
 
-typedef enum { UMSG_EVENT, UMSG_ALARM, UMSG_NET } umsg_kind_t;
+typedef enum { UMSG_EVENT, UMSG_ALARM, UMSG_NET, UMSG_LIT_DONE } umsg_kind_t;
 
 typedef struct {
     umsg_kind_t kind;
@@ -77,12 +68,7 @@ static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
     "Port scan", "Probe", "ARP sweep", "ADB", "Tripwire", "Discovery",
 };
-static const char *TYPE_HEX[] = {   // same palette as the web dashboard
-    "a78bfa", "fbbf24", "f87171", "38bdf8", "34d399", "f472b6", "fb923c", "a3e635",
-    "22d3ee", "94a3b8", "e879f9", "3ddc84", "ef4444", "818cf8",
-};
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
-_Static_assert(sizeof(TYPE_HEX) / sizeof(TYPE_HEX[0]) == ATTACK_TYPE_COUNT, "TYPE_HEX: one per attack_type_t");
 
 // Bright palette: the ILI9488 has no gamma tuning, and dark greys on near
 // black read as dim, so text is white or light grey and accents are saturated.
@@ -94,54 +80,63 @@ _Static_assert(sizeof(TYPE_HEX) / sizeof(TYPE_HEX[0]) == ATTACK_TYPE_COUNT, "TYP
 #define COL_AMBER   lv_color_hex(0xffc400)
 #define COL_RED     lv_color_hex(0xff3b3b)
 #define COL_DARK    lv_color_hex(0x0b1220)   // text on a bright fill
-#define COL_FLASH_L lv_color_hex(0xff0000)   // left bar
-#define COL_FLASH_R lv_color_hex(0x0040ff)   // right bar
 #define HEX_SUB     "cbd5e1"                 // COL_SUB for label recolor
 
+// Alert emblem: flat solid fills on black, after the Starfleet alert graphic.
+#define COL_EMB_BG     lv_color_black()
+#define COL_EMB_RED    lv_color_hex(0xe00000)
+#define COL_EMB_YELLOW lv_color_hex(0xf0b000)
+#define COL_SWEEP_RED    lv_color_hex(0xffc8c8)   // the sweep's head on red
+#define COL_SWEEP_YELLOW lv_color_hex(0xfff4c8)   // and on amber
 #define COL_FILL_ACK   lv_color_white()         // hold fill on the red ACKNOWLEDGE
-#define COL_FILL_REARM lv_color_hex(0x0e8a4f)   // on the green RE-ARM; dark text stays readable
 
 #define TXT_ACK     "ACKNOWLEDGE\n(hold 2 s)"
-#define TXT_REARM   "RE-ARM\n(hold 2 s)"
 
 // Layout
 //
-// Every state:
-//   y   0..27   status bar: name, IP : port, clock, state pill (the only "ARMED")
+// GREEN (no incident):
+//   y   0..27   status bar: name, IP : port, clock, condition pill
 //   y  28..30   running light (RUNLIGHT_H)
-// ALARM or ACKED, x 44..435 (clear of the side bars):
-//   y  33..204  incident card: headline and age, source, details, buttons
-//   y 209..318  the incident's last 3 events
-//   x 0..39 and 440..479, y 31..319: the side bars, while unacknowledged
-// Armed (no incident): no card and no event list; under the light:
 //   y  34..57   key figures
 //   y  66..81   one muted line on the last incident, if there was one
 //   y  82..316  the dashboard (build_dash(): today's tiers, 24 h chart,
 //               watching panel, the newest alert or probe as a headline)
+// RED (unacknowledged), the whole screen, black, no status bar:
+//   y   0..159  the alert emblem, "ALERT / CONDITION: RED"
+//   y 163..257  the details (DET_*): code and name; source and vendor; the
+//               headline's detail, wrapped at words over up to 2 lines;
+//               count, first, last, how long open
+//   y 260..315  ACKNOWLEDGE (hold), IGNORE ERROR, IGNORE DEVICE
+// YELLOW (acknowledged, or a SEV2 incident):
+//   y   0..27   status bar
+//   y  30..149  the smaller emblem, "ALERT / CONDITION: YELLOW"
+//   y 152..246  the details
+//   y 250..299  IGNORE ERROR, IGNORE DEVICE
+//   y 303..318  "Resolve from the dashboard", with who acknowledged
 #define STATUS_H        28
-#define INC_X           FLASH_INSET
-#define INC_W           (480 - 2 * FLASH_INSET)         // 392
-#define CARD_Y          33
-#define CARD_H          172
-#define CARD_INNER_W    (INC_W - 2 * 2 - 2 * 6)         // 376: border 2, padding 6
-#define FEED_Y          209
-#define FEED_H          110     // 3 rows of 34 px
 #define FIG_Y_IDLE      34
 #define FIG_H           24
 #define LAST_Y_IDLE     66
 
-// Incident card buttons, along the card's bottom edge. ACKNOWLEDGE and RE-ARM
-// share the left slot (one shows at a time); the right slot, CARD_SLOT2_W wide,
-// is kept free for a third button.
-#define CARD_BTN_W      184
-#define CARD_SLOT2_W    184
-#define CARD_BTN_H      56
+#define RED_EMB_Y       0
+#define RED_EMB_H       160
+#define RED_DET_Y       163
+#define RED_BTN_Y       260
+#define RED_BTN_H       56
+#define YEL_EMB_Y       30
+#define YEL_EMB_H       120
+#define YEL_DET_Y       152
+#define YEL_BTN_Y       250
+#define YEL_BTN_H       50
+#define YEL_NOTE_Y      303
+#define DET_SRC_DY      22      // 20 px lines
+#define DET_DETAIL_DY   45      // 14 px, 2 lines
+#define DET_DETAIL_H    32
+#define DET_TIMES_DY    79      // 14 px, ends at +95
+#define DET_W           468     // x 6..473
 
 // Status bar
-static lv_obj_t *s_net, *s_clock, *s_pill, *s_pill_lbl;
-// Incident card
-static lv_obj_t *s_card, *s_c_head, *s_c_age, *s_c_src, *s_c_info, *s_c_times;
-static lv_obj_t *s_c_ack, *s_c_ack_lbl, *s_c_rearm, *s_c_rearm_lbl;
+static lv_obj_t *s_bar, *s_net, *s_clock, *s_pill, *s_pill_lbl;
 
 // A hold-to-confirm button: a fill grows across it over HOLD_MS while held,
 // and done() runs when it reaches the end.
@@ -150,35 +145,50 @@ typedef struct {
     void    (*done)(void);
     bool      holding;      // from press start until done, release or slide-off
 } hold_t;
-static hold_t s_h_ack, s_h_rearm;
+static hold_t s_h_ack;
 // Key figures, and the armed screen's last-incident line
 static lv_obj_t *s_figs, *s_f_events, *s_f_sources, *s_f_sd, *s_f_wifi;
 static lv_obj_t *s_last;
-// The incident's last events
-static lv_obj_t *s_feed;
-// Side light bars while unacknowledged
-static lv_obj_t   *s_flash_l, *s_flash_r;
-static lv_timer_t *s_flash;
-static bool        s_flashing, s_flash_l_on, s_flash_r_on;
+
+// One alert emblem (see build_emblem()): drawn once, static, but for the
+// sweep segment in each side bar.
+typedef struct {
+    lv_obj_t  *root;
+    lv_obj_t  *bar[2], *seg[2];     // left and right side bars, a segment in each
+    lv_coord_t bar_x[2], bar_w, seg_w;
+    uint32_t   sweep_ms;
+} emblem_t;
+static emblem_t s_emb_red, s_emb_yel;
+static emblem_t *s_emb;             // the one shown, NULL when green
+
+// The incident view: black, under the status bar
+static lv_obj_t *s_inc;
+static lv_obj_t *s_d_code, *s_d_src, *s_d_detail, *s_d_times, *s_note;
+static lv_obj_t *s_b_ack, *s_b_ack_lbl, *s_b_ign_err, *s_b_ign_dev;
+
 // Running light
-static lv_obj_t   *s_rl_seg;
+static lv_obj_t   *s_rl_track, *s_rl_seg;
 static lv_timer_t *s_rl;
-static bool        s_rl_bounce;     // alarm: back and forth
-static bool        s_rl_back;       // moving right to left, trail on the right
 static lv_color_t  s_rl_col;        // the state colour
 
 static alarm_info_t s_alarm;            // last state applied, for the age line
-static char         s_open_hl[DESCRIBE_MAX];   // the incident's opening event, as a headline
 static uint32_t     s_src[UI_SRC_MAX];  // distinct sources seen
 static int          s_src_n;
 static bool         s_src_more;
 
+// Backlight: forced full on while RED, and while the face light is up
+static bool s_bl_red, s_bl_lit;
+
+// Face light for the panel photo (CAM_FLASH_ENABLE): a white layer over all
+static lv_obj_t *s_white;
+
 // Refresh timing: first flush start to last flush done, per refresh
 static void (*s_flush_orig)(lv_disp_drv_t *, const lv_area_t *, lv_color_t *);
 static int64_t  s_fl_t0, s_fl_t1;
-static bool     s_fm_on;                // measuring, after the bars start
+static bool     s_fm_on;                // measuring the sweep, after a view change
 static uint32_t s_fm_start, s_fm_n, s_fm_px_max;
 static int64_t  s_fm_sum, s_fm_max;
+static bool     s_fm_full;              // the next refresh is a view's full repaint
 
 // ── Listeners (run on other tasks: copy and queue only) ───────────────────────
 
@@ -233,7 +243,6 @@ static void fmt_age(uint32_t first, char *buf, size_t len)
 }
 
 static const char *type_name(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_NAME[t] : "?"; }
-static const char *type_hex(uint8_t t)  { return t < ATTACK_TYPE_COUNT ? TYPE_HEX[t]  : "ffffff"; }
 
 // ── Sources ───────────────────────────────────────────────────────────────────
 
@@ -244,110 +253,66 @@ static void source_add(uint32_t ip)
     else s_src_more = true;
 }
 
-// ── The incident's last events ────────────────────────────────────────────────
+// ── Condition ─────────────────────────────────────────────────────────────────
+//
+// What the panel shows is the incident's condition (alarm.h): RED while a
+// SEV1 incident is unacknowledged, YELLOW once acknowledged or for a SEV2
+// incident, GREEN with none.
 
-static void row_deleted_cb(lv_event_t *ev)
+static const char *COND_NAME[] = { "GREEN", "YELLOW", "RED" };   // by alarm_cond_t
+
+static alarm_cond_t cond_of(const alarm_info_t *a)
 {
-    heap_caps_free(lv_event_get_user_data(ev));
+    return a->cond <= ALARM_COND_RED ? a->cond : ALARM_COND_RED;
 }
 
-static void row_clicked_cb(lv_event_t *ev)
+static bool mac_zero(const uint8_t m[6])
 {
-    const attack_log_t *e = (const attack_log_t *)lv_event_get_user_data(ev);
-    char ip[16], mac[WIFI_MAC_STR_LEN], t[12];
-    fmt_ip(e->src_ip, ip, sizeof(ip));
-    wifi_manager_format_mac(e->src_mac, mac, sizeof(mac));
-    fmt_time(e->timestamp, t, sizeof(t));
-
-    static char body[512];
-    snprintf(body, sizeof(body),
-             "Time:  %s\nSource:  %s\nMAC:  %s  (%s)\nUser:  %s\nPass:  %s\n\n%s",
-             t, ip, mac, wifi_manager_mac_vendor(e->src_mac),
-             e->username[0] ? e->username : "-",
-             e->password[0] ? e->password : "-",
-             e->payload);
-    lv_obj_t *mb = lv_msgbox_create(NULL, type_name((uint8_t)e->type), body, NULL, true);
-    lv_obj_set_width(mb, 440);
-    lv_obj_center(mb);
+    for (int i = 0; i < 6; i++) if (m[i]) return false;
+    return true;
 }
 
-static void feed_add(const attack_log_t *src)
+// The details' first line, and what IGNORE ERROR names: "Code 17-01 ARP
+// sweep", the headline's code and name without its detail.
+static void fmt_what(const alarm_info_t *a, char *buf, size_t len)
 {
-    attack_log_t *e = heap_caps_malloc(sizeof(*e), MALLOC_CAP_SPIRAM);
-    if (!e) return;
-    *e = *src;
-
-    // The time, then the headline (describe_event() has no '#', the recolor marker).
-    char t[12], hl[DESCRIBE_MAX], text[DESCRIBE_MAX + 24];
-    fmt_time(e->timestamp, t, sizeof(t));
-    describe_event(e, hl, sizeof(hl));
-    snprintf(text, sizeof(text), "#%s %s#  %s", type_hex((uint8_t)e->type), t, hl);   // time in the type's colour
-
-    lv_obj_t *btn = lv_list_add_btn(s_feed, NULL, text);
-    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
-    lv_label_set_recolor(lbl, true);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_bg_color(btn, COL_CARD, 0);
-    lv_obj_set_style_text_color(btn, COL_TEXT, 0);
-    lv_obj_set_style_text_font(btn, &lv_font_montserrat_14, 0);   // a headline fits the row
-    lv_obj_set_style_pad_ver(btn, 9, 0);     // 34 px rows: a touch target
-    lv_obj_set_style_pad_hor(btn, 6, 0);
-    lv_obj_set_style_radius(btn, 4, 0);
-    lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_set_user_data(btn, e);
-    lv_obj_add_event_cb(btn, row_clicked_cb, LV_EVENT_CLICKED, e);
-    lv_obj_add_event_cb(btn, row_deleted_cb, LV_EVENT_DELETE, e);
-    lv_obj_move_to_index(btn, 0);            // newest on top
-
-    while (lv_obj_get_child_cnt(s_feed) > UI_FEED_ROWS)
-        lv_obj_del(lv_obj_get_child(s_feed, -1));
+    const char *name = a->code[0] ? describe_code_name(a->code) : NULL;
+    if (name)               snprintf(buf, len, "Code %s %s", a->code, name);
+    else if (a->headline[0]) {
+        strlcpy(buf, a->headline, len);
+        char *bar = strstr(buf, " | ");
+        if (bar) *bar = '\0';
+    } else                  strlcpy(buf, type_name(a->type), len);
 }
 
-// The list shows only the current incident: its source, or anything since it
-// opened (once the clock is set).
-static bool feed_match(const attack_log_t *e)
+// Shorten s at word boundaries, with "...", until it fits w pixels in font f.
+static void fit_words(char *s, const lv_font_t *f, lv_coord_t w)
 {
-    if (s_alarm.state == ALARM_IDLE) return false;
-    if (e->src_ip == s_alarm.src_ip) return true;
-    return s_alarm.first_ts >= 1600000000 && e->timestamp >= s_alarm.first_ts;
-}
-
-// The same event can reach the list twice: from the reseed (the flash ring)
-// and from the queue, when the alarm's message overtook the event's.
-static bool feed_has(const attack_log_t *e)
-{
-    for (uint32_t i = 0; i < lv_obj_get_child_cnt(s_feed); i++) {
-        const attack_log_t *r = lv_obj_get_user_data(lv_obj_get_child(s_feed, (int32_t)i));
-        if (r && r->timestamp == e->timestamp && r->src_ip == e->src_ip && r->type == e->type &&
-            !strncmp(r->username, e->username, sizeof(r->username)) &&
-            !strncmp(r->payload, e->payload, sizeof(r->payload)))
-            return true;
+    size_t n = strlen(s);
+    while (lv_txt_get_width(s, (uint32_t)strlen(s), f, 0, LV_TEXT_FLAG_NONE) > w) {
+        char *sp = NULL;
+        for (char *c = s; c < s + n; c++) if (*c == ' ') sp = c;
+        if (!sp || sp == s || strlen(sp) < 4) return;   // one word left: the label clips it
+        strcpy(sp, "...");
+        n = (size_t)(sp - s);                   // the next cut is before this one
     }
-    return false;
 }
 
-// New incident, or none: refill the list from the flash ring, newest on top.
-static void feed_reseed(void)
+// "192.168.0.75 (ASUSTek)", or the MAC when there is no address.
+static void fmt_who(const alarm_info_t *a, char *buf, size_t len)
 {
-    lv_obj_clean(s_feed);                    // rows free their copies on delete
-    s_open_hl[0] = '\0';
-    if (s_alarm.state == ALARM_IDLE) return;
-    attack_log_t *r = heap_caps_malloc(sizeof(*r) * UI_SEED_ROWS, MALLOC_CAP_SPIRAM);
-    if (!r) return;
-    int n = log_store_get_recent(r, UI_SEED_ROWS), pick[UI_FEED_ROWS], k = 0;
-    for (int i = 0; i < n && k < UI_FEED_ROWS; i++)
-        if (feed_match(&r[i])) pick[k++] = i;
-    while (k-- > 0) feed_add(&r[pick[k]]);   // oldest first, so the newest ends on top
-    // The opening event: same source and type, its first-seen time, else the
-    // oldest such event still in the ring (newest first, so keep going back).
-    const attack_log_t *open = NULL;
-    for (int i = 0; i < n; i++) {
-        if (r[i].src_ip != s_alarm.src_ip || (uint8_t)r[i].type != s_alarm.type) continue;
-        open = &r[i];
-        if (r[i].timestamp == s_alarm.first_ts) break;
+    const char *v = wifi_manager_mac_vendor(a->src_mac);
+    if (a->src_ip) {
+        char ip[16];
+        fmt_ip(a->src_ip, ip, sizeof(ip));
+        if (v[0]) snprintf(buf, len, "%s (%s)", ip, v);
+        else      strlcpy(buf, ip, len);
+    } else {
+        char mac[WIFI_MAC_STR_LEN];
+        wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
+        if (v[0]) snprintf(buf, len, "MAC %s (%s)", mac, v);
+        else      snprintf(buf, len, "MAC %s", mac);
     }
-    if (open) describe_event(open, s_open_hl, sizeof(s_open_hl));
-    heap_caps_free(r);
 }
 
 // ── Key figures ───────────────────────────────────────────────────────────────
@@ -417,7 +382,7 @@ static void hold_full_cb(lv_anim_t *a)
 {
     hold_t *h = (hold_t *)a->var;
     h->holding = false;
-    buzzer_confirm();               // queued to the buzzer task, returns at once
+    buzzer_chirp(BUZZER_CHIRP_ACK); // queued to the buzzer task, returns at once
     h->done();
 }
 
@@ -481,30 +446,19 @@ static void hold_track_cb(lv_event_t *ev)
 
 static void ack_done(void)
 {
-    lv_label_set_text(s_c_ack_lbl, "Acknowledging...");
+    lv_label_set_text(s_b_ack_lbl, "Acknowledging...");
     alarm_ack(ALARM_BY_PANEL);
 }
 
-static void rearm_done(void)
-{
-    lv_label_set_text(s_c_rearm_lbl, "Re-arming...");
-    alarm_clear();
-}
+static void lit_snap(const char *action);
 
 // ACKNOWLEDGE press start. The photo is taken here, while the person is
-// still at the glass; the hold that follows decides whether the action
-// fires. cam_snap() only queues, so it is safe on the UI task.
+// still at the glass, under the face light; the hold that goes on under the
+// white layer decides whether the action fires.
 static void ack_press_start_cb(lv_event_t *ev)
 {
-    cam_snap("ack");
     hold_begin((hold_t *)lv_event_get_user_data(ev));
-}
-
-// RE-ARM press start: photo first, as for ACKNOWLEDGE.
-static void rearm_press_start_cb(lv_event_t *ev)
-{
-    cam_snap("clear");
-    hold_begin((hold_t *)lv_event_get_user_data(ev));
+    lit_snap("ack");
 }
 
 static void hold_attach(hold_t *h, lv_obj_t *btn, lv_obj_t *fill, void (*done)(void),
@@ -519,94 +473,246 @@ static void hold_attach(hold_t *h, lv_obj_t *btn, lv_obj_t *fill, void (*done)(v
     lv_obj_add_event_cb(btn, hold_track_cb, LV_EVENT_PRESS_LOST, h);
 }
 
-// ── Running light ─────────────────────────────────────────────────────────────
+static lv_obj_t *box(lv_obj_t *parent, lv_color_t bg);
+static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, lv_color_t col);
 
-// The segment is one object: a solid head and a trail that fades into the
-// track, a horizontal gradient. Moving left, the gradient flips.
-static void runlight_dir(bool back)
+// ── Running light and the emblem sweep ────────────────────────────────────────
+
+// A segment is one object: a trail fading in from the track colour, then a
+// solid head on the right (it moves left to right), a horizontal gradient.
+static void seg_style(lv_obj_t *seg, lv_color_t track, lv_color_t head, int head_w, int w)
 {
-    const lv_color_t c = s_rl_col;
-    const int trail = 255 * RUNLIGHT_TRAIL_W / (RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W);
-    lv_obj_set_style_bg_color(s_rl_seg, back ? c : COL_BG, 0);
-    lv_obj_set_style_bg_grad_color(s_rl_seg, back ? COL_BG : c, 0);
-    lv_obj_set_style_bg_main_stop(s_rl_seg, back ? 255 - trail : 0, 0);
-    lv_obj_set_style_bg_grad_stop(s_rl_seg, back ? 255 : trail, 0);
+    lv_obj_set_style_bg_grad_dir(seg, LV_GRAD_DIR_HOR, 0);
+    lv_obj_set_style_bg_color(seg, track, 0);
+    lv_obj_set_style_bg_grad_color(seg, head, 0);
+    lv_obj_set_style_bg_main_stop(seg, 0, 0);
+    lv_obj_set_style_bg_grad_stop(seg, (lv_coord_t)(255 * (w - head_w) / w), 0);
 }
 
-// Position from the tick, not a step count, so the speed holds if a step is late.
+// Position from the tick, not a step count, so the speed holds if a step is
+// late. Green: the light under the status bar. An incident: the emblem's
+// segment, one pass across the whole width, shown in whichever side bar it
+// is over. Each bar clips its own segment, and one parked just past either
+// end of its bar is drawn nowhere; an unchanged position is a no-op in LVGL.
 static void runlight_cb(lv_timer_t *t)
 {
     (void)t;
-    const int32_t w = RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W;
     uint32_t now = lv_tick_get();
-    int32_t x;
-    bool back = false;
-    if (s_rl_bounce) {          // stays on screen, turns at each edge
-        uint32_t ph = now % (2 * RUNLIGHT_ALARM_MS);
-        back = ph >= RUNLIGHT_ALARM_MS;
-        if (back) ph -= RUNLIGHT_ALARM_MS;
-        int32_t d = (int32_t)((480 - w) * ph / RUNLIGHT_ALARM_MS);
-        x = back ? (480 - w) - d : d;
-    } else {                    // enters at the left edge, leaves at the right
+    emblem_t *e = s_emb;
+    if (!e) {
+        const int32_t w = RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W;
         uint32_t ph = now % RUNLIGHT_SWEEP_MS;
-        x = -w + (int32_t)((480 + w) * ph / RUNLIGHT_SWEEP_MS);
+        lv_obj_set_x(s_rl_seg, (lv_coord_t)(-w + (int32_t)((480 + w) * ph / RUNLIGHT_SWEEP_MS)));
+        return;
     }
-    if (back != s_rl_back) {
-        s_rl_back = back;
-        runlight_dir(back);
+    uint32_t ph = now % e->sweep_ms;
+    int32_t x = -e->seg_w + (int32_t)((480 + e->seg_w) * ph / e->sweep_ms);
+    for (int i = 0; i < 2; i++) {
+        int32_t lx = x - e->bar_x[i];
+        if (lx < -e->seg_w) lx = -e->seg_w;
+        if (lx > e->bar_w)  lx = e->bar_w;
+        lv_obj_set_x(e->seg[i], (lv_coord_t)lx);
     }
-    lv_obj_set_x(s_rl_seg, (lv_coord_t)x);
 }
 
-static void runlight_set(lv_color_t c, bool bounce)
+static void runlight_set(lv_color_t c)
 {
     s_rl_col = c;
-    s_rl_bounce = bounce;
-    if (!bounce) s_rl_back = false;
-    runlight_dir(s_rl_back);
+    seg_style(s_rl_seg, COL_BG, c, RUNLIGHT_HEAD_W, RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W);
 }
 
-// ── Side light bars ───────────────────────────────────────────────────────────
-
-// Only a change of state recolours a bar, so each flash edge invalidates one
-// 40 x 289 rectangle and nothing else. Off is the background colour rather
-// than hidden: the bar stays opaque, so LVGL draws only the bar there.
-static void flash_cb(lv_timer_t *t)
-{
-    (void)t;
-    uint32_t ph = lv_tick_get() % (2 * FLASH_SIDE_MS);
-    bool right  = ph >= FLASH_SIDE_MS;
-    uint32_t p  = ph % FLASH_SIDE_MS;
-    bool on = p < FLASH_ON_MS ||
-              (p >= FLASH_ON_MS + FLASH_OFF_MS && p < 2 * FLASH_ON_MS + FLASH_OFF_MS);
-    bool l = on && !right, r = on && right;
-    if (l != s_flash_l_on) {
-        s_flash_l_on = l;
-        lv_obj_set_style_bg_color(s_flash_l, l ? COL_FLASH_L : COL_BG, 0);
-    }
-    if (r != s_flash_r_on) {
-        s_flash_r_on = r;
-        lv_obj_set_style_bg_color(s_flash_r, r ? COL_FLASH_R : COL_BG, 0);
-    }
-}
-
-// ── Ignore source (detect-core) ───────────────────────────────────────────────
+// ── Alert emblem ──────────────────────────────────────────────────────────────
 //
-// IGNORE SOURCE sits in the incident card's bottom-right slot (CARD_SLOT2_W x
-// CARD_BTN_H), beside ACKNOWLEDGE / RE-ARM. A tap opens a confirmation; Ignore
-// adds the source to the ignore list and, if the open incident is still from
-// it, acknowledges and re-arms it so the siren and the side bars stop. The
-// panel only adds: removal is on the dashboard.
+// After the Starfleet alert graphic, drawn natively: a rounded chevron above
+// and one below a central band, stacked stripes inside each, long bars out to
+// the left and right edges at the band's height, and in the band "ALERT" over
+// "CONDITION: <name>". Flat fills on black: two lv_lines (rounded caps and
+// joins), rounded rectangles and labels, 19 objects, drawn once. For height h
+// (cx 240, cy h / 2):
+//   side bars   x 4..240-gap-1 and 240+gap..475, bar_h tall, centred on cy
+//   chevrons    feet at (240 -/+ foot, cy - bar_h / 2 - lw / 2), shoulders at
+//               (240 -/+ top, lw / 2 + 2), line width lw; mirrored below
+//   stripes     n per chevron, stripe_h tall, stripe_gap apart, from just
+//               under the shoulder line, as wide as the chevron allows at
+//               their top edge less 12 px (the slanted line is wider than lw)
+//   text        "ALERT" centred at cy + title_dy, set twice 1 px apart (the
+//               largest font is Montserrat Medium, this makes it bold), the
+//               condition at cy + cond_dy
 
-static lv_obj_t *s_c_ignore;
-static struct { uint32_t ip; uint8_t mac[6]; uint32_t id; } s_ign;   // the source the dialog is about
-static const char *IGN_BTNS[] = { "Ignore", "Cancel", "" };
+typedef struct {
+    lv_coord_t h, gap, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes, seg_w;
+    lv_coord_t title_dy, cond_dy, title_ls;
+    const lv_font_t *f_title, *f_cond;
+    const char *cond;
+    uint32_t col_hex, head_hex, sweep_ms;
+} emblem_spec_t;
 
-static bool mac_zero(const uint8_t m[6])
+static const emblem_spec_t EMB_RED = {
+    .h = RED_EMB_H, .gap = 116, .bar_h = 16, .foot = 150, .top = 70, .lw = 8,
+    .stripe_h = 4, .stripe_gap = 4, .stripes = 4, .seg_w = 72,
+    .title_dy = -12, .cond_dy = 24, .title_ls = 4,
+    .f_title = &lv_font_montserrat_48, .f_cond = &lv_font_montserrat_20,
+    .cond = "CONDITION: RED", .col_hex = 0xe00000, .head_hex = 0xffc8c8,
+    .sweep_ms = EMB_SWEEP_RED_MS,
+};
+static const emblem_spec_t EMB_YELLOW = {
+    .h = YEL_EMB_H, .gap = 92, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
+    .stripe_h = 4, .stripe_gap = 3, .stripes = 3, .seg_w = 48,
+    .title_dy = -8, .cond_dy = 14, .title_ls = 2,
+    .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
+    .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .head_hex = 0xfff4c8,
+    .sweep_ms = EMB_SWEEP_YELLOW_MS,
+};
+
+// lv_line keeps a pointer to its points, so they live here.
+static lv_point_t s_emb_pts[2][2][4];   // [emblem][upper, lower][point]
+
+static lv_obj_t *emb_pill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c)
 {
-    for (int i = 0; i < 6; i++) if (m[i]) return false;
-    return true;
+    lv_obj_t *o = box(p, c);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_radius(o, h / 2, 0);
+    return o;
 }
+
+static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv_coord_t y,
+                         const emblem_spec_t *s)
+{
+    const lv_color_t col = lv_color_hex(s->col_hex);
+    const lv_coord_t cy = s->h / 2, last = s->h - 1;
+    const lv_coord_t yt = s->lw / 2 + 2, yb = cy - s->bar_h / 2 - s->lw / 2;
+
+    e->root = box(parent, COL_EMB_BG);
+    lv_obj_set_size(e->root, 480, s->h);
+    lv_obj_set_pos(e->root, 0, y);
+    e->sweep_ms = s->sweep_ms;
+    e->seg_w = s->seg_w;
+
+    for (int k = 0; k < 2; k++) {           // 0 upper, 1 lower (mirrored)
+        lv_coord_t t = k ? last - yt : yt, b = k ? last - yb : yb;
+        lv_point_t *p = pts[k];
+        p[0] = (lv_point_t){ 240 - s->foot, b };
+        p[1] = (lv_point_t){ 240 - s->top,  t };
+        p[2] = (lv_point_t){ 240 + s->top,  t };
+        p[3] = (lv_point_t){ 240 + s->foot, b };
+        lv_obj_t *l = lv_line_create(e->root);
+        lv_line_set_points(l, p, 4);
+        lv_obj_set_style_line_width(l, s->lw, 0);
+        lv_obj_set_style_line_color(l, col, 0);
+        lv_obj_set_style_line_rounded(l, true, 0);
+        lv_obj_set_pos(l, 0, 0);
+        lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
+
+        for (int i = 0; i < s->stripes; i++) {
+            lv_coord_t y0 = yt + s->lw / 2 + 5 + i * (s->stripe_h + s->stripe_gap);
+            int32_t hw = s->top + (int32_t)(s->foot - s->top) * (y0 - yt) / (yb - yt) - 12;
+            if (hw < 8) continue;
+            emb_pill(e->root, (lv_coord_t)(240 - hw), k ? (lv_coord_t)(s->h - y0 - s->stripe_h) : y0,
+                     (lv_coord_t)(2 * hw), s->stripe_h, col);
+        }
+    }
+
+    e->bar_w = 236 - s->gap;
+    e->bar_x[0] = 4;
+    e->bar_x[1] = 240 + s->gap;
+    for (int i = 0; i < 2; i++) {
+        e->bar[i] = box(e->root, col);
+        lv_obj_set_pos(e->bar[i], e->bar_x[i], cy - s->bar_h / 2);
+        lv_obj_set_size(e->bar[i], e->bar_w, s->bar_h);
+        lv_obj_set_style_radius(e->bar[i], 3, 0);
+        e->seg[i] = box(e->bar[i], col);
+        lv_obj_set_size(e->seg[i], s->seg_w, s->bar_h);
+        lv_obj_set_pos(e->seg[i], -s->seg_w, 0);
+        seg_style(e->seg[i], col, lv_color_hex(s->head_hex), s->seg_w * 3 / 5, s->seg_w);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *t = label(e->root, s->f_title, col);
+        lv_label_set_text(t, "ALERT");
+        lv_obj_set_style_text_letter_space(t, s->title_ls, 0);
+        lv_obj_align(t, LV_ALIGN_CENTER, (lv_coord_t)i, s->title_dy);
+    }
+    lv_obj_t *c = label(e->root, s->f_cond, col);
+    lv_label_set_text(c, s->cond);
+    lv_obj_align(c, LV_ALIGN_CENTER, 0, s->cond_dy);
+    lv_obj_add_flag(e->root, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ── Backlight and the face light ──────────────────────────────────────────────
+//
+// The backlight is forced full on while RED and while the face light is up,
+// else it follows the brightness setting.
+//
+// Face light (CAM_FLASH_ENABLE): a press that takes a photo (ACKNOWLEDGE's
+// start, an IGNORE confirm) first turns the whole panel white and the
+// backlight full on, so the screen lights the face. The white is drawn at
+// once (lv_refr_now, timed and logged), then the camera drops frames for
+// CAM_FLASH_SETTLE_MS while its exposure settles on the light, captures, and
+// its callback (camera task) queues UMSG_LIT_DONE to take the white down. The
+// white layer is not clickable, so a hold under it carries on. If the
+// callback never arrives, LIT_TIMEOUT_MS takes the white down anyway.
+#define LIT_TIMEOUT_MS  (CAM_FLASH_SETTLE_MS + 1500)
+
+static bool     s_lit;
+static uint32_t s_lit_at;
+
+static void backlight_update(void)
+{
+    display_set_backlight_override(s_bl_red || s_bl_lit);
+}
+
+static void lit_done_cb(bool ok)            // camera task: queue only
+{
+    (void)ok;
+    umsg_t m = { .kind = UMSG_LIT_DONE };
+    xQueueSend(s_q, &m, 0);                 // dropped: the timeout takes the white down
+}
+
+static void lit_off(void)
+{
+    if (!s_lit) return;
+    s_lit = false;
+    lv_obj_add_flag(s_white, LV_OBJ_FLAG_HIDDEN);
+    s_bl_lit = false;
+    backlight_update();
+}
+
+static void lit_snap(const char *action)
+{
+#if CAM_FLASH_ENABLE
+    if (cam_ready() && !s_lit) {
+        lv_obj_clear_flag(s_white, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_white);    // over a dialog too
+        s_lit = true;
+        s_lit_at = lv_tick_get();
+        s_bl_lit = true;
+        backlight_update();
+        int64_t t0 = esp_timer_get_time();
+        lv_refr_now(NULL);                  // the white is on the glass when this returns
+        int ms = (int)((esp_timer_get_time() - t0) / 1000);
+        if (cam_snap_lit(action, CAM_FLASH_SETTLE_MS, lit_done_cb)) {
+            ESP_LOGI(TAG, "Face light for \"%s\": white drawn in %d ms, the camera settles %d ms",
+                     action, ms, CAM_FLASH_SETTLE_MS);
+        } else {
+            lit_off();                      // not taken: a photo under a second ago
+        }
+        return;
+    }
+#endif
+    cam_snap(action);
+}
+
+// ── Ignore error / ignore device ──────────────────────────────────────────────
+//
+// IGNORE ERROR stops this kind of incident from this source alerting; IGNORE
+// DEVICE stops every alert from the source. Each asks first, naming exactly
+// what will be ignored; the dashboard can undo either. Confirming takes the
+// photo and then acts.
+
+typedef enum { IGN_ERROR, IGN_DEVICE } ign_kind_t;
+static struct { ign_kind_t kind; uint32_t id; } s_ign;     // what the open dialog is about
+static const char *IGN_BTNS[] = { "Ignore", "Cancel", "" };
 
 static void ignore_mb_cb(lv_event_t *ev)
 {
@@ -614,50 +720,51 @@ static void ignore_mb_cb(lv_event_t *ev)
     const char *b = lv_msgbox_get_active_btn_text(mb);
     bool yes = b && !strcmp(b, "Ignore");
     lv_msgbox_close_async(mb);
-    if (!yes) return;
-
-    char note[IGNORE_NOTE_MAX];
-    snprintf(note, sizeof(note), "panel, incident #%lu", (unsigned long)s_ign.id);
-    esp_err_t r = ignore_add(s_ign.ip, mac_zero(s_ign.mac) ? NULL : s_ign.mac, "", note);
-    if (r != ESP_OK) {
-        lv_obj_t *e = lv_msgbox_create(NULL, "Not ignored",
-            r == ESP_ERR_NO_MEM ? "The ignore list is full (32). Remove entries on the dashboard Settings page."
-                                : "Could not save the ignore list.", NULL, true);
-        lv_obj_set_width(e, 400);
-        lv_obj_center(e);
-        return;
-    }
-    ESP_LOGW(TAG, "Source of incident #%lu ignored from the panel", (unsigned long)s_ign.id);
     alarm_info_t a;
     alarm_get(&a);
-    bool same = (s_ign.ip && a.src_ip == s_ign.ip) ||
-                (!mac_zero(s_ign.mac) && !memcmp(a.src_mac, s_ign.mac, 6));
-    if (a.state != ALARM_IDLE && same) {
-        alarm_ack(ALARM_BY_PANEL);   // queued in order: ACTIVE -> ACKED -> IDLE
-        alarm_clear();
+    if (yes && (a.state == ALARM_IDLE || a.id != s_ign.id)) {
+        ESP_LOGW(TAG, "Ignore dropped: incident #%lu is no longer shown", (unsigned long)s_ign.id);
+        yes = false;
     }
+    if (!yes) {
+        buzzer_chirp(BUZZER_CHIRP_CANCEL);
+        return;
+    }
+    buzzer_chirp(BUZZER_CHIRP_CONFIRM);
+    lit_snap("ignore");
+    ESP_LOGW(TAG, "IGNORE %s on incident #%lu from the panel",
+             s_ign.kind == IGN_ERROR ? "ERROR" : "DEVICE", (unsigned long)s_ign.id);
+    esp_err_t r = s_ign.kind == IGN_ERROR ? alarm_ignore_error(ALARM_BY_PANEL)
+                                          : alarm_ignore_device(ALARM_BY_PANEL);
+    if (r == ESP_OK) return;
+    ESP_LOGW(TAG, "Ignore failed: %s", esp_err_to_name(r));
+    lv_obj_t *e = lv_msgbox_create(NULL, "Not ignored",
+        r == ESP_ERR_NO_MEM ? "The ignore list is full (32). Remove entries on the dashboard."
+      : r == ESP_ERR_INVALID_STATE ? "The incident has closed."
+                                   : "Could not save the ignore list.", NULL, true);
+    lv_obj_set_width(e, 400);
+    lv_obj_center(e);
 }
 
-static void ignore_cb(lv_event_t *ev)
+static void ignore_ask_cb(lv_event_t *ev)
 {
-    (void)ev;
+    ign_kind_t kind = (ign_kind_t)(uintptr_t)lv_event_get_user_data(ev);
     if (s_alarm.state == ALARM_IDLE) return;
-    s_ign.ip = s_alarm.src_ip;
-    memcpy(s_ign.mac, s_alarm.src_mac, 6);
+    s_ign.kind = kind;
     s_ign.id = s_alarm.id;
 
-    char ip[16], mac[WIFI_MAC_STR_LEN], who[96];
-    static char body[320];
-    fmt_ip(s_ign.ip, ip, sizeof(ip));
-    wifi_manager_format_mac(s_ign.mac, mac, sizeof(mac));
-    const char *v = wifi_manager_mac_vendor(s_ign.mac);
-    if (!s_ign.ip)         snprintf(who, sizeof(who), "MAC %s%s%s%s", mac, v[0] ? " (" : "", v, v[0] ? ")" : "");
-    else if (v[0])         snprintf(who, sizeof(who), "%s (%s, %s)", ip, v, mac);
-    else                   snprintf(who, sizeof(who), "%s (%s)", ip, mac);
-    snprintf(body, sizeof(body), "Ignore %s?\n\nEvents from it will still be logged but will not alarm. "
-             "Undo from the dashboard Settings page.", who);
-
-    lv_obj_t *mb = lv_msgbox_create(NULL, "Ignore source", body, IGN_BTNS, false);
+    char who[96], what[DESCRIBE_MAX];
+    static char body[DESCRIBE_MAX + 192];
+    fmt_who(&s_alarm, who, sizeof(who));
+    if (kind == IGN_ERROR) {
+        fmt_what(&s_alarm, what, sizeof(what));
+        snprintf(body, sizeof(body), "Ignore %s from %s?\n\nThe dashboard can undo it.", what, who);
+    } else {
+        snprintf(body, sizeof(body), "Ignore all alerts from %s?\n\n"
+                 "Its events are still logged. The dashboard can undo it.", who);
+    }
+    lv_obj_t *mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "Ignore error" : "Ignore device",
+                                    body, IGN_BTNS, false);
     lv_obj_set_width(mb, 440);
     lv_obj_set_style_text_font(mb, &lv_font_montserrat_20, 0);
     lv_obj_t *btns = lv_msgbox_get_btns(mb);
@@ -666,62 +773,12 @@ static void ignore_cb(lv_event_t *ev)
     lv_obj_add_event_cb(mb, ignore_mb_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
-static void ignore_show(bool on)
-{
-    // Nothing to ignore without a source address.
-    on = on && (s_alarm.src_ip || !mac_zero(s_alarm.src_mac));
-    if (on) lv_obj_clear_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
-    else    lv_obj_add_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void build_ignore(void)
-{
-    s_c_ignore = lv_btn_create(s_card);
-    lv_obj_set_size(s_c_ignore, CARD_SLOT2_W, CARD_BTN_H);
-    lv_obj_align(s_c_ignore, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(s_c_ignore, COL_SUB, 0);
-    lv_obj_set_style_shadow_width(s_c_ignore, 0, 0);
-    lv_obj_set_style_radius(s_c_ignore, 8, 0);
-    lv_obj_set_style_pad_all(s_c_ignore, 0, 0);
-    lv_obj_t *lbl = lv_label_create(s_c_ignore);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(lbl, COL_DARK, 0);
-    lv_label_set_text(lbl, "IGNORE\nSOURCE");
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl);
-    lv_obj_add_event_cb(s_c_ignore, ignore_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_flag(s_c_ignore, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void flash_set(bool on)
-{
-    if (on == s_flashing) return;
-    s_flashing = on;
-    s_flash_l_on = s_flash_r_on = false;
-    lv_obj_set_style_bg_color(s_flash_l, COL_BG, 0);
-    lv_obj_set_style_bg_color(s_flash_r, COL_BG, 0);
-    if (on) {
-        lv_obj_clear_flag(s_flash_l, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_flash_r, LV_OBJ_FLAG_HIDDEN);
-        lv_timer_reset(s_flash);
-        lv_timer_resume(s_flash);
-        s_fm_on = true;                         // time the refreshes for a while
-        s_fm_start = lv_tick_get();
-        s_fm_n = s_fm_px_max = 0;
-        s_fm_sum = s_fm_max = 0;
-    } else {
-        lv_timer_pause(s_flash);
-        lv_obj_add_flag(s_flash_l, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_flash_r, LV_OBJ_FLAG_HIDDEN);
-    }
-    display_set_backlight_override(on);   // full on while unacknowledged, else the setting
-}
-
 // ── Refresh timing ────────────────────────────────────────────────────────────
 //
 // Wraps the display driver's flush (synchronous: it returns once the pixels
 // are on the wire). A refresh runs from its first flush's start to its last
-// flush's end, which the monitor callback closes.
+// flush's end, which the monitor callback closes. Logged: a view's full
+// repaint, and SWEEP_MEASURE_MS of the emblem sweep once that has passed.
 
 static void flush_timed(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px)
 {
@@ -735,17 +792,23 @@ static void refr_monitor_cb(lv_disp_drv_t *d, uint32_t ms, uint32_t px)
     (void)d; (void)ms;                      // ms is the LVGL tick, frozen in here
     int64_t us = s_fl_t0 ? s_fl_t1 - s_fl_t0 : 0;
     s_fl_t0 = 0;
-    if (!s_fm_on || px == 0) return;
+    if (px == 0) return;
+    if (s_fm_full && px >= 480 * 160) {
+        s_fm_full = false;
+        ESP_LOGI(TAG, "View repaint: %lu px, flush start to done %lld us", (unsigned long)px, us);
+        return;
+    }
+    if (!s_fm_on || lv_tick_elaps(s_fm_start) < SWEEP_MEASURE_DELAY_MS) return;
     s_fm_n++;
     s_fm_sum += us;
     if (us > s_fm_max) s_fm_max = us;
     if (px > s_fm_px_max) s_fm_px_max = px;
-    if (lv_tick_elaps(s_fm_start) >= FLASH_MEASURE_MS) {
+    if (lv_tick_elaps(s_fm_start) >= SWEEP_MEASURE_DELAY_MS + SWEEP_MEASURE_MS) {
         s_fm_on = false;
-        ESP_LOGI(TAG, "Side bars: %lu refreshes in %d ms, flush start to done avg %lld us, "
-                 "max %lld us, up to %lu px (one bar is %d px)",
-                 (unsigned long)s_fm_n, FLASH_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
-                 (unsigned long)s_fm_px_max, FLASH_W * (320 - FLASH_Y));
+        ESP_LOGI(TAG, "Sweep: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, "
+                 "up to %lu px (a side bar is %d px)",
+                 (unsigned long)s_fm_n, SWEEP_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
+                 (unsigned long)s_fm_px_max, s_emb ? s_emb->bar_w * (int)lv_obj_get_height(s_emb->bar[0]) : 0);
     }
 }
 
@@ -1003,14 +1066,21 @@ static void dash_refresh(void)
 
 // ── Alarm ─────────────────────────────────────────────────────────────────────
 
-// Every second: the incident's age on the card, or when armed, the line on the
-// last incident with how long ago it was last seen (left out before SNTP).
+// Every second: during an incident, the details' last line (count, first and
+// last seen, how long it has been open); when green, the line on the last
+// incident with how long ago it was last seen (left out before SNTP).
 static void refresh_age(void)
 {
     char age[24] = "";
     if (s_alarm.state != ALARM_IDLE) {
+        char t0[12], t1[12], buf[96];
+        fmt_time(s_alarm.first_ts, t0, sizeof(t0));
+        fmt_time(s_alarm.last_ts, t1, sizeof(t1));
         fmt_age(s_alarm.first_ts, age, sizeof(age));
-        set_text(s_c_age, age);
+        snprintf(buf, sizeof(buf), "%lu event%s,  first %s,  last %s%s%s",
+                 (unsigned long)s_alarm.count, s_alarm.count == 1 ? "" : "s", t0, t1,
+                 age[0] ? ",  " : "", age);
+        set_text(s_d_times, buf);
         return;
     }
     if (!s_alarm.id) { set_text(s_last, ""); return; }
@@ -1030,115 +1100,139 @@ static void refresh_age(void)
     set_text(s_last, buf);
 }
 
-// The two views. Each sets every widget's visibility and position itself, so
-// no path into a state relies on what an earlier one toggled.
-static void view_incident(void)
+static void show(lv_obj_t *o, bool on)
 {
-    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_idle, LV_OBJ_FLAG_HIDDEN);
+    if (on) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void place(lv_obj_t *o, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
+{
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    show(o, true);
+}
+
+// The views. Each sets every widget's visibility and position itself, so no
+// path into a condition relies on what an earlier one toggled.
+static void view_incident(alarm_cond_t c)
+{
+    bool red = c == ALARM_COND_RED;
+    show(s_idle, false);
+    show(s_rl_track, false);                // the emblem's sweep is the only motion
+    show(s_bar, !red);                      // RED has the whole screen
+    show(s_inc, true);
+    s_emb = red ? &s_emb_red : &s_emb_yel;
+    show(s_emb_red.root, red);
+    show(s_emb_yel.root, !red);
+
+    lv_coord_t y = red ? RED_DET_Y : YEL_DET_Y;
+    lv_obj_set_pos(s_d_code, 6, y);
+    lv_obj_set_pos(s_d_src, 6, y + DET_SRC_DY);
+    lv_obj_set_pos(s_d_detail, 6, y + DET_DETAIL_DY);
+    lv_obj_set_pos(s_d_times, 6, y + DET_TIMES_DY);
+    // Nothing to ignore a device by without its address or MAC.
+    bool dev = s_alarm.src_ip || !mac_zero(s_alarm.src_mac);
+    if (red) {
+        place(s_b_ack, 4, RED_BTN_Y, 184, RED_BTN_H);
+        place(s_b_ign_err, 194, RED_BTN_Y, 138, RED_BTN_H);
+        place(s_b_ign_dev, 338, RED_BTN_Y, 138, RED_BTN_H);
+    } else {
+        show(s_b_ack, false);
+        place(s_b_ign_err, 4, YEL_BTN_Y, 232, YEL_BTN_H);
+        place(s_b_ign_dev, 244, YEL_BTN_Y, 232, YEL_BTN_H);
+    }
+    show(s_b_ign_dev, dev);
+    show(s_note, !red);
 }
 
 static void view_armed(bool last)
 {
-    lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_feed, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_c_ack, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_c_rearm, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_idle, LV_OBJ_FLAG_HIDDEN);
+    s_emb = NULL;
+    show(s_inc, false);
+    show(s_bar, true);
+    show(s_rl_track, true);
+    show(s_idle, true);
     lv_obj_align(s_figs, LV_ALIGN_TOP_MID, 0, FIG_Y_IDLE);
-    lv_obj_clear_flag(s_figs, LV_OBJ_FLAG_HIDDEN);
+    show(s_figs, true);
     lv_obj_align(s_last, LV_ALIGN_TOP_MID, 0, LAST_Y_IDLE);
-    if (last) lv_obj_clear_flag(s_last, LV_OBJ_FLAG_HIDDEN);
-    else      lv_obj_add_flag(s_last, LV_OBJ_FLAG_HIDDEN);
+    show(s_last, last);
     s_chart_dirty = true;                   // the chart was not kept up while hidden
     dash_refresh();
 }
 
-// Once per state change: what the panel now renders, with the figures row's
-// placement, so a console capture shows it.
-static void log_view(void)
+// Once per change of condition or incident: what the panel now renders, so
+// a console capture shows it.
+static void log_view(alarm_cond_t c)
 {
-    static const char *NAME[] = { "ARMED", "ALARM", "ACKED" };
     lv_obj_update_layout(lv_scr_act());
-    lv_area_t f;
-    lv_obj_get_coords(s_figs, &f);
-    bool dash = !lv_obj_has_flag(s_idle, LV_OBJ_FLAG_HIDDEN);
-    ESP_LOGI(TAG, "UI state: %s #%lu, card %s, events %s, dashboard %s, figures %s at y %d..%d, last line %s",
-             s_alarm.state <= ALARM_ACKED ? NAME[s_alarm.state] : "?", (unsigned long)s_alarm.id,
-             lv_obj_has_flag(s_card, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown",
-             lv_obj_has_flag(s_feed, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown",
-             dash ? "shown" : "hidden",
-             dash && !lv_obj_has_flag(s_figs, LV_OBJ_FLAG_HIDDEN) ? "shown" : "hidden", f.y1, f.y2,
-             dash && !lv_obj_has_flag(s_last, LV_OBJ_FLAG_HIDDEN) ? "shown" : "hidden");
+    if (c == ALARM_COND_GREEN) {
+        lv_area_t f;
+        lv_obj_get_coords(s_figs, &f);
+        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, dashboard shown, figures at y %d..%d, last line %s",
+                 (unsigned long)s_alarm.id, f.y1, f.y2,
+                 lv_obj_has_flag(s_last, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown");
+        return;
+    }
+    lv_area_t e;
+    lv_obj_get_coords(s_emb->root, &e);
+    ESP_LOGI(TAG, "UI state: %s #%lu, emblem y %d..%d, details y %d, buttons %s%s, status bar %s",
+             COND_NAME[c], (unsigned long)s_alarm.id, e.y1, e.y2, (int)lv_obj_get_y(s_d_code),
+             c == ALARM_COND_RED ? "ACKNOWLEDGE, IGNORE ERROR" : "IGNORE ERROR",
+             lv_obj_has_flag(s_b_ign_dev, LV_OBJ_FLAG_HIDDEN) ? "" : ", IGNORE DEVICE",
+             c == ALARM_COND_RED ? "hidden" : "shown");
 }
 
 static void apply_alarm(const alarm_info_t *a)
 {
-    char ip[16], mac[WIFI_MAC_STR_LEN], t0[12], t1[12];
-    fmt_ip(a->src_ip, ip, sizeof(ip));
-    wifi_manager_format_mac(a->src_mac, mac, sizeof(mac));
-    fmt_time(a->first_ts, t0, sizeof(t0));
-    fmt_time(a->last_ts, t1, sizeof(t1));
-    // Count updates (up to 1/s during a scan) must not reset a button label or
-    // a fill mid-press: those go back to their start only on a new state.
-    bool changed = a->state != s_alarm.state || a->id != s_alarm.id;
-    bool reseed  = a->id != s_alarm.id || (a->state == ALARM_IDLE) != (s_alarm.state == ALARM_IDLE);
+    alarm_cond_t was = cond_of(&s_alarm), c = cond_of(a);
+    // Count updates (up to 1/s during a scan) must not reset the button label
+    // or the fill mid-press: those go back to their start only on a change.
+    bool changed = c != was || a->id != s_alarm.id;
     s_alarm = *a;
-    if (changed) {
-        hold_reset(&s_h_ack);
-        hold_reset(&s_h_rearm);
-    }
-    if (reseed) feed_reseed();              // also finds the opening event's headline
+    if (changed) hold_reset(&s_h_ack);
 
-    if (a->state == ALARM_ACTIVE || a->state == ALARM_ACKED) {
-        bool active = a->state == ALARM_ACTIVE;
-        lv_color_t acc = active ? COL_RED : COL_AMBER;
-        lv_obj_set_style_bg_color(s_pill, acc, 0);
-        lv_label_set_text(s_pill_lbl, active ? "ALARM" : "ACKED");
-        lv_obj_set_style_border_color(s_card, acc, 0);
-        lv_obj_set_style_text_color(s_c_head, acc, 0);
-        lv_label_set_text_fmt(s_c_head, "Incident #%lu", (unsigned long)a->id);   // the pill says the state
-        lv_label_set_text(s_c_src, ip);
-        char info[DESCRIBE_MAX + 48];
-        if (s_open_hl[0]) set_text(s_c_info, s_open_hl);
-        else {
-            snprintf(info, sizeof(info), "%s from %s", type_name(a->type), ip);
-            set_text(s_c_info, info);
-        }
-        snprintf(info, sizeof(info), "%s, %lu event%s,  MAC %s  %s,  %s to %s", type_name(a->type),
-                 (unsigned long)a->count, a->count == 1 ? "" : "s",
-                 mac, wifi_manager_mac_vendor(a->src_mac), t0, t1);
-        set_text(s_c_times, info);
-        runlight_set(acc, active);
-        view_incident();
-        if (active) {
-            if (changed) lv_label_set_text(s_c_ack_lbl, TXT_ACK);
-            lv_obj_clear_flag(s_c_ack, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_c_rearm, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            if (changed) lv_label_set_text(s_c_rearm_lbl, TXT_REARM);
-            lv_obj_add_flag(s_c_ack, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(s_c_rearm, LV_OBJ_FLAG_HIDDEN);
-        }
+    if (c != ALARM_COND_GREEN) {
+        bool red = c == ALARM_COND_RED;
+        lv_obj_set_style_bg_color(s_pill, red ? COL_RED : COL_AMBER, 0);
+        set_text(s_pill_lbl, COND_NAME[c]);
+        char buf[DESCRIBE_MAX + 16];
+        fmt_what(a, buf, sizeof(buf));
+        fit_words(buf, &lv_font_montserrat_20, DET_W);
+        set_text(s_d_code, buf);
+        fmt_who(a, buf, sizeof(buf));
+        fit_words(buf, &lv_font_montserrat_20, DET_W);
+        set_text(s_d_src, buf);
+        const char *bar = strstr(a->headline, " | ");
+        set_text(s_d_detail, bar ? bar + 3 : a->headline);
+        set_text(s_note, a->acked_by == ALARM_BY_PANEL     ? "Acknowledged on the panel. Resolve from the dashboard"
+                       : a->acked_by == ALARM_BY_DASHBOARD ? "Acknowledged on the dashboard. Resolve from the dashboard"
+                                                           : "Resolve from the dashboard");
+        view_incident(c);
+        if (changed && red) lv_label_set_text(s_b_ack_lbl, TXT_ACK);
     } else {
-        // Armed: the pill alone says so. No card and no event list; the key
-        // figures, and one muted line on the last incident if there was one.
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
-        lv_label_set_text(s_pill_lbl, "ARMED");
-        runlight_set(COL_GREEN, false);
+        set_text(s_pill_lbl, COND_NAME[c]);
+        runlight_set(COL_GREEN);
         view_armed(a->id != 0);
     }
     refresh_age();
-    flash_set(a->state == ALARM_ACTIVE);
-    ignore_show(a->state == ALARM_ACTIVE || a->state == ALARM_ACKED);
-    // A new view repaints the whole screen once (a few hundred ms over SPI, only
-    // on a state change), so no area keeps pixels from the old one.
+    s_bl_red = c == ALARM_COND_RED;
+    backlight_update();                     // full on while RED, else the setting
+    // A new view repaints the whole screen once (a few hundred ms over SPI,
+    // only on a change), so no area keeps pixels from the old one.
     static bool logged;
     if (changed || !logged) {
         logged = true;
         lv_obj_invalidate(lv_scr_act());
-        log_view();
+        s_fm_full = true;
+        if (c != ALARM_COND_GREEN) {              // then time the sweep
+            s_fm_on = true;
+            s_fm_start = lv_tick_get();
+            s_fm_n = s_fm_px_max = 0;
+            s_fm_sum = s_fm_max = 0;
+        }
+        log_view(c);
     }
 }
 
@@ -1166,25 +1260,27 @@ static lv_obj_t *box(lv_obj_t *parent, lv_color_t bg)
     return o;
 }
 
-// An incident card hold button: base colour, and a fill (width 0) drawn under
-// the label. Hidden until its state.
-static lv_obj_t *card_button(lv_obj_t *parent, lv_color_t base, lv_color_t fill_col,
-                             lv_obj_t **fill, lv_obj_t **lbl)
+// A panel button: base colour and a dark 20 px label, centred. With fill, a
+// hold fill (width 0) drawn under the label. Placed and shown by the views.
+static lv_obj_t *panel_button(lv_obj_t *parent, lv_color_t base, const char *text,
+                              lv_color_t fill_col, lv_obj_t **fill, lv_obj_t **lbl)
 {
     lv_obj_t *b = lv_btn_create(parent);
-    lv_obj_set_size(b, CARD_BTN_W, CARD_BTN_H);
-    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_set_style_bg_color(b, base, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_radius(b, 8, 0);
     lv_obj_set_style_pad_all(b, 0, 0);
-    *fill = box(b, fill_col);
-    lv_obj_set_style_radius(*fill, 8, 0);
-    lv_obj_set_size(*fill, 0, LV_PCT(100));
-    lv_obj_align(*fill, LV_ALIGN_LEFT_MID, 0, 0);
-    *lbl = label(b, &lv_font_montserrat_20, COL_DARK);
-    lv_obj_set_style_text_align(*lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(*lbl);
+    if (fill) {
+        *fill = box(b, fill_col);
+        lv_obj_set_style_radius(*fill, 8, 0);
+        lv_obj_set_size(*fill, 0, LV_PCT(100));
+        lv_obj_align(*fill, LV_ALIGN_LEFT_MID, 0, 0);
+    }
+    lv_obj_t *l = label(b, &lv_font_montserrat_20, COL_DARK);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(l, text);
+    lv_obj_center(l);
+    if (lbl) *lbl = l;
     lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
     return b;
 }
@@ -1304,30 +1400,73 @@ static void build_dash(void)
     lv_obj_set_pos(s_dash_line, 6, DASH_LINE_Y);
 }
 
+static void build_incident(lv_obj_t *scr)
+{
+    // Black, the whole screen; the status bar, created after it, draws over
+    // its top in YELLOW and is hidden in RED.
+    s_inc = box(scr, COL_EMB_BG);
+    lv_obj_set_size(s_inc, 480, 320);
+    lv_obj_set_pos(s_inc, 0, 0);
+    lv_obj_add_flag(s_inc, LV_OBJ_FLAG_HIDDEN);
+
+    build_emblem(&s_emb_red, s_emb_pts[0], s_inc, RED_EMB_Y, &EMB_RED);
+    build_emblem(&s_emb_yel, s_emb_pts[1], s_inc, YEL_EMB_Y, &EMB_YELLOW);
+
+    s_d_code = label(s_inc, &lv_font_montserrat_20, COL_TEXT);
+    s_d_src  = label(s_inc, &lv_font_montserrat_20, COL_TEXT);
+    s_d_times = label(s_inc, &lv_font_montserrat_14, COL_SUB);
+    lv_obj_t *det[] = { s_d_code, s_d_src, s_d_times };    // fitted at words, or short
+    for (int i = 0; i < 3; i++) {
+        lv_label_set_long_mode(det[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(det[i], DET_W);
+    }
+    // The headline's detail wraps at word boundaries; two 14 px lines hold
+    // about 120 characters, more than a headline has.
+    s_d_detail = label(s_inc, &lv_font_montserrat_14, COL_TEXT);
+    lv_label_set_long_mode(s_d_detail, LV_LABEL_LONG_WRAP);
+    lv_obj_set_size(s_d_detail, DET_W, DET_DETAIL_H);
+
+    s_note = label(s_inc, &lv_font_montserrat_14, COL_SUB);
+    lv_label_set_text(s_note, "Resolve from the dashboard");
+    lv_obj_set_width(s_note, 480);
+    lv_obj_set_style_text_align(s_note, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_note, 0, YEL_NOTE_Y);
+
+    lv_obj_t *fill;
+    s_b_ack = panel_button(s_inc, COL_RED, TXT_ACK, COL_FILL_ACK, &fill, &s_b_ack_lbl);
+    hold_attach(&s_h_ack, s_b_ack, fill, ack_done, ack_press_start_cb);
+    s_b_ign_err = panel_button(s_inc, COL_SUB, "IGNORE\nERROR", COL_SUB, NULL, NULL);
+    lv_obj_add_event_cb(s_b_ign_err, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_ERROR);
+    s_b_ign_dev = panel_button(s_inc, COL_SUB, "IGNORE\nDEVICE", COL_SUB, NULL, NULL);
+    lv_obj_add_event_cb(s_b_ign_dev, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_DEVICE);
+}
+
 static void build_ui(void)
 {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Status bar
-    lv_obj_t *bar = box(scr, COL_CARD);
-    lv_obj_set_size(bar, 480, STATUS_H);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+    build_incident(scr);
 
-    lv_obj_t *brand = label(bar, &lv_font_montserrat_20, COL_GREEN);
+    // Status bar
+    s_bar = box(scr, COL_CARD);
+    lv_obj_set_size(s_bar, 480, STATUS_H);
+    lv_obj_align(s_bar, LV_ALIGN_TOP_MID, 0, 0);
+
+    lv_obj_t *brand = label(s_bar, &lv_font_montserrat_20, COL_GREEN);
     lv_label_set_text(brand, "ShadowSentry");
     lv_obj_align(brand, LV_ALIGN_LEFT_MID, 6, 0);
 
-    s_net = label(bar, &lv_font_montserrat_14, COL_TEXT);
+    s_net = label(s_bar, &lv_font_montserrat_14, COL_TEXT);
     lv_label_set_text(s_net, "Starting...");
     lv_obj_align(s_net, LV_ALIGN_LEFT_MID, 160, 0);
 
-    s_clock = label(bar, &lv_font_montserrat_14, COL_TEXT);
+    s_clock = label(s_bar, &lv_font_montserrat_14, COL_TEXT);
     lv_label_set_text(s_clock, "--:--:--");
     lv_obj_align(s_clock, LV_ALIGN_RIGHT_MID, -112, 0);
 
-    s_pill = box(bar, COL_GREEN);               // nearly the bar's height, 20 px text
+    s_pill = box(s_bar, COL_GREEN);             // nearly the bar's height, 20 px text
     lv_obj_set_size(s_pill, 104, 24);
     lv_obj_align(s_pill, LV_ALIGN_RIGHT_MID, -2, 0);
     lv_obj_set_style_radius(s_pill, 12, 0);
@@ -1336,58 +1475,10 @@ static void build_ui(void)
     lv_obj_set_style_text_color(s_pill, COL_DARK, 0);
     s_pill_lbl = label(s_pill, &lv_font_montserrat_20, COL_DARK);
     lv_obj_set_style_text_opa(s_pill_lbl, LV_OPA_COVER, 0);
-    lv_label_set_text(s_pill_lbl, "ARMED");
+    lv_label_set_text(s_pill_lbl, "GREEN");
     lv_obj_center(s_pill_lbl);
 
-    // Incident card, clear of the side bars
-    s_card = lv_obj_create(scr);
-    lv_obj_set_size(s_card, INC_W, CARD_H);
-    lv_obj_set_pos(s_card, INC_X, CARD_Y);
-    lv_obj_set_style_bg_color(s_card, COL_CARD, 0);
-    lv_obj_set_style_border_width(s_card, 2, 0);
-    lv_obj_set_style_border_color(s_card, COL_RED, 0);
-    lv_obj_set_style_radius(s_card, 8, 0);
-    lv_obj_set_style_pad_ver(s_card, 4, 0);
-    lv_obj_set_style_pad_hor(s_card, 6, 0);
-    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);   // shown during an incident
-
-    s_c_head = label(s_card, &lv_font_montserrat_28, COL_RED);
-    lv_obj_align(s_c_head, LV_ALIGN_TOP_LEFT, 0, 0);
-    s_c_age = label(s_card, &lv_font_montserrat_20, COL_SUB);
-    lv_obj_align(s_c_age, LV_ALIGN_TOP_RIGHT, 0, 4);
-    s_c_src = label(s_card, &lv_font_montserrat_28, COL_TEXT);
-    lv_obj_align(s_c_src, LV_ALIGN_TOP_LEFT, 0, 30);
-    s_c_info = label(s_card, &lv_font_montserrat_20, COL_TEXT);
-    lv_label_set_long_mode(s_c_info, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_c_info, CARD_INNER_W);
-    lv_obj_align(s_c_info, LV_ALIGN_TOP_LEFT, 0, 62);
-    s_c_times = label(s_card, &lv_font_montserrat_14, COL_SUB);
-    lv_label_set_long_mode(s_c_times, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_c_times, CARD_INNER_W);
-    lv_obj_align(s_c_times, LV_ALIGN_TOP_LEFT, 0, 85);
-
-    lv_obj_t *fill;
-    s_c_ack = card_button(s_card, COL_RED, COL_FILL_ACK, &fill, &s_c_ack_lbl);
-    lv_label_set_text(s_c_ack_lbl, TXT_ACK);
-    hold_attach(&s_h_ack, s_c_ack, fill, ack_done, ack_press_start_cb);
-    s_c_rearm = card_button(s_card, COL_GREEN, COL_FILL_REARM, &fill, &s_c_rearm_lbl);
-    lv_label_set_text(s_c_rearm_lbl, TXT_REARM);
-    hold_attach(&s_h_rearm, s_c_rearm, fill, rearm_done, rearm_press_start_cb);
-    // The bottom-right slot, CARD_SLOT2_W x CARD_BTN_H, is free for a third button.
-
-    // The incident's last events, clear of the side bars
-    s_feed = lv_list_create(scr);
-    lv_obj_set_size(s_feed, INC_W, FEED_H);
-    lv_obj_set_pos(s_feed, INC_X, FEED_Y);
-    lv_obj_set_style_bg_color(s_feed, COL_BG, 0);
-    lv_obj_set_style_border_width(s_feed, 0, 0);
-    lv_obj_set_style_pad_all(s_feed, 0, 0);
-    lv_obj_set_style_pad_row(s_feed, 2, 0);
-    lv_obj_clear_flag(s_feed, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_feed, LV_OBJ_FLAG_HIDDEN);   // shown during an incident
-
-    // Armed view: one transparent, untouchable container for all of it, so the
+    // Green view: one transparent, untouchable container for all of it, so the
     // views switch with one flag.
     s_idle = lv_obj_create(scr);
     lv_obj_remove_style_all(s_idle);
@@ -1395,7 +1486,7 @@ static void build_ui(void)
     lv_obj_set_pos(s_idle, 0, 0);
     lv_obj_clear_flag(s_idle, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    // Armed: key figures
+    // Green: key figures
     s_figs = box(s_idle, COL_CARD);
     lv_obj_set_size(s_figs, 472, FIG_H);
     lv_obj_align(s_figs, LV_ALIGN_TOP_MID, 0, FIG_Y_IDLE);
@@ -1409,7 +1500,7 @@ static void build_ui(void)
         lv_label_set_recolor(*fig[i], true);
     }
 
-    // Armed: the last incident, one muted line
+    // Green: the last incident, one muted line
     s_last = label(s_idle, &lv_font_montserrat_14, COL_SUB);
     lv_label_set_long_mode(s_last, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_last, 464);
@@ -1418,31 +1509,23 @@ static void build_ui(void)
 
     build_dash();
 
-    // Running light: a dark track the full width, and the moving segment on it.
-    // On the top layer, so a detail box opened from the list cannot stop it.
-    lv_obj_t *track = box(lv_layer_top(), COL_BG);
-    lv_obj_set_size(track, 480, RUNLIGHT_H);
-    lv_obj_set_pos(track, 0, RUNLIGHT_Y);
-    s_rl_seg = box(track, COL_BG);
+    // Running light: a dark track the full width, and the moving segment on
+    // it. On the top layer, so a dialog cannot stop it. Green only.
+    s_rl_track = box(lv_layer_top(), COL_BG);
+    lv_obj_set_size(s_rl_track, 480, RUNLIGHT_H);
+    lv_obj_set_pos(s_rl_track, 0, RUNLIGHT_Y);
+    s_rl_seg = box(s_rl_track, COL_BG);
     lv_obj_set_size(s_rl_seg, RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W, RUNLIGHT_H);
-    lv_obj_set_style_bg_grad_dir(s_rl_seg, LV_GRAD_DIR_HOR, 0);
     lv_obj_set_pos(s_rl_seg, -(RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W), 0);
-    runlight_set(COL_GREEN, false);
+    runlight_set(COL_GREEN);
     s_rl = lv_timer_create(runlight_cb, RUNLIGHT_STEP_MS, NULL);
 
-    // Side light bars, top layer too, hidden until an incident is unacknowledged
-    s_flash_l = box(lv_layer_top(), COL_BG);
-    lv_obj_set_size(s_flash_l, FLASH_W, 320 - FLASH_Y);
-    lv_obj_set_pos(s_flash_l, 0, FLASH_Y);
-    lv_obj_add_flag(s_flash_l, LV_OBJ_FLAG_HIDDEN);
-    s_flash_r = box(lv_layer_top(), COL_BG);
-    lv_obj_set_size(s_flash_r, FLASH_W, 320 - FLASH_Y);
-    lv_obj_set_pos(s_flash_r, 480 - FLASH_W, FLASH_Y);
-    lv_obj_add_flag(s_flash_r, LV_OBJ_FLAG_HIDDEN);
-    s_flash = lv_timer_create(flash_cb, FLASH_TICK_MS, NULL);
-    lv_timer_pause(s_flash);
+    // Face light: pure white over everything, not clickable, hidden
+    s_white = box(lv_layer_top(), lv_color_white());
+    lv_obj_set_size(s_white, 480, 320);
+    lv_obj_set_pos(s_white, 0, 0);
+    lv_obj_add_flag(s_white, LV_OBJ_FLAG_HIDDEN);
 
-    build_ignore();
     lv_timer_create(clock_cb, 1000, NULL);
     lv_timer_create(figures_cb, 2000, NULL);
 }
@@ -1512,13 +1595,17 @@ static void ui_task(void *arg)
                 source_add(m.e.src_ip);
                 kpi_add(&m.e);
                 events = true;
-                if (feed_match(&m.e) && !feed_has(&m.e)) feed_add(&m.e);
                 break;
-            case UMSG_ALARM: apply_alarm(&m.a);              break;
-            case UMSG_NET:   lv_label_set_text(s_net, m.net); break;
+            case UMSG_ALARM:    apply_alarm(&m.a);              break;
+            case UMSG_NET:      lv_label_set_text(s_net, m.net); break;
+            case UMSG_LIT_DONE: lit_off();                      break;
             }
         }
         if (events) refresh_counts();
+        if (s_lit && lv_tick_elaps(s_lit_at) >= LIT_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "Face light: no word from the camera in %d ms, white taken down", LIT_TIMEOUT_MS);
+            lit_off();
+        }
 
         uint32_t ms = (uint32_t)((esp_timer_get_time() - last_us) / 1000);
         lv_tick_inc(ms);
