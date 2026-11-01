@@ -42,13 +42,15 @@ static const char *TAG = "UI";
 #define UI_MEASURE_MS       10000   // boot: loop cost without, then with the light
 
 // During an incident the running light is hidden and the only thing that
-// moves is the alert emblem's sweep: a light segment running along its side
-// bars, left to right (EMB_SWEEP_RED_MS / _YELLOW_MS a pass). Each step
-// invalidates the segment's old and new place inside one bar, nothing else.
-#define EMB_SWEEP_RED_MS     1200
-#define EMB_SWEEP_YELLOW_MS  2000
+// moves is the alert emblem's stripes, rolling toward the band inside its
+// chevrons (build_emblem()): a stripe from the shoulder to the band in
+// EMB_ROLL_RED_MS / _YELLOW_MS, stepped every EMB_ROLL_TICK_MS. A step
+// invalidates the two stripe areas and nothing else.
+#define EMB_ROLL_TICK_MS     50
+#define EMB_ROLL_RED_MS      1000
+#define EMB_ROLL_YELLOW_MS   2000
 #define SWEEP_MEASURE_DELAY_MS 1500 // after a view change: let its full repaint pass
-#define SWEEP_MEASURE_MS     2000   // then log the sweep's refresh cost over this
+#define SWEEP_MEASURE_MS     2000   // then log the stripes' refresh cost over this
 
 typedef enum { UMSG_EVENT, UMSG_ALARM, UMSG_NET, UMSG_LIT_DONE } umsg_kind_t;
 
@@ -85,8 +87,6 @@ _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "T
 #define COL_EMB_BG     lv_color_black()
 #define COL_EMB_RED    lv_color_hex(0xe00000)
 #define COL_EMB_YELLOW lv_color_hex(0xf0b000)
-#define COL_SWEEP_RED    lv_color_hex(0xffc8c8)   // the sweep's head on red
-#define COL_SWEEP_YELLOW lv_color_hex(0xfff4c8)   // and on amber
 #define COL_FILL_ACK   lv_color_white()         // hold fill on the red ACKNOWLEDGE
 
 #define TXT_ACK     "ACKNOWLEDGE\n(hold 2 s)"
@@ -142,12 +142,17 @@ typedef struct {
 static hold_t s_h_ack;
 
 // One alert emblem (see build_emblem()): drawn once, static, but for the
-// sweep segment in each side bar.
+// stripes rolling inside its chevrons.
+#define EMB_STRIPES_MAX 5
 typedef struct {
     lv_obj_t  *root;
-    lv_obj_t  *bar[2], *seg[2];     // left and right side bars, a segment in each
-    lv_coord_t bar_x[2], bar_w, seg_w;
-    uint32_t   sweep_ms;
+    lv_obj_t  *clip[2];                         // upper and lower stripe areas
+    lv_obj_t  *st[2][EMB_STRIPES_MAX + 1];      // n + 1 stripes roll through n slots
+    lv_color_t col;
+    lv_coord_t n, pitch, stripe_h, yt, yb, top, foot;
+    lv_coord_t area_y, area_h, hw_max;          // the upper area; the lower mirrors it
+    uint32_t   roll_ms;
+    int32_t    off;                             // offset last applied, -1 none
 } emblem_t;
 static emblem_t s_emb_red, s_emb_yel;
 static emblem_t *s_emb;             // the one shown, NULL when green
@@ -173,7 +178,7 @@ static lv_obj_t *s_white;
 // Refresh timing: first flush start to last flush done, per refresh
 static void (*s_flush_orig)(lv_disp_drv_t *, const lv_area_t *, lv_color_t *);
 static int64_t  s_fl_t0, s_fl_t1;
-static bool     s_fm_on;                // measuring the sweep, after a view change
+static bool     s_fm_on;                // measuring the stripes, after a view change
 static uint32_t s_fm_start, s_fm_n, s_fm_px_max;
 static int64_t  s_fm_sum, s_fm_max;
 static bool     s_fm_full;              // the next refresh is a view's full repaint
@@ -421,7 +426,7 @@ static void hold_attach(hold_t *h, lv_obj_t *btn, lv_obj_t *fill, void (*done)(v
 static lv_obj_t *box(lv_obj_t *parent, lv_color_t bg);
 static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, lv_color_t col);
 
-// ── Running light and the emblem sweep ────────────────────────────────────────
+// ── Running light ─────────────────────────────────────────────────────────────
 
 // A segment is one object: a trail fading in from the track colour, then a
 // solid head on the right (it moves left to right), a horizontal gradient.
@@ -435,29 +440,14 @@ static void seg_style(lv_obj_t *seg, lv_color_t track, lv_color_t head, int head
 }
 
 // Position from the tick, not a step count, so the speed holds if a step is
-// late. Green: the light under the status bar. An incident: the emblem's
-// segment, one pass across the whole width, shown in whichever side bar it
-// is over. Each bar clips its own segment, and one parked just past either
-// end of its bar is drawn nowhere; an unchanged position is a no-op in LVGL.
+// late. Green only: during an incident the emblem's stripes move instead.
 static void runlight_cb(lv_timer_t *t)
 {
     (void)t;
-    uint32_t now = lv_tick_get();
-    emblem_t *e = s_emb;
-    if (!e) {
-        const int32_t w = RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W;
-        uint32_t ph = now % RUNLIGHT_SWEEP_MS;
-        lv_obj_set_x(s_rl_seg, (lv_coord_t)(-w + (int32_t)((480 + w) * ph / RUNLIGHT_SWEEP_MS)));
-        return;
-    }
-    uint32_t ph = now % e->sweep_ms;
-    int32_t x = -e->seg_w + (int32_t)((480 + e->seg_w) * ph / e->sweep_ms);
-    for (int i = 0; i < 2; i++) {
-        int32_t lx = x - e->bar_x[i];
-        if (lx < -e->seg_w) lx = -e->seg_w;
-        if (lx > e->bar_w)  lx = e->bar_w;
-        lv_obj_set_x(e->seg[i], (lv_coord_t)lx);
-    }
+    if (s_emb) return;
+    const int32_t w = RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W;
+    uint32_t ph = lv_tick_get() % RUNLIGHT_SWEEP_MS;
+    lv_obj_set_x(s_rl_seg, (lv_coord_t)(-w + (int32_t)((480 + w) * ph / RUNLIGHT_SWEEP_MS)));
 }
 
 static void runlight_set(lv_color_t c)
@@ -472,41 +462,46 @@ static void runlight_set(lv_color_t c)
 // and one below a central band, stacked stripes inside each, long bars out to
 // the left and right edges at the band's height, and in the band "ALERT" over
 // "CONDITION: <name>". Flat fills on black: two lv_lines (rounded caps and
-// joins), rounded rectangles and labels, 19 objects, drawn once. For height h
-// (cx 240, cy h / 2):
+// joins), rounded rectangles and labels. For height h (cx 240, cy h / 2):
 //   side bars   x 4..240-gap-1 and 240+gap..475, bar_h tall, centred on cy
 //   chevrons    feet at (240 -/+ foot, cy - bar_h / 2 - lw / 2), shoulders at
 //               (240 -/+ top, lw / 2 + 2), line width lw; mirrored below
-//   stripes     n per chevron, stripe_h tall, stripe_gap apart, from just
-//               under the shoulder line, as wide as the chevron allows at
-//               their top edge less 12 px (the slanted line is wider than lw)
+//   stripes     in an area from 5 px under the shoulder line, n slots of
+//               stripe_h + stripe_gap, each stripe as wide as the chevron
+//               allows at its top edge less 12 px (the slanted line is wider
+//               than lw)
 //   text        "ALERT" centred at cy + title_dy, set twice 1 px apart (the
 //               largest font is Montserrat Medium, this makes it bold), the
 //               condition at cy + cond_dy
+// Everything is static but the stripes: they roll toward the band (the upper
+// ones down, the lower ones up) and loop, one stripe from the shoulder to the
+// band in roll_ms. n + 1 stripes per chevron sit in a clipping area, so one
+// slides in under the shoulder as one slides out at the band, and they fade
+// to black over the last slot at either edge. emb_roll() moves them only when
+// the offset changes, so a frame invalidates the two stripe areas and
+// nothing else.
 
 typedef struct {
-    lv_coord_t h, gap, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes, seg_w;
+    lv_coord_t h, gap, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes;
     lv_coord_t title_dy, cond_dy, title_ls;
     const lv_font_t *f_title, *f_cond;
     const char *cond;
-    uint32_t col_hex, head_hex, sweep_ms;
+    uint32_t col_hex, roll_ms;
 } emblem_spec_t;
 
 static const emblem_spec_t EMB_RED = {
     .h = RED_EMB_H, .gap = 116, .bar_h = 16, .foot = 150, .top = 70, .lw = 8,
-    .stripe_h = 4, .stripe_gap = 4, .stripes = 4, .seg_w = 72,
+    .stripe_h = 4, .stripe_gap = 4, .stripes = 4,
     .title_dy = -12, .cond_dy = 24, .title_ls = 4,
     .f_title = &lv_font_montserrat_48, .f_cond = &lv_font_montserrat_20,
-    .cond = "CONDITION: RED", .col_hex = 0xe00000, .head_hex = 0xffc8c8,
-    .sweep_ms = EMB_SWEEP_RED_MS,
+    .cond = "CONDITION: RED", .col_hex = 0xe00000, .roll_ms = EMB_ROLL_RED_MS,
 };
 static const emblem_spec_t EMB_YELLOW = {
     .h = YEL_EMB_H, .gap = 92, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
-    .stripe_h = 4, .stripe_gap = 3, .stripes = 3, .seg_w = 48,
+    .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
     .title_dy = -8, .cond_dy = 14, .title_ls = 2,
     .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
-    .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .head_hex = 0xfff4c8,
-    .sweep_ms = EMB_SWEEP_YELLOW_MS,
+    .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .roll_ms = EMB_ROLL_YELLOW_MS,
 };
 
 // lv_line keeps a pointer to its points, so they live here.
@@ -521,6 +516,43 @@ static lv_obj_t *emb_pill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     return o;
 }
 
+// The upper chevron's usable half-width at emblem y (its mirror below).
+static int32_t emb_hw(const emblem_t *e, int32_t y)
+{
+    return e->top + (int32_t)(e->foot - e->top) * (y - e->yt) / (e->yb - e->yt) - 12;
+}
+
+static void emb_roll(emblem_t *e, uint32_t now)
+{
+    const int32_t travel = e->n * e->pitch;
+    int32_t off = (int32_t)((uint64_t)(now % e->roll_ms) * (uint32_t)travel / e->roll_ms) % e->pitch;
+    if (off == e->off) return;
+    e->off = off;
+    for (int i = 0; i <= e->n; i++) {
+        int32_t ly = (i - 1) * e->pitch + off;          // top edge in the upper area, moving down
+        int32_t hw = emb_hw(e, e->area_y + (ly > 0 ? ly : 0));
+        if (hw < 4) hw = 4;
+        // Fade over the last slot at either edge: in from the shoulder, out at the band.
+        int32_t in = ly + e->stripe_h, out = e->area_h - ly - e->stripe_h, d = in < out ? in : out;
+        uint8_t mix = d >= e->pitch ? 255 : d <= 0 ? 0 : (uint8_t)(255 * d / e->pitch);
+        lv_color_t c = lv_color_mix(e->col, COL_EMB_BG, mix);
+        for (int k = 0; k < 2; k++) {
+            lv_obj_t *o = e->st[k][i];
+            lv_obj_set_pos(o, (lv_coord_t)(e->hw_max - hw),
+                           (lv_coord_t)(k ? e->area_h - ly - e->stripe_h : ly));
+            lv_obj_set_width(o, (lv_coord_t)(2 * hw));
+            lv_obj_set_style_bg_color(o, c, 0);
+        }
+    }
+}
+
+// The emblem shown, every EMB_ROLL_TICK_MS.
+static void roll_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_emb) emb_roll(s_emb, lv_tick_get());
+}
+
 static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv_coord_t y,
                          const emblem_spec_t *s)
 {
@@ -531,8 +563,19 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
     e->root = box(parent, COL_EMB_BG);
     lv_obj_set_size(e->root, 480, s->h);
     lv_obj_set_pos(e->root, 0, y);
-    e->sweep_ms = s->sweep_ms;
-    e->seg_w = s->seg_w;
+    e->col = col;
+    e->roll_ms = s->roll_ms;
+    e->n = s->stripes < EMB_STRIPES_MAX ? s->stripes : EMB_STRIPES_MAX;
+    e->pitch = s->stripe_h + s->stripe_gap;
+    e->stripe_h = s->stripe_h;
+    e->yt = yt;
+    e->yb = yb;
+    e->top = s->top;
+    e->foot = s->foot;
+    e->area_y = yt + s->lw / 2 + 5;
+    e->area_h = e->n * e->pitch - s->stripe_gap;
+    e->hw_max = (lv_coord_t)emb_hw(e, e->area_y + e->area_h);
+    e->off = -1;
 
     for (int k = 0; k < 2; k++) {           // 0 upper, 1 lower (mirrored)
         lv_coord_t t = k ? last - yt : yt, b = k ? last - yb : yb;
@@ -549,27 +592,22 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
         lv_obj_set_pos(l, 0, 0);
         lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
 
-        for (int i = 0; i < s->stripes; i++) {
-            lv_coord_t y0 = yt + s->lw / 2 + 5 + i * (s->stripe_h + s->stripe_gap);
-            int32_t hw = s->top + (int32_t)(s->foot - s->top) * (y0 - yt) / (yb - yt) - 12;
-            if (hw < 8) continue;
-            emb_pill(e->root, (lv_coord_t)(240 - hw), k ? (lv_coord_t)(s->h - y0 - s->stripe_h) : y0,
-                     (lv_coord_t)(2 * hw), s->stripe_h, col);
-        }
+        // The stripe area clips its stripes (children are clipped to their parent).
+        lv_obj_t *a = e->clip[k] = lv_obj_create(e->root);
+        lv_obj_remove_style_all(a);
+        lv_obj_set_pos(a, 240 - e->hw_max, k ? s->h - e->area_y - e->area_h : e->area_y);
+        lv_obj_set_size(a, 2 * e->hw_max, e->area_h);
+        lv_obj_clear_flag(a, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        for (int i = 0; i <= e->n; i++)
+            e->st[k][i] = emb_pill(a, 0, 0, 8, s->stripe_h, col);
     }
+    emb_roll(e, 0);
 
-    e->bar_w = 236 - s->gap;
-    e->bar_x[0] = 4;
-    e->bar_x[1] = 240 + s->gap;
-    for (int i = 0; i < 2; i++) {
-        e->bar[i] = box(e->root, col);
-        lv_obj_set_pos(e->bar[i], e->bar_x[i], cy - s->bar_h / 2);
-        lv_obj_set_size(e->bar[i], e->bar_w, s->bar_h);
-        lv_obj_set_style_radius(e->bar[i], 3, 0);
-        e->seg[i] = box(e->bar[i], col);
-        lv_obj_set_size(e->seg[i], s->seg_w, s->bar_h);
-        lv_obj_set_pos(e->seg[i], -s->seg_w, 0);
-        seg_style(e->seg[i], col, lv_color_hex(s->head_hex), s->seg_w * 3 / 5, s->seg_w);
+    for (int i = 0; i < 2; i++) {           // side bars
+        lv_obj_t *bar = box(e->root, col);
+        lv_obj_set_pos(bar, i ? 240 + s->gap : 4, cy - s->bar_h / 2);
+        lv_obj_set_size(bar, 236 - s->gap, s->bar_h);
+        lv_obj_set_style_radius(bar, 3, 0);
     }
 
     for (int i = 0; i < 2; i++) {
@@ -590,14 +628,17 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
 // else it follows the brightness setting.
 //
 // Face light (CAM_FLASH_ENABLE): a press that takes a photo (ACKNOWLEDGE's
-// start, an IGNORE confirm) first turns the whole panel white and the
-// backlight full on, so the screen lights the face. The white is drawn at
+// start, an IGNORE confirm) first turns the screen white above the button
+// row (y 0 to just over the buttons: the emblem and the details) and the
+// backlight full on, so the screen lights the face. The buttons stay visible
+// and live under no cover, so the ACKNOWLEDGE fill keeps running in sight.
+// The white is drawn at
 // once (lv_refr_now, timed and logged), then the camera drops frames for
 // CAM_FLASH_SETTLE_MS while its exposure settles on the light, captures, and
 // its callback (camera task) queues UMSG_LIT_DONE to take the white down. The
-// white layer is not clickable, so a hold under it carries on. If the
-// callback never arrives, LIT_TIMEOUT_MS takes the white down anyway.
+// white layer is not clickable either. If the callback never arrives, LIT_TIMEOUT_MS takes the white down anyway.
 #define LIT_TIMEOUT_MS  (CAM_FLASH_SETTLE_MS + 1500)
+#define LIT_BTN_CLEAR   3       // px of black kept above the button row
 
 static bool     s_lit;
 static uint32_t s_lit_at;
@@ -627,6 +668,9 @@ static void lit_snap(const char *action)
 {
 #if CAM_FLASH_ENABLE
     if (cam_ready() && !s_lit) {
+        lv_coord_t h = s_emb == &s_emb_red ? RED_BTN_Y - LIT_BTN_CLEAR
+                     : s_emb == &s_emb_yel ? YEL_BTN_Y - LIT_BTN_CLEAR : 320;
+        lv_obj_set_height(s_white, h);
         lv_obj_clear_flag(s_white, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_white);    // over a dialog too
         s_lit = true;
@@ -723,7 +767,8 @@ static void ignore_ask_cb(lv_event_t *ev)
 // Wraps the display driver's flush (synchronous: it returns once the pixels
 // are on the wire). A refresh runs from its first flush's start to its last
 // flush's end, which the monitor callback closes. Logged: a view's full
-// repaint, and SWEEP_MEASURE_MS of the emblem sweep once that has passed.
+// repaint, and SWEEP_MEASURE_MS of the emblem's rolling stripes once that
+// has passed.
 
 static void flush_timed(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px)
 {
@@ -750,10 +795,10 @@ static void refr_monitor_cb(lv_disp_drv_t *d, uint32_t ms, uint32_t px)
     if (px > s_fm_px_max) s_fm_px_max = px;
     if (lv_tick_elaps(s_fm_start) >= SWEEP_MEASURE_DELAY_MS + SWEEP_MEASURE_MS) {
         s_fm_on = false;
-        ESP_LOGI(TAG, "Sweep: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, "
-                 "up to %lu px (a side bar is %d px)",
+        ESP_LOGI(TAG, "Stripes: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, "
+                 "up to %lu px (the two stripe areas are %d px)",
                  (unsigned long)s_fm_n, SWEEP_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
-                 (unsigned long)s_fm_px_max, s_emb ? s_emb->bar_w * (int)lv_obj_get_height(s_emb->bar[0]) : 0);
+                 (unsigned long)s_fm_px_max, s_emb ? 2 * 2 * s_emb->hw_max * s_emb->area_h : 0);
     }
 }
 
@@ -1082,7 +1127,7 @@ static void view_incident(alarm_cond_t c)
 {
     bool red = c == ALARM_COND_RED;
     show(s_idle, false);
-    show(s_rl_track, false);                // the emblem's sweep is the only motion
+    show(s_rl_track, false);                // the emblem's stripes are the only motion
     show(s_bar, !red);                      // RED has the whole screen
     show(s_inc, true);
     s_emb = red ? &s_emb_red : &s_emb_yel;
@@ -1186,7 +1231,7 @@ static void apply_alarm(const alarm_info_t *a)
         logged = true;
         lv_obj_invalidate(lv_scr_act());
         s_fm_full = true;
-        if (c != ALARM_COND_GREEN) {              // then time the sweep
+        if (c != ALARM_COND_GREEN) {              // then time the stripes
             s_fm_on = true;
             s_fm_start = lv_tick_get();
             s_fm_n = s_fm_px_max = 0;
@@ -1467,6 +1512,7 @@ static void build_ui(void)
     lv_obj_set_pos(s_rl_seg, -(RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W), 0);
     runlight_set(COL_GREEN);
     s_rl = lv_timer_create(runlight_cb, RUNLIGHT_STEP_MS, NULL);
+    lv_timer_create(roll_cb, EMB_ROLL_TICK_MS, NULL);       // the emblem's stripes
 
     // Face light: pure white over everything, not clickable, hidden
     s_white = box(lv_layer_top(), lv_color_white());
