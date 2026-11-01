@@ -16,6 +16,7 @@
 #   honeypot/mt_decoy.c     - MikroTik decoy readers, frame tap and whitelist
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   detect/correlate.c      - device intelligence: honeypot, router and Pi-hole views merged
+#   detect/router_trip.c    - router syslog copied off the Wi-Fi input, router tripwires 55-21..27
 #   admin/mikrotik.c        - MikroTik RouterOS REST client, read only (Core 1)
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   storage/crash.c         - panic record in RTC memory, reported on the next boot
@@ -103,6 +104,7 @@ idf_component_register(
         "admin/mikrotik_watch.c"
         "admin/api_mikrotik.c"
         "detect/correlate.c"
+        "detect/router_trip.c"
         "storage/oui.c"
         "storage/crash.c"
         "admin/api_crash.c"

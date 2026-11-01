@@ -137,8 +137,9 @@ static void events(correlate_t *c)
     alarm_info_t a;
     alarm_get(&a);
     bool same = a.state != ALARM_IDLE && ((c->ip && a.src_ip == c->ip) || (c->mac_known && !memcmp(a.src_mac, c->mac, 6)));
-    for (int i = 0; same && i < 32; i++) {
-        if (!(a.codes & (1u << i))) continue;
+    int n_codes = describe_code_count();
+    for (int i = 0; same && i < n_codes && i < DESCRIBE_CODE_BITS; i++) {
+        if (!(a.codes & (1ull << i))) continue;
         const char *code = describe_code_at(i, NULL, NULL);
         bool have = false;
         for (int k = 0; code && k < c->hp_n && !have; k++) have = !strcmp(c->hp[k].code, code);

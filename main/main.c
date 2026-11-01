@@ -39,6 +39,7 @@
 #include "discovery.h"
 #include "oui.h"
 #include "pihole.h"
+#include "router_trip.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -355,6 +356,11 @@ void app_main(void)
     // MikroTik: only when configured (no task, no RAM otherwise); its stack is
     // in PSRAM (HTTP(S) and RAM only). A Settings save can start it later.
     mikrotik_start();
+#if ROUTER_SYSLOG_ENABLE
+    // Router syslog (router tripwires): rings and parsing in RAM, events
+    // through the integrity watcher's helper, so the stack is PSRAM.
+    SPAWN_PSRAM(router_trip_task, "router", ROUTER_TASK_STACK, ROUTER_TASK_PRIO, 1);
+#endif
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();

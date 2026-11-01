@@ -48,6 +48,30 @@ typedef struct {
     uint32_t      count;
 } old_info_t;
 
+// The incident as stored with a 32-bit codes bitmap (NVS blob, 144 B), until
+// the code table outgrew it (2026-11-01). Rows are only ever appended, so its
+// bits keep their meaning in the 64-bit field.
+typedef struct {
+    alarm_state_t state;
+    alarm_cond_t  cond;
+    uint32_t      id;
+    uint32_t      src_ip;
+    uint8_t       src_mac[6];
+    uint8_t       type;
+    uint8_t       acked_by;
+    uint32_t      first_ts;
+    uint32_t      last_ts;
+    uint32_t      count;
+    char          code[DESCRIBE_CODE_LEN];
+    uint8_t       resolved_by;
+    uint8_t       _pad;
+    uint32_t      codes;
+    char          headline[DESCRIBE_MAX];
+} v2_info_t;
+_Static_assert(sizeof(v2_info_t) == 144, "alarm.c: v2_info_t must match the 144 B blob saved before 2026-11-01");
+_Static_assert(sizeof(alarm_info_t) != sizeof(v2_info_t) && sizeof(alarm_info_t) != sizeof(old_info_t),
+               "alarm.c: the blob layouts are told apart by their length");
+
 static QueueHandle_t     s_queue;
 static SemaphoreHandle_t s_mutex;
 static alarm_info_t      s_info;            // guarded by s_mutex; written on the alarm task only
@@ -69,7 +93,7 @@ static alarm_cond_t cond_of(alarm_state_t st)
 static int code_bit(const char *code)
 {
     int n = describe_code_count();
-    for (int i = 0; i < n && i < 32; i++)
+    for (int i = 0; i < n && i < DESCRIBE_CODE_BITS; i++)
         if (!strcmp(describe_code_at(i, NULL, NULL), code)) return i;
     return -1;
 }
@@ -183,7 +207,7 @@ static void fill_from_type(alarm_info_t *a)
     strlcpy(a->code, describe_code(&ev), sizeof(a->code));
     describe_event(&ev, a->headline, sizeof(a->headline));
     int b = code_bit(a->code);
-    a->codes = b >= 0 ? (1u << b) : 0;
+    a->codes = b >= 0 ? (1ull << b) : 0;
 }
 
 static void restore(void)
@@ -197,6 +221,30 @@ static void restore(void)
             saved->code[sizeof(saved->code) - 1] = '\0';
             saved->headline[sizeof(saved->headline) - 1] = '\0';
             s_info = *saved;
+        } else if (len == sizeof(v2_info_t)) {
+            // Saved with a 32-bit codes field: same fields, codes widened.
+            // The headline's own code is added, as its row may be past bit 31.
+            v2_info_t v;
+            memcpy(&v, saved, sizeof(v));
+            memset(&s_info, 0, sizeof(s_info));
+            s_info.state       = v.state <= ALARM_ACKED ? v.state : ALARM_IDLE;
+            s_info.id          = v.id;
+            s_info.src_ip      = v.src_ip;
+            memcpy(s_info.src_mac, v.src_mac, 6);
+            s_info.type        = v.type;
+            s_info.acked_by    = v.acked_by <= ALARM_BY_DASHBOARD ? v.acked_by : ALARM_BY_NONE;
+            s_info.first_ts    = v.first_ts;
+            s_info.last_ts     = v.last_ts;
+            s_info.count       = v.count;
+            memcpy(s_info.code, v.code, sizeof(s_info.code));
+            s_info.code[sizeof(s_info.code) - 1] = '\0';
+            s_info.resolved_by = v.resolved_by <= ALARM_BY_DASHBOARD ? v.resolved_by : ALARM_BY_NONE;
+            s_info.codes       = v.codes;
+            memcpy(s_info.headline, v.headline, sizeof(s_info.headline));
+            s_info.headline[sizeof(s_info.headline) - 1] = '\0';
+            int b = code_bit(s_info.code);
+            if (b >= 0) s_info.codes |= 1ull << b;
+            ESP_LOGI(TAG, "Incident #%lu migrated to 64-bit codes", (unsigned long)s_info.id);
         } else if (len == sizeof(old_info_t)) {
             // Saved by a build before codes: an unacknowledged incident stays
             // RED, an acknowledged one becomes YELLOW.
@@ -270,7 +318,7 @@ static void open_incident(const attack_log_t *e, bool red, int64_t now)
     s_info.count    = 1;
     set_headline(e);
     int b = code_bit(s_info.code);
-    s_info.codes = b >= 0 ? (1u << b) : 0;
+    s_info.codes = b >= 0 ? (1ull << b) : 0;
     xSemaphoreGive(s_mutex);
 
     s_last_event_s  = now;
@@ -294,7 +342,7 @@ static void escalate(const attack_log_t *e, int64_t now)
     s_info.last_ts = e->timestamp;
     set_headline(e);
     int b = code_bit(s_info.code);
-    if (b >= 0) s_info.codes |= 1u << b;
+    if (b >= 0) s_info.codes |= 1ull << b;
     xSemaphoreGive(s_mutex);
     s_last_event_s  = now;
     s_last_remind_s = now;
@@ -338,7 +386,7 @@ static bool handle_event(const attack_log_t *e, int64_t now)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_info.count++;
     s_info.last_ts = e->timestamp;
-    if (b >= 0 && same) s_info.codes |= 1u << b;
+    if (b >= 0 && same) s_info.codes |= 1ull << b;
     xSemaphoreGive(s_mutex);
     s_last_event_s = now;
     return false;

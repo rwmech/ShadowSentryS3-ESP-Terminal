@@ -795,7 +795,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
         <button class="btn" onclick="loadDay()">Load</button>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
-        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option><option>wifi</option><option>crash</option><option>netdev</option></select>
+        <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option><option>wifi</option><option>crash</option><option>netdev</option><option>router_log</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
         <select id="lg-code" onchange="renderDay()" title="Filter by error code"><option value="">All codes</option></select>
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
@@ -1873,6 +1873,8 @@ function logView(o){
   else if(kind==='netdev'){v.type='New device';v.ip=S(o.ip);v.mac=S(o.mac);v.vendor=S(o.vendor);
     v.det=[o.hostname?'host '+S(o.hostname):'',o.port?'port '+S(o.port):'',o.ap?'AP '+S(o.ap):'',o.ssid?'SSID '+S(o.ssid):'',
       +o.signal?S(o.signal)+' dBm':''].filter(Boolean).join(', ');}
+  else if(kind==='router_log'){v.type='Router '+S(o.what);v.ip=S(o.ip);v.mac=S(o.mac);v.user=S(o.user);
+    v.det=(o.via?'via '+S(o.via)+': ':'')+S(o.msg);}
   else if(kind==='snap'){v.det=(S(o.action)||'press')+' photo'+(o.file?': '+S(o.file)+' ('+Math.ceil((+o.size||0)/1024)+' KB)':', not saved');}
   else if(kind==='wifi'){v.type='Wi-Fi '+S(o.event);v.det=S(o.ssid)+': '+S(o.from)+' '+S(o.from_rssi)+' dBm to '+S(o.to)+' '+S(o.rssi)+' dBm, channel '+S(o.channel)+' ('+S(o.by)+')';}
   else if(kind==='crash'){v.type='crash';v.det=S(o.cause)+(o.task?' in '+S(o.task):'')+(o.pc?' at '+S(o.pc):'')+', reset: '+S(o.reset);}
