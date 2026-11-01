@@ -84,9 +84,11 @@ typedef struct {
     char          code[DESCRIBE_CODE_LEN];   // "17-01": the headline event's code
     uint8_t       resolved_by; // alarm_by_t of the last resolve; NONE for a quiet close
     uint8_t       _pad;
-    uint32_t      codes;       // bit i: describe_code_at(i) seen from the source
+    uint64_t      codes;       // bit i: describe_code_at(i) seen from the source (64 bits since 2026-11-01)
     char          headline[DESCRIBE_MAX];    // describe_event() of that event
 } alarm_info_t;
+_Static_assert(sizeof(((alarm_info_t *)0)->codes) * 8 >= DESCRIBE_CODE_BITS,
+               "alarm.h: alarm_info_t.codes needs a bit per row of the code table");
 
 // Call once at boot, before the honeypot tasks start. Spawns the alarm task.
 void alarm_init(void);

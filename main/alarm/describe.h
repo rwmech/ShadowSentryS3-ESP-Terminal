@@ -51,6 +51,7 @@ typedef enum {
 
 #define DESCRIBE_MAX       96   // a headline fits in this, NUL included
 #define DESCRIBE_CODE_LEN   6   // "17-01" and its NUL
+#define DESCRIBE_CODE_BITS 64   // rows the table may have: one bit each in alarm_info_t.codes
 
 // The event's code, e.g. "17-01". "00-00" for an event no code covers (an
 // attack type newer than the table). Never NULL; points at a constant.

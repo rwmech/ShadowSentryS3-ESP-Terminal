@@ -94,6 +94,7 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_NEW_DEVICE, C_ROUTER_FIRST, C_ROUTER_LAST = C_ROUTER_FIRST + 10, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
+_Static_assert(C_COUNT <= DESCRIBE_CODE_BITS, "describe.c: more codes than alarm_info_t.codes has bits");
 
 static const code_row_t UNKNOWN = { "00-00", "Event", TIER_SEV2, NULL };
 
