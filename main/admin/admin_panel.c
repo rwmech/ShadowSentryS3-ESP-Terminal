@@ -9,6 +9,7 @@
 #include "api_oui.h"
 #include "api_devlog.h"
 #include "api_tasks.h"
+#include "api_pihole.h"
 #include "sd_log.h"
 #include "ws_server.h"
 #include "log_store.h"
@@ -411,6 +412,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_oui_handle(sock, buf, len)) return;       // vendor database upload and status
     if (api_devlog_handle(sock, buf, len)) return;    // one device's log lines
     if (api_tasks_handle(sock, buf, len)) return;     // per-task CPU share (no console)
+    if (api_pihole_handle(sock, buf, len)) return;    // Pi-hole status, test, refresh, device
 
     if (strncmp(buf, "GET", 3) == 0 && strstr(buf, " /api/attacks")) {
         serve_attacks_json(sock);

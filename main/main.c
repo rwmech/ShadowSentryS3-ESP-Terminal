@@ -35,6 +35,7 @@
 #include "detect.h"
 #include "discovery.h"
 #include "oui.h"
+#include "pihole.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -206,6 +207,7 @@ void app_main(void)
 
     // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
     settings_init();
+    pihole_init();                  // cJSON allocator (PSRAM first), settings listener; no task yet
 
     // ── Recon detection and the ignore list (before anything logs events) ───
     detect_init();
@@ -333,6 +335,14 @@ void app_main(void)
 #if DISCOVERY_ENABLE
     SPAWN_PSRAM(discovery_task, "disco", DISCOVERY_TASK_STACK, DISCOVERY_TASK_PRIO, 1);
 #endif
+    // Pi-hole (optional): HTTP and RAM work only, stack and state in PSRAM.
+    // Started by pihole_start() rather than SPAWN, so a Settings save can
+    // start it later without a reboot.
+    if (settings_pihole_enabled()) {
+        pihole_start();
+    } else {
+        ESP_LOGI(TAG, "Pi-hole not configured: task not started");
+    }
 
     // Live WebSocket push server (esp_http_server manages its own task).
     ws_server_start();

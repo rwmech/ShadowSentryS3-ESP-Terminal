@@ -61,7 +61,8 @@ extern "C" {
  * query strings. Labels, best first: a known vendor string in an SSDP
  * USER-AGENT or SERVER, a DHCP hostname or a DHCP vendor class (LG webOS,
  * Samsung, Roku, Sonos, Hue, Fire TV, Windows, ...); a raw hostname; a raw
- * vendor class or SERVER string; the MAC vendor. A locally administered MAC
+ * vendor class or SERVER string, or Pi-hole's name for it (when Pi-hole is
+ * configured); the MAC vendor. A locally administered MAC
  * (phones randomise theirs) is flagged.
  *
  * Output:
@@ -174,6 +175,13 @@ int discovery_top_talkers(discovery_talker_t *out, int max);
 // The best label of the device with this MAC (if not NULL and known) or IP,
 // into buf. False, and buf "", if there is none. Any task; takes the lock.
 bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len);
+
+// A name from elsewhere (Pi-hole's hostname for the device, main/admin/pihole.h),
+// printable ASCII, under DISCOVERY_LABEL_LEN. It becomes the label, from
+// "pihole" at score 2, only while the device's own label is weak (the MAC
+// vendor or nothing); a hostname or known string seen later still wins. No
+// event or SD line. Any task; takes the lock.
+void discovery_name_hint(uint32_t ip, const uint8_t mac[6], const char *name);
 
 #ifdef __cplusplus
 }

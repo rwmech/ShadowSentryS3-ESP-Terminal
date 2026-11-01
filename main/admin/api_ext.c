@@ -371,6 +371,11 @@ static void get_settings(int sock)
     JB_LIT(&j, "\"whatsapp_phone\":"); jb_str(&j, s.whatsapp_phone, sizeof(s.whatsapp_phone)); JB_LIT(&j, ",");
     jb_bool(&j, "whatsapp_apikey_set", s.whatsapp_apikey[0]);  JB_LIT(&j, ",");   // never the key
     jb_bool(&j, "whatsapp_enabled", settings_whatsapp_enabled()); JB_LIT(&j, ",");
+    JB_LIT(&j, "\"pihole_url\":"); jb_str(&j, s.pihole_url, sizeof(s.pihole_url)); JB_LIT(&j, ",");
+    jb_bool(&j, "pihole_password_set", s.pihole_password[0]);  JB_LIT(&j, ",");   // never the password
+    JB_LIT(&j, "\"pihole_tls_sha256\":"); jb_str(&j, s.pihole_tls_sha256, sizeof(s.pihole_tls_sha256)); JB_LIT(&j, ",");
+    jb_bool(&j, "pihole_enabled", s.pihole_enabled);           JB_LIT(&j, ",");
+    jb_bool(&j, "pihole_active", settings_pihole_enabled());   JB_LIT(&j, ",");
     jb_bool(&j, "reboot_pending", settings_reboot_pending());
     JB_LIT(&j, ",\"running_wifi_ssid\":");
     char ssid[sizeof(live->wifi_ssid)];
@@ -478,6 +483,37 @@ static void wipe_item(cJSON *root, const char *key)
         memset(it->valuestring, 0, strlen(it->valuestring));
 }
 
+// The Pi-hole URL as typed or copied from the browser: spaces trimmed, and a
+// trailing "/", "/admin" or "/admin/" dropped (the API is at /api on the same
+// host). settings.c then accepts scheme, host and port only.
+static void pihole_url_tidy(char *u)
+{
+    size_t n = strlen(u), a = 0;
+    while (a < n && u[a] == ' ') a++;
+    while (n > a && u[n - 1] == ' ') n--;
+    memmove(u, u + a, n - a);
+    n -= a;
+    u[n] = '\0';
+    if (n && u[n - 1] == '/') u[--n] = '\0';
+    if (n >= 6 && !strcasecmp(u + n - 6, "/admin")) { n -= 6; u[n] = '\0'; }
+}
+
+// A certificate fingerprint with or without colons and spaces, any case, into
+// out as lowercase hex. "" stays "" (no pin). settings.c checks the length.
+static const char *pihole_pin_tidy(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (; *in; in++) {
+        char c = *in;
+        if (c == ':' || c == ' ') continue;
+        if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+        if (o + 1 >= cap) return "Pi-hole certificate SHA-256 must be 64 hex digits";
+        out[o++] = c;
+    }
+    out[o] = '\0';
+    return NULL;
+}
+
 // cJSON recurses per nesting level (limit 1000), which a 4 KB body of "[[[["
 // would turn into a stack overflow on this 8 KB task. Settings are flat.
 static bool json_depth_ok(const char *s, size_t n, int max)
@@ -558,6 +594,21 @@ static void post_settings(int sock, const char *req, int req_len)
     bool wa_clear = false;      // blank means "unchanged", so clearing needs saying
     if (!err) err = take_bool(root, "whatsapp_apikey_clear", &wa_clear);
     if (wa_clear) s.whatsapp_apikey[0] = '\0';
+    if (!err) err = take_str(root, "pihole_url", s.pihole_url, sizeof(s.pihole_url), false);
+    pihole_url_tidy(s.pihole_url);
+    if (!err) err = take_str(root, "pihole_password", s.pihole_password, sizeof(s.pihole_password), true);
+    bool ph_clear = false;      // blank means "unchanged", so clearing needs saying
+    if (!err) err = take_bool(root, "pihole_password_clear", &ph_clear);
+    if (ph_clear) { s.pihole_password[0] = '\0'; s.pihole_enabled = false; }
+    {
+        // As openssl prints it ("AB:CD:..."), or plain hex: kept as 64 lowercase digits.
+        char pin[112];
+        strlcpy(pin, s.pihole_tls_sha256, sizeof(pin));
+        if (!err) err = take_str(root, "pihole_tls_sha256", pin, sizeof(pin), false);
+        if (!err) err = pihole_pin_tidy(pin, s.pihole_tls_sha256, sizeof(s.pihole_tls_sha256));
+    }
+    if (!err) err = take_bool(root, "pihole_enabled", &s.pihole_enabled);
+    if (ph_clear) s.pihole_enabled = false;
     s.brightness = (uint8_t)bright;
     bool pw_changed = false;
     {
@@ -569,6 +620,7 @@ static void post_settings(int sock, const char *req, int req_len)
     wipe_item(root, "tg_token");
     wipe_item(root, "discord_webhook");
     wipe_item(root, "whatsapp_apikey");
+    wipe_item(root, "pihole_password");
     cJSON_Delete(root);
 
     bool reboot = false;

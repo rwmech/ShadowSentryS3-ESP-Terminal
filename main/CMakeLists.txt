@@ -16,6 +16,7 @@
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   admin/admin_panel.c     — port 9999, HTTP dashboard       (Core 1)
 #   admin/telegram.c        — HTTPS alert sender              (Core 1)
+#   admin/pihole.c          - optional Pi-hole v6 client, read only (Core 1)
 #   storage/log_store.c     — ring buffer + SPIFFS persistence
 #
 # EMBED_TXTFILES "index.html"
@@ -69,6 +70,8 @@ idf_component_register(
         "admin/api_oui.c"
         "admin/api_devlog.c"
         "admin/api_tasks.c"
+        "admin/pihole.c"
+        "admin/api_pihole.c"
         "storage/oui.c"
 
     INCLUDE_DIRS
