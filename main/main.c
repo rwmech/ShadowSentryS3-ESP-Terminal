@@ -40,6 +40,7 @@
 #include "oui.h"
 #include "pihole.h"
 #include "router_trip.h"
+#include "blocklist.h"
 #include "config.h"
 #include <stdlib.h>
 #include <time.h>
@@ -212,6 +213,7 @@ void app_main(void)
     // ── Runtime settings (NVS over config.h defaults; also sets TZ) ───────────
     settings_init();
     pihole_init();                  // cJSON allocator (PSRAM first), settings listener; no task yet
+    blocklist_init();               // the block list the router pulls (NVS), PSRAM
 
     // ── Recon detection and the ignore list (before anything logs events) ───
     detect_init();
@@ -356,9 +358,9 @@ void app_main(void)
     // MikroTik: only when configured (no task, no RAM otherwise); its stack is
     // in PSRAM (HTTP(S) and RAM only). A Settings save can start it later.
     mikrotik_start();
-#if ROUTER_SYSLOG_ENABLE
-    // Router syslog (router tripwires): rings and parsing in RAM, events
-    // through the integrity watcher's helper, so the stack is PSRAM.
+#if ROUTER_SYSLOG_ENABLE || ROUTER_IPFIX_ENABLE
+    // Router syslog (router tripwires) and IPFIX: rings and parsing in RAM,
+    // events through the integrity watcher's helper, so the stack is PSRAM.
     SPAWN_PSRAM(router_trip_task, "router", ROUTER_TASK_STACK, ROUTER_TASK_PRIO, 1);
 #endif
 

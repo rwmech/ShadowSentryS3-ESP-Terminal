@@ -17,6 +17,8 @@
 #   detect/discovery.c      - LAN discovery listeners (log only), seen-devices table
 #   detect/correlate.c      - device intelligence: honeypot, router and Pi-hole views merged
 #   detect/router_trip.c    - router syslog copied off the Wi-Fi input, router tripwires 55-21..27
+#   detect/router_flow.c    - IPFIX / NetFlow v9 collector for the router's traffic-flow
+#   admin/blocklist.c       - block list the router pulls (/routeros/block.txt), never-block list
 #   admin/mikrotik.c        - MikroTik RouterOS REST client, read only (Core 1)
 #   storage/oui.c           - MAC vendor database on the microSD card (tools/make_oui.py)
 #   storage/crash.c         - panic record in RTC memory, reported on the next boot
@@ -105,6 +107,9 @@ idf_component_register(
         "admin/api_mikrotik.c"
         "detect/correlate.c"
         "detect/router_trip.c"
+        "detect/router_flow.c"
+        "admin/blocklist.c"
+        "admin/api_block.c"
         "storage/oui.c"
         "storage/crash.c"
         "admin/api_crash.c"

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "mikrotik.h"
+#include "router_flow.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,9 @@ extern "C" {
  *     the open incident's codes);
  *   - the router's view (admin/mikrotik.c): lease hostname, switch port or
  *     AP and signal, and its tracked connections summarised by destination;
+ *   - the router's IPFIX flows (detect/router_flow.c), merged into the same
+ *     destination list: conntrack rows first, then destinations only IPFIX
+ *     saw, busiest first, each row marked conntrack, ipfix or both;
  *   - Pi-hole's view, when a Pi-hole client is built in (optional, below).
  * and raises flags, each with a short plain-English reason:
  *   dns_bypass      DNS sent to an outside server, or outside connections with
@@ -59,6 +63,12 @@ extern "C" {
 #define CORRELATE_F_DIRECT   0x20       // direct_ip
 #define CORRELATE_F_BLOCKED  0x40       // blocked_contact
 const char *correlate_flag_key(int bit);    // "dns_bypass", ...; bit 0..6
+
+// Where a conn.dst[] row came from (correlate_t.dsrc).
+#define CORRELATE_SRC_CONNTRACK 1
+#define CORRELATE_SRC_IPFIX     2
+#define CORRELATE_SRC_BOTH      3
+const char *correlate_src_key(uint8_t src);  // "conntrack", "ipfix", "both"
 
 // ── Optional Pi-hole input ────────────────────────────────────────────────────
 //
@@ -117,6 +127,14 @@ typedef struct {
     bool     conn_found;
     mikrotik_conn_t conn;
     uint8_t  dflags[MIKROTIK_DST_MAX];      // CORRELATE_F_* per conn.dst[]
+    // The router's IPFIX flows (detect/router_flow.c), merged into conn.dst[]:
+    // dsrc says where a row came from, fidx its entry in flow.d[] (-1 none).
+    // An IPFIX-only row carries the flow totals in bytes_* and pkts_*.
+    bool     flow_found;
+    router_flow_dev_t flow;
+    uint8_t  dsrc[MIKROTIK_DST_MAX];        // CORRELATE_SRC_*
+    int8_t   fidx[MIKROTIK_DST_MAX];
+    bool     flow_cut;                      // IPFIX destinations left out (conn.dst full)
     struct { char cc[4]; char asn[16]; char org[40]; } geo[MIKROTIK_DST_MAX];   // "" unknown
 
     // Pi-hole

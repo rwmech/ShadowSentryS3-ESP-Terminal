@@ -135,3 +135,11 @@ sources are clear.
   Consulted for the MAC-Telnet header layout and packet types, the 4-byte
   MNDP solicitation, and how the client sends (IP broadcast). Reimplemented
   from the format; no code copied.
+
+- Router feeds (main/detect/router_trip.c, main/detect/router_flow.c,
+  main/admin/blocklist.c, tools/routeros/*.rsc): no third-party code ported.
+  Written from the IPFIX (RFC 7011) and NetFlow v9 (RFC 3954) specifications,
+  the RouterOS 7.24 manual (manual.mikrotik.com, cited in each .rsc), and log
+  line and script samples from MikroTik's forum (cited where used). No
+  collector (nfdump, pmacct, goflow) or RouterOS script was consulted or
+  copied.

@@ -171,8 +171,10 @@ int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
         m.kind = M_TCP;
         m.port = rd16(l4 + 2);
         if (fl & TCPF_SYN) m.flags |= MF_SYN;
+        // The router may reach the admin port for /routeros/block.txt only
+        // (api_block.c checks it again); never the WebSocket.
         if ((fl & TCPF_SYN) && (m.port == ADMIN_PORT || m.port == ADMIN_WS_PORT) &&
-            !admin_allowed(src)) {
+            !admin_allowed(src) && !(m.port == ADMIN_PORT && src == router_trip_router_ip())) {
             m.flags |= MF_ADMIN_DROP;
             s_st_admin++;
             post(&m);

@@ -183,7 +183,7 @@ bool discord_post_digest(char *lines)
 }
 
 
-// notify.c backend: the boot message only (incidents post from on_alarm).
+// notify.c backend: the boot message and block list notices (incidents post from on_alarm).
 static bool notice_send(const notify_msg_t *m)
 {
     return s_ntq && xQueueSend(s_ntq, m, 0) == pdTRUE;
@@ -191,7 +191,7 @@ static bool notice_send(const notify_msg_t *m)
 
 static const notify_backend_t s_backend = {
     .name    = "Discord",
-    .kinds   = NOTIFY_BIT(NOTIFY_BOOT),
+    .kinds   = NOTIFY_BIT(NOTIFY_BOOT) | NOTIFY_BIT(NOTIFY_BLOCK),
     .enabled = settings_discord_enabled,
     .send    = notice_send,
 };
@@ -652,7 +652,7 @@ static void post_test(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
-// A notify.c message (boot): green, amber or red by severity.
+// A notify.c message (boot, block list): green, amber or red by severity.
 static void post_notice(const notify_msg_t *m)
 {
     static const uint32_t COLOR[] = { COLOR_GREEN, COLOR_AMBER, COLOR_RED };

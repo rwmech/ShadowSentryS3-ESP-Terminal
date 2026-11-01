@@ -176,6 +176,19 @@
 #define ROUTER_ADMIN_IPS            ""      // "192.168.0.10,192.168.0.11"
 #define ROUTER_PIHOLE_IP            ""      // "192.168.0.2"
 #define ROUTER_LIST_CHECK_S         15
+// ROUTER_IPFIX_ENABLE: collect the router's traffic-flow (IPFIX or NetFlow v9)
+//   per device for the device page (main/detect/router_flow.c).
+// ROUTER_IPFIX_PORT: UDP port of the router's traffic-flow target.
+// ROUTER_IPFIX_RATE: flow records taken a second, 10..5000; the rest are
+//   dropped and counted.
+#define ROUTER_IPFIX_ENABLE         1
+#define ROUTER_IPFIX_PORT           4739
+#define ROUTER_IPFIX_RATE           200
+// ROUTER_NEVER_BLOCK: addresses the block list refuses, comma separated, up
+//   to 16 (your PC, a NAS). Also never blocked: this board, the gateway, the
+//   router, the Pi-hole (ROUTER_PIHOLE_IP), ROUTER_ADMIN_IPS, the admin
+//   allowlist, 0/8, 127/8, multicast and broadcast. main/admin/blocklist.h.
+#define ROUTER_NEVER_BLOCK          ""      // "192.168.0.10"
 
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
