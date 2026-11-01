@@ -21,20 +21,11 @@ static const char *TAG = "DEVLOG";
 #define DEVLOG_LIMIT_DEF    300
 #define DEVLOG_LIMIT_MAX    1000
 #define DEVLOG_TIME_MS      3000    // the scan's time box
-#define DEVLOG_CHUNK        8192    // read chunk, and the longest line kept
+#define DEVLOG_CHUNK        16384   // read piece, and the longest line kept
+#define DEVLOG_ARENA        (256 * 1024)    // the matching lines, sent as they are
+#define DEVLOG_ARENA_MIN    (32 * 1024)     // if PSRAM is short
 #define DEVLOG_QUERY_MAX    160
 #define DAY_NAME_LEN        16      // "YYYY-MM-DD.jsonl"
-
-// Where a matching line is: file (index into the day list), offset, length
-// without the newline.
-typedef struct {
-    uint32_t off;
-    uint16_t len;
-    uint8_t  file;
-    uint8_t  pad;
-} loc_t;
-_Static_assert(DEVLOG_CHUNK <= UINT16_MAX, "a line's length must fit loc_t.len");
-_Static_assert(DEVLOG_DAYS_MAX <= UINT8_MAX, "a file index must fit loc_t.file");
 
 // ── Sending ───────────────────────────────────────────────────────────────────
 
@@ -199,16 +190,23 @@ static int list_days(char names[][DAY_NAME_LEN + 1], int max)
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
+//
+// Each file is read backwards from its end in DEVLOG_CHUNK pieces, so the
+// newest lines come first and the time box cuts off the oldest, not the
+// newest. The part of a line that runs into the piece before it (its start)
+// is kept at the top of the buffer and joined to the next piece read.
 
 typedef struct {
-    char    *buf;               // DEVLOG_CHUNK
-    loc_t   *ring;              // the newest cap matches of the file being scanned
-    size_t   cap, pushed;
+    char    *buf;               // DEVLOG_CHUNK, the read buffer
+    char    *arena;             // the matching lines, newline-terminated, newest first
+    size_t   arena_cap, arena_used;
+    int      limit, matched;
     char     nip[32], nmac[32];
     size_t   lip, lmac;
     int64_t  deadline;
-    bool     timed_out;
+    bool     timed_out, full;   // full: the limit or the arena stopped the scan
     unsigned long long_skipped;
+    uint64_t scanned;
 } scan_t;
 
 static bool has(const char *p, size_t n, const char *needle, size_t m)
@@ -230,56 +228,65 @@ static bool line_matches(const scan_t *s, const char *p, size_t n)
     return (s->lip && has(p, n, s->nip, s->lip)) || (s->lmac && has(p, n, s->nmac, s->lmac));
 }
 
-static void ring_push(scan_t *s, uint8_t file, uint32_t off, size_t len)
+// One complete line (no newline). Copied into the arena when it matches.
+static void take_line(scan_t *s, const char *p, size_t n)
 {
-    if (!s->cap) { s->pushed++; return; }
-    loc_t *l = &s->ring[s->pushed % s->cap];
-    l->off = off;
-    l->len = (uint16_t)len;
-    l->file = file;
-    l->pad = 0;
-    s->pushed++;
+    if (n && p[n - 1] == '\r') n--;
+    if (!n || !line_matches(s, p, n)) return;
+    if (s->arena_used + n + 1 > s->arena_cap) { s->full = true; return; }
+    memcpy(s->arena + s->arena_used, p, n);
+    s->arena[s->arena_used + n] = '\n';
+    s->arena_used += n + 1;
+    if (++s->matched >= s->limit) s->full = true;     // stop here: older lines may match too
 }
 
-// One file, start to its size now (the writer may append meanwhile). A line
-// longer than the chunk is skipped whole; a last line with no newline (being
-// written) is left out.
-static void scan_file(scan_t *s, const char *path, uint8_t file)
+// One file, from its size now (the writer may append meanwhile) back to its
+// start. The bytes after its last newline (a line being written) are left
+// out; a line longer than the buffer is skipped whole and counted.
+static void scan_file(scan_t *s, const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return;
     struct stat sb;
     if (fstat(fileno(f), &sb) != 0 || sb.st_size <= 0) { fclose(f); return; }
-    uint32_t size = (uint32_t)sb.st_size, base = 0;
-    size_t have = 0;
-    bool skipping = false;
-    while (base + have < size) {
+    char *b = s->buf;
+    const size_t cap = DEVLOG_CHUNK;
+    uint32_t pos = (uint32_t)sb.st_size;    // file offset of the next byte below what we hold
+    size_t frag = 0;                        // the pending line's start-side part, at b[cap - frag .. cap)
+    bool have_end = false;                  // the pending line ends in a newline (complete)
+    bool skipping = false;                  // inside a line too long to keep
+    while (!s->full) {
         if (esp_timer_get_time() > s->deadline) { s->timed_out = true; break; }
-        size_t want = DEVLOG_CHUNK - have;
-        uint32_t left = size - (uint32_t)(base + have);
-        if (want > left) want = left;
-        size_t got = fread(s->buf + have, 1, want, f);
-        if (got == 0) break;
-        have += got;
-        size_t start = 0;
-        char *nl;
-        while ((nl = memchr(s->buf + start, '\n', have - start)) != NULL) {
-            size_t end = (size_t)(nl - s->buf), n = end - start;
-            if (!skipping) {
-                if (n && s->buf[start + n - 1] == '\r') n--;
-                if (n && line_matches(s, s->buf + start, n)) ring_push(s, file, base + (uint32_t)start, n);
-            }
-            skipping = false;
-            start = end + 1;
-        }
-        if (start == 0 && have == DEVLOG_CHUNK) {       // no newline in a full chunk
+        if (frag == cap) {                  // a whole buffer and no newline: too long
             if (!skipping) s->long_skipped++;
             skipping = true;
-            start = have;
+            frag = 0;
         }
-        memmove(s->buf, s->buf + start, have - start);
-        base += (uint32_t)start;
-        have -= start;
+        if (pos == 0) {                     // the file's first line
+            if (have_end && !skipping) take_line(s, b + cap - frag, frag);
+            break;
+        }
+        size_t want = cap - frag;
+        if (want > pos) want = pos;
+        size_t s0 = cap - frag - want;      // the new piece goes just below the fragment
+        if (fseek(f, (long)(pos - want), SEEK_SET) != 0) break;
+        if (fread(b + s0, 1, want, f) != want) break;
+        pos -= (uint32_t)want;
+        s->scanned += want;
+        // Newlines in the new piece, highest first; the fragment holds none.
+        size_t stop = cap;                  // end (exclusive) of the pending line
+        for (size_t j = s0 + want; j-- > s0; ) {
+            if (b[j] != '\n') continue;
+            if (have_end && !skipping) take_line(s, b + j + 1, stop - (j + 1));
+            if (s->full) break;
+            have_end = true;
+            skipping = false;
+            stop = j;
+        }
+        // What is left below the lowest newline is the start-side part of a
+        // line that began further back: keep it at the top of the buffer.
+        frag = stop - s0;
+        memmove(b + cap - frag, b + s0, frag);
     }
     fclose(f);
 }
@@ -319,19 +326,20 @@ bool api_devlog_handle(int sock, const char *req, int req_len)
         s.lip = (size_t)snprintf(s.nip, sizeof(s.nip), "\"ip\":\"%s\"", ip);
     }
     if (!s.lmac && !s.lip) { send_error(sock, "400 Bad Request", "give a mac, an ip or both"); return true; }
-    int days  = num_param(q, qn, "days", DEVLOG_DAYS_DEF, DEVLOG_DAYS_MAX, &bad);
-    int limit = num_param(q, qn, "limit", DEVLOG_LIMIT_DEF, DEVLOG_LIMIT_MAX, &bad);
+    int days = num_param(q, qn, "days", DEVLOG_DAYS_DEF, DEVLOG_DAYS_MAX, &bad);
+    s.limit  = num_param(q, qn, "limit", DEVLOG_LIMIT_DEF, DEVLOG_LIMIT_MAX, &bad);
     if (bad) { send_error(sock, "400 Bad Request", "days and limit must be numbers"); return true; }
 
     sd_status_t st;
     sd_log_status(&st);
     if (!st.mounted) { send_error(sock, "503 Service Unavailable", "no microSD card"); return true; }
 
-    s.buf  = heap_caps_malloc(DEVLOG_CHUNK, MALLOC_CAP_SPIRAM);
-    s.ring = heap_caps_malloc(sizeof(loc_t) * (size_t)limit, MALLOC_CAP_SPIRAM);
-    loc_t *out = heap_caps_malloc(sizeof(loc_t) * (size_t)limit, MALLOC_CAP_SPIRAM);
-    if (!s.buf || !s.ring || !out) {
-        free(s.buf); free(s.ring); free(out);
+    s.buf = heap_caps_malloc(DEVLOG_CHUNK, MALLOC_CAP_SPIRAM);
+    s.arena_cap = DEVLOG_ARENA;
+    s.arena = heap_caps_malloc(s.arena_cap, MALLOC_CAP_SPIRAM);
+    if (!s.arena) { s.arena_cap = DEVLOG_ARENA_MIN; s.arena = heap_caps_malloc(s.arena_cap, MALLOC_CAP_SPIRAM); }
+    if (!s.buf || !s.arena) {
+        free(s.buf); free(s.arena);
         send_error(sock, "503 Service Unavailable", "out of memory");
         return true;
     }
@@ -340,64 +348,30 @@ bool api_devlog_handle(int sock, const char *req, int req_len)
     int nf = list_days(names, days);
     int64_t t0 = esp_timer_get_time();
     s.deadline = t0 + DEVLOG_TIME_MS * 1000LL;
-    size_t outn = 0;
-    int scanned = 0;
-    bool truncated = false;
+    int scanned_files = 0;
     char path[48];
-
-    // Newest file first; each file keeps its newest matches, up to what the
-    // limit has left, and adds them newest first.
-    for (int fi = 0; fi < nf; fi++) {
-        if (outn == (size_t)limit) { truncated = true; break; }   // older files may hold more
-        s.cap = (size_t)limit - outn;
-        s.pushed = 0;
+    for (int fi = 0; fi < nf && !s.full && !s.timed_out; fi++) {
         snprintf(path, sizeof(path), SD_LOG_DIR "/%s", names[fi]);
-        scan_file(&s, path, (uint8_t)fi);
-        scanned++;
-        size_t kept = s.pushed < s.cap ? s.pushed : s.cap;
-        for (size_t k = 0; k < kept; k++) out[outn++] = s.ring[(s.pushed - 1 - k) % s.cap];
-        if (s.pushed > s.cap) truncated = true;
-        if (s.timed_out) { truncated = true; break; }
-        if (s.pushed > s.cap) break;
+        scan_file(&s, path);
+        scanned_files++;
     }
+    bool truncated = s.full || s.timed_out;
 
-    char meta[200];
+    char meta[256];
     int ml = snprintf(meta, sizeof(meta),
-        "{\"kind\":\"meta\",\"matched\":%u,\"files\":%d,\"days\":%d,\"limit\":%d,"
-        "\"truncated\":%s,\"timed_out\":%s,\"long_skipped\":%lu}\n",
-        (unsigned)outn, scanned, days, limit, truncated ? "true" : "false",
-        s.timed_out ? "true" : "false", s.long_skipped);
+        "{\"kind\":\"meta\",\"matched\":%d,\"files\":%d,\"days\":%d,\"limit\":%d,"
+        "\"truncated\":%s,\"timed_out\":%s,\"scanned_bytes\":%llu,\"ms\":%lld,\"long_skipped\":%lu}\n",
+        s.matched, scanned_files, days, s.limit, truncated ? "true" : "false",
+        s.timed_out ? "true" : "false", (unsigned long long)s.scanned,
+        (long long)((esp_timer_get_time() - t0) / 1000), s.long_skipped);
     if (ml <= 0 || ml >= (int)sizeof(meta)) ml = 0;
-    size_t total = (size_t)ml;
-    for (size_t i = 0; i < outn; i++) total += out[i].len + 1u;
-
-    // Send what the scan found. A line that reads short is padded with spaces,
-    // so Content-Length holds; the page skips a line it can't parse.
-    if (send_head(sock, "200 OK", "application/x-ndjson; charset=utf-8", total) &&
-        send_all(sock, meta, (size_t)ml)) {
-        FILE *f = NULL;
-        int open_fi = -1;
-        for (size_t i = 0; i < outn; i++) {
-            const loc_t *l = &out[i];
-            if (l->file != open_fi) {
-                if (f) fclose(f);
-                snprintf(path, sizeof(path), SD_LOG_DIR "/%s", names[l->file]);
-                f = fopen(path, "rb");
-                open_fi = l->file;
-            }
-            size_t got = 0;
-            if (f && fseek(f, (long)l->off, SEEK_SET) == 0) got = fread(s.buf, 1, l->len, f);
-            if (got < l->len) memset(s.buf + got, ' ', l->len - got);
-            s.buf[l->len] = '\n';
-            if (!send_all(sock, s.buf, (size_t)l->len + 1)) break;
-        }
-        if (f) fclose(f);
-    }
-    ESP_LOGI(TAG, "Device log: %u lines from %d of %d files in %lld ms%s",
-             (unsigned)outn, scanned, nf, (long long)((esp_timer_get_time() - t0) / 1000),
-             s.timed_out ? " (time box)" : "");
+    if (send_head(sock, "200 OK", "application/x-ndjson; charset=utf-8", (size_t)ml + s.arena_used) &&
+        send_all(sock, meta, (size_t)ml))
+        send_all(sock, s.arena, s.arena_used);
+    ESP_LOGI(TAG, "Device log: %d lines from %d of %d files, %llu B read in %lld ms%s",
+             s.matched, scanned_files, nf, (unsigned long long)s.scanned,
+             (long long)((esp_timer_get_time() - t0) / 1000), s.timed_out ? " (time box)" : "");
     free(s.buf);
-    free(s.ring);
-    free(out);
+    free(s.arena);
     return true;
 }

@@ -1606,7 +1606,8 @@ function dvMessages(x,k,ai){
     if(!st.lines){info.textContent='';list.hidden=true;return;}
     const m=st.meta||{};
     info.textContent=st.lines.length+' line'+(st.lines.length===1?'':'s')+' from '+(+m.files||0)+' day file'+(+m.files===1?'':'s')+
-      (m.truncated?' (cut by the '+(m.timed_out?'3 s time box':'limit of '+(+m.limit||0))+')':'')+
+      (m.scanned_bytes?', '+kb(+m.scanned_bytes)+' read from the end'+(m.ms?' in '+(+m.ms/1000).toFixed(1)+' s':''):'')+
+      (m.truncated?' (stopped at the '+(m.timed_out?'3 s time box':'limit of '+(+m.limit||0))+'; older lines may match)':'')+
       (m.long_skipped?', '+m.long_skipped+' over-long skipped':'')+(st.bad?', '+st.bad+' unreadable':'');
     list.hidden=!st.lines.length;
     list.replaceChildren(...st.lines.map(dvMsgRow));

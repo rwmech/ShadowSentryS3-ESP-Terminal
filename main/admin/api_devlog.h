@@ -15,16 +15,20 @@
  *
  *     The answer is NDJSON (application/x-ndjson): a first line
  *     {"kind":"meta","matched":n,"files":k,"days":N,"limit":M,
- *      "truncated":bool,"timed_out":bool,"long_skipped":n}
+ *      "truncated":bool,"timed_out":bool,"scanned_bytes":n,"ms":n,
+ *      "long_skipped":n}
  *     then the matching lines as written on the card, newest first.
- *     "truncated" is true when matching lines were left out (the limit, or
- *     the time box). The scan stops after DEVLOG_TIME_MS so the single admin
- *     task never stalls; "timed_out" says so. Lines over DEVLOG_CHUNK bytes
- *     are skipped and counted.
+ *     Each file is read backwards from its end, so the newest lines come
+ *     first: day files run to several MB and the card reads at about
+ *     150 KB/s on this board. The scan stops at the limit, or after
+ *     DEVLOG_TIME_MS so the single admin task never stalls ("timed_out");
+ *     either way "truncated" is true (older lines may match). Lines over
+ *     DEVLOG_CHUNK bytes are skipped and counted.
  *
- * Buffers (an 8 KB read chunk and two 8 B-per-line index tables) are in
- * PSRAM, freed before returning. Reads the card from the admin task, one
- * file open at a time (FATFS is reentrant; the SD writer keeps its own).
+ * Buffers (a 16 KB read piece and a 256 KB arena for the matching lines,
+ * 32 KB if PSRAM is short) are in PSRAM, freed before returning. Reads the
+ * card from the admin task, one file open at a time (FATFS is reentrant; the
+ * SD writer keeps its own).
  * Returns true when the request was this route and has been answered.
  */
 bool api_devlog_handle(int sock, const char *req, int req_len);
