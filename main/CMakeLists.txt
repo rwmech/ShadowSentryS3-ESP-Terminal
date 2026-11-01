@@ -28,6 +28,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "json_esc.c"
         "wifi_manager.c"
         "arp_monitor.c"
         "geoip.c"
@@ -67,6 +68,7 @@ idf_component_register(
         "admin/api_devices.c"
         "admin/api_oui.c"
         "admin/api_devlog.c"
+        "admin/api_tasks.c"
         "storage/oui.c"
 
     INCLUDE_DIRS

@@ -9,6 +9,7 @@
 #include "telegram.h"
 #include "wifi_manager.h"
 #include "config.h"
+#include "detect.h"             // detect_note_logged(): no probe event besides ours
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -190,6 +191,7 @@ static void adb_event(adb_sess_t *s, bool alert, const char *fmt, ...)
     vsnprintf(e.payload, sizeof(e.payload), fmt, ap);
     va_end(ap);
 
+    if (s->events == 0 && !s->unlogged) detect_note_logged(s->addr.sin_addr.s_addr, ADB_PORT);
     if (s->events >= ADB_MAX_EVENTS) {          // bound flash and SD writes
         s->unlogged++;
         ESP_LOGD(TAG, "[%s] (not logged) %s", s->ip, e.payload);

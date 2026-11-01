@@ -56,6 +56,8 @@ CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
+# 48 for "ALERT" on the red alert emblem (flash only)
+CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_PERF_MONITOR=n
 CONFIG_LV_BUILD_EXAMPLES=n
 # OV2640 (esp32-camera): SCCB on the new i2c_master driver, attached by port to
@@ -87,3 +89,6 @@ CONFIG_MEGA_CCM_SUPPORT=n
 # Frames DMA straight into the PSRAM frame buffer, so the driver keeps no 16 KB
 # bounce buffer in internal RAM (only its DMA descriptors, about 1 KB).
 CONFIG_CAMERA_PSRAM_DMA=y
+# GET /api/tasks: per-task CPU share and stack high-water (no serial console on the board)
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

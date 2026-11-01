@@ -53,6 +53,7 @@ static const char *TAG = "DETECT";
 #define BITMAP_BYTES      8192      // 65536 bits: a port, or the low 16 bits of an IPv4
 #define QUIET_MS          60000     // a scan or sweep ends after this much silence
 #define PROBE_HOLD_MS     1500      // a probe waits this long for a scan to fold it into
+#define PROBE_HOLD_LOGGED_MS 6000   // ports whose service logs each connection: wait for it
 #define PROBE_REPEAT_MS   60000     // one probe event per source, port and minute
 #define PROBE_PEND_MAX    16
 #define PROBE_SEEN_MAX    64
@@ -61,7 +62,7 @@ static const char *TAG = "DETECT";
 
 // ── Messages, hook and ARP tap to the detector task ───────────────────────────
 
-enum { M_TCP = 1, M_UDP = 2, M_ARP = 3 };
+enum { M_TCP = 1, M_UDP = 2, M_ARP = 3, M_LOGGED = 4 };
 #define MF_SYN         0x01
 #define MF_ADMIN_DROP  0x02
 
@@ -131,8 +132,19 @@ static inline void post(const det_msg_t *m)
 
 // lwIP IPv4 input hook (ss_lwip_hooks.h). tcpip task, every inbound IPv4
 // packet, before lwIP has checked the header: bounded parse, one queue send.
+// Debug (POST /api/debug/hooks): true makes the IPv4 hook and the ARP tap pass
+// everything straight on, to split network latency.
+static volatile bool s_hooks_off;
+
+void detect_debug_hooks(bool on)
+{
+    s_hooks_off = !on;
+    ESP_LOGW(TAG, "IPv4 hook and ARP tap %s (debug)", on ? "on" : "bypassed");
+}
+
 int ss_ip4_input_hook(struct pbuf *p, struct netif *inp)
 {
+    if (s_hooks_off) return 0;
     if (!s_q || !p || !inp || !p->payload || p->len < 20) return 0;
     const uint8_t *b = (const uint8_t *)p->payload;
     unsigned hl  = (b[0] & 0x0fu) * 4u;
@@ -185,6 +197,7 @@ static netif_input_fn s_orig_input;
 
 static err_t arp_tap_input(struct pbuf *p, struct netif *inp)
 {
+    if (s_hooks_off) return s_orig_input(p, inp);
     if (p && p->payload && inp)
         discovery_frame_tap((const uint8_t *)p->payload, p->len, ip4_addr_get_u32(netif_ip4_addr(inp)));
     if (s_q && p && p->payload && p->len >= 42) {
@@ -298,6 +311,16 @@ static const char *const TRAP_NAME[TRAP_N] = { "FTP", "SSH", "Telnet", "HTTP", "
                                                "HTTP " TRAP_STR(HTTP_ALT_PORT3),
                                                "RDP", "VNC", "SMB", "Redis", "MySQL", "MSSQL", "JetDirect" };
 _Static_assert(TRAP_N <= 32, "src_t.traps is a uint32_t bitmap");
+// Services that log every connection they take (the HTTP engine, ADB, the
+// tripwires) call detect_note_logged(): a probe held for that source and port
+// is dropped, so one connection is one event. Their probes wait
+// PROBE_HOLD_LOGGED_MS (the engine's 5 s idle, the tripwire's 5 s), so a SYN
+// that never became a logged connection still raises its probe. FTP, SSH,
+// Telnet and RTSP log late or not at all before credentials: their probes stay.
+static const bool TRAP_LOGS[TRAP_N] = { false, false, false, HTTP_ENGINE_ENABLE, false,
+                                        false, false, true,
+                                        true, true, true,
+                                        true, true, true, true, true, true, true };
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -489,7 +512,43 @@ static void probe_hold(uint32_t ip, uint16_t port, uint32_t now)
         if (!p->used && !slot) slot = p;
     }
     if (!slot) return;                                  // 16 held already: a scan, surely
-    *slot = (probe_t){ .ip = ip, .port = port, .used = 1, .due = now + PROBE_HOLD_MS };
+    int t = trap_index(port);
+    uint32_t hold = (t >= 0 && TRAP_LOGS[t]) ? PROBE_HOLD_LOGGED_MS : PROBE_HOLD_MS;
+    *slot = (probe_t){ .ip = ip, .port = port, .used = 1, .due = now + hold };
+}
+
+// seen[] slot for a new entry: a free one, else the oldest.
+static seen_t *seen_slot(uint32_t now)
+{
+    seen_t *slot = &S->seen[0];
+    for (int k = 0; k < PROBE_SEEN_MAX; k++) {
+        seen_t *x = &S->seen[k];
+        if (!x->used) return x;
+        if (now - x->t > now - slot->t) slot = x;
+    }
+    return slot;
+}
+
+// A service logged this connection: no probe for it, nor for that source and
+// port for the next minute (each of those connections it logs too).
+static void on_logged(const det_msg_t *m, uint32_t now)
+{
+    for (int i = 0; i < PROBE_PEND_MAX; i++) {
+        probe_t *p = &S->pend[i];
+        if (p->used && p->ip == m->ip && p->port == m->port) p->used = 0;
+    }
+    for (int k = 0; k < PROBE_SEEN_MAX; k++) {
+        seen_t *x = &S->seen[k];
+        if (x->used && x->ip == m->ip && x->port == m->port) { x->t = now; return; }
+    }
+    *seen_slot(now) = (seen_t){ .ip = m->ip, .port = m->port, .used = 1, .t = now };
+}
+
+void detect_note_logged(uint32_t ip, uint16_t port)
+{
+    if (!s_q || !ip) return;
+    det_msg_t m = { .kind = M_LOGGED, .port = port, .ip = ip };
+    post(&m);
 }
 
 static void probe_emit_due(uint32_t now)
@@ -498,13 +557,7 @@ static void probe_emit_due(uint32_t now)
         probe_t *p = &S->pend[i];
         if (!p->used || (int32_t)(now - p->due) < 0) continue;
         p->used = 0;
-        seen_t *slot = &S->seen[0];
-        for (int k = 0; k < PROBE_SEEN_MAX; k++) {
-            seen_t *x = &S->seen[k];
-            if (!x->used) { slot = x; break; }
-            if (now - x->t > now - slot->t) slot = x;
-        }
-        *slot = (seen_t){ .ip = p->ip, .port = p->port, .used = 1, .t = now };
+        *seen_slot(now) = (seen_t){ .ip = p->ip, .port = p->port, .used = 1, .t = now };
         int t = trap_index(p->port);
         s_st_probes++;
         emit(ATTACK_PROBE, p->ip, NULL, true, "Probe: TCP SYN to port %u (%s)",
@@ -731,6 +784,7 @@ static void detect_task(void *arg)
             do {
                 uint32_t now = now_ms();
                 if (m.kind == M_ARP) on_arp(&m, now);
+                else if (m.kind == M_LOGGED) on_logged(&m, now);
                 else on_port(&m, now);
             } while (++batch < 64 && xQueueReceive(s_q, &m, 0) == pdTRUE);
         }

@@ -1,4 +1,5 @@
 #include "sd_log.h"
+#include "json_esc.h"
 #include "board.h"
 #include "config.h"
 #include "log_store.h"
@@ -28,6 +29,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>         // fsync
 
 static const char *TAG = "SDLOG";
 
@@ -35,6 +37,7 @@ static const char *TAG = "SDLOG";
 #define SD_TASK_STACK    6144
 #define SD_TASK_PRIO     2
 #define SD_BUS_WAIT_MS   15000     // give up waiting for the display after this
+#define SD_SYNC_MS       2000      // the open day file is synced at most this often
 #define BUS_READY_BIT    BIT0
 
 typedef enum { SDM_ATTACK, SDM_ALARM, SDM_BOOT, SDM_FLUSH, SDM_FILE, SDM_SNAP, SDM_LINE } sdm_kind_t;
@@ -196,18 +199,11 @@ void sd_log_status(sd_status_t *out)
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
+// json_esc() (fork): also turns bytes that are not UTF-8 into U+FFFD, so
+// every line on the card is valid JSON.
 static void jesc(const char *in, char *out, size_t outlen)
 {
-    size_t o = 0;
-    for (; in && *in && o + 7 < outlen; in++) {
-        unsigned char c = (unsigned char)*in;
-        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
-        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
-        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
-        else if (c < 0x20)  { o += snprintf(out + o, outlen - o, "\\u%04x", c); }
-        else out[o++] = (char)c;
-    }
-    out[o] = '\0';
+    json_esc(in, (size_t)-1, out, outlen);
 }
 
 static void fmt_ip(uint32_t ip_net, char *buf, size_t len)
@@ -574,13 +570,37 @@ static void sd_task(void *arg)
     static char line[1024];
     char path[48];
     int64_t last_space_us = 0;
+    // The day file stays open between lines and is synced at most every
+    // SD_SYNC_MS (and when the queue runs dry). Opening, appending and closing
+    // it per line cost three card writes and their busy waits each, which the
+    // SD-over-SPI driver polls through: a full core for most of a second per
+    // line, and the network slowed with it (2026-11-01). Power loss now costs
+    // up to SD_SYNC_MS of lines.
+    FILE *day = NULL;
+    char day_name[48] = "";
+    bool dirty = false;
+    int64_t dirty_since = 0;
     for (;;) {
         sdm_t m;
-        if (xQueueReceive(s_q, &m, pdMS_TO_TICKS(60000)) != pdTRUE) {
+        bool got = xQueueReceive(s_q, &m, dirty ? pdMS_TO_TICKS(SD_SYNC_MS) : pdMS_TO_TICKS(60000)) == pdTRUE;
+        if (dirty && (!got || esp_timer_get_time() - dirty_since >= SD_SYNC_MS * 1000LL)) {
+            dirty = false;
+            if (fflush(day) != 0 || fsync(fileno(day)) != 0) {
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                s_status.write_errors++;
+                xSemaphoreGive(s_mutex);
+                ESP_LOGW(TAG, "sync of %s failed", day_name);
+                fclose(day);
+                day = NULL;
+                day_name[0] = '\0';
+            }
+        }
+        if (!got) {
             if (s_stats_dirty) stats_save();
             continue;
         }
         if (m.kind == SDM_FLUSH) {          // reboot or OTA coming
+            if (day) { fclose(day); day = NULL; day_name[0] = '\0'; dirty = false; }
             if (s_stats_dirty) stats_save();
             continue;
         }
@@ -604,17 +624,23 @@ static void sd_task(void *arg)
         }
         day_path(ts, path, sizeof(path));
 
-        FILE *f = fopen(path, "a");
-        bool ok = f && fwrite(out, 1, (size_t)n, f) == (size_t)n;
+        if (strcmp(path, day_name) != 0) {      // first line, a new day, or after an error
+            if (day) fclose(day);
+            day = fopen(path, "a");
+            strlcpy(day_name, day ? path : "", sizeof(day_name));
+            dirty = false;
+        }
+        bool ok = day && fwrite(out, 1, (size_t)n, day) == (size_t)n;
         if (m.kind == SDM_LINE) free(m.l.text);
-        if (f) ok = (fclose(f) == 0) && ok;   // close per line: power loss costs one line
+        if (ok && !dirty) { dirty = true; dirty_since = esp_timer_get_time(); }
+        if (!ok && day) { fclose(day); day = NULL; day_name[0] = '\0'; dirty = false; }   // reopen next line
 
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         if (ok) s_status.lines_written++; else s_status.write_errors++;
         xSemaphoreGive(s_mutex);
         if (!ok) ESP_LOGW(TAG, "write to %s failed", path);
 
-        if (esp_timer_get_time() - last_space_us > 60LL * 1000000) {
+        if (esp_timer_get_time() - last_space_us > 600LL * 1000000) {   // FATFS caches the free count
             last_space_us = esp_timer_get_time();
             refresh_space();
             if (s_stats_dirty) stats_save();

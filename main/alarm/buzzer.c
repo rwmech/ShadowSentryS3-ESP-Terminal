@@ -17,14 +17,28 @@ static const char *TAG = "BUZZER";
 #define BUZ_CHANNEL  LEDC_CHANNEL_1
 #define BUZ_DUTY_ON  512            // 50 % of 10-bit: loudest for a passive piezo
 
-// Siren: a sweep up and down across the piezo's 2.7 kHz resonance, the duty
-// held at 50 % throughout. 2300 to 3100 Hz in 50 Hz steps of 25 ms: 16 steps
-// up and 16 down make an 800 ms cycle, 4 cycles make 3.2 s.
-#define SIREN_LO_HZ      2300
-#define SIREN_HI_HZ      3100
-#define SIREN_STEP_HZ    50
-#define SIREN_STEP_MS    25
-#define SIREN_CYCLES     4
+// Red alert klaxon, after the DS9 / Voyager red alert: a deep two-tone warble
+// with a rising tail, three bursts. The piezo is weak far below its 2.7 kHz
+// resonance, so the low notes are chosen for their harmonics: a 50 % square
+// wave carries odd harmonics (1/3 of the fundamental at 3f, 1/5 at 5f), and the
+// 3rd harmonics of 860 Hz (2580 Hz) and 1000 Hz (3000 Hz) sit either side of
+// the resonance, so both notes come out loud and about equally so, while the
+// ear still hears the 860 / 1000 Hz pitch. A lower pair puts the 3rd harmonic
+// below 2.3 kHz and leans on the 5th, at a fifth of the level.
+// Per burst: 12 notes of 75 ms alternating low and high (900 ms), then a rise
+// from 2300 to 3100 Hz in 8 steps of 20 ms across the resonance (the loudest
+// part), then 200 ms quiet. 3 bursts, 3.28 s with no gap after the last.
+#define KLAX_LO_HZ          860
+#define KLAX_HI_HZ          1000
+#define KLAX_NOTE_MS        75
+#define KLAX_NOTES          12
+#define KLAX_RISE_LO_HZ     2300
+#define KLAX_RISE_HI_HZ     3100
+#define KLAX_RISE_STEPS     8
+#define KLAX_RISE_STEP_MS   20
+#define KLAX_GAP_MS         200
+#define KLAX_BURSTS         3
+#define KLAX_POLL_MS        25      // a STOP ends the klaxon within this
 
 // The siren plays on its own task, so the alarm task (whose queue takes every
 // event from the traps) and the admin task never block for 3 s.
@@ -32,17 +46,31 @@ static const char *TAG = "BUZZER";
 #define BUZ_TASK_PRIO    3          // below the alarm task (4), above the UI (2)
 #define BUZ_QUEUE_DEPTH  8
 
-typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_CONFIRM, CMD_YELLOW } buz_cmd_t;
+// CMD_CHIRP + a buzzer_chirp_t is that chirp.
+typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_YELLOW, CMD_CHIRP } buz_cmd_t;
 
-// YELLOW condition opened: one soft falling tone, about 300 ms, well off the
-// piezo's resonance and at a low duty, so it reads as a notice, not the siren.
-#define YELLOW_HI_HZ     1400
-#define YELLOW_LO_HZ     1050
-#define BUZ_DUTY_SOFT    64             // 6 % of 10-bit
+// Console sounds, after the LCARS panel taps: very short tones near the
+// resonance, stepped without a break (hz 0 is a silence). Rising for a tap and
+// a confirm, falling for a cancel, a held two-tone for a completed hold.
+typedef struct { uint16_t hz, ms; } step_t;
+static const step_t TAP[]     = { { 2600, 18 }, { 3200, 18 } };
+static const step_t CONFIRM[] = { { 2400, 20 }, { 2900, 20 }, { 3400, 25 } };
+static const step_t CANCEL[]  = { { 3200, 25 }, { 2400, 35 } };
+static const step_t ACKED[]   = { { 3000, 60 }, { 0, 30 }, { 3400, 120 } };
+#define STEPS(a) { a, sizeof(a) / sizeof(a[0]) }
+static const struct { const step_t *s; uint8_t n; } CHIRPS[] = {
+    [BUZZER_CHIRP_TAP]     = STEPS(TAP),
+    [BUZZER_CHIRP_CONFIRM] = STEPS(CONFIRM),
+    [BUZZER_CHIRP_CANCEL]  = STEPS(CANCEL),
+    [BUZZER_CHIRP_ACK]     = STEPS(ACKED),
+};
+_Static_assert(sizeof(CHIRPS) / sizeof(CHIRPS[0]) == BUZZER_CHIRP_COUNT, "CHIRPS: one per buzzer_chirp_t");
 
-// Hold-to-confirm done: two short rising pips, about 110 ms.
-#define CONFIRM_LO_HZ    2700
-#define CONFIRM_HI_HZ    3400
+// YELLOW incident opened (buzzer_yellow): one soft two-note "attention" call,
+// rising, 290 ms.
+// Softer by duty: at 12.5 % the fundamental is about 8 dB under 50 % duty.
+static const step_t ATTENTION[] = { { 2000, 100 }, { 0, 30 }, { 2600, 160 } };
+#define BUZ_DUTY_SOFT    128
 
 static bool              s_ok = false;
 static SemaphoreHandle_t s_lock;    // buzzer, melody and UI tasks share the buzzer
@@ -95,15 +123,24 @@ void buzzer_init(void)
     }
 }
 
-static void tone(int hz, int on_ms, int off_ms)
+// Play steps at a duty, the tone held across frequency changes; hz 0 is a
+// silence. Caller holds s_lock. The timer goes back to BOARD_BUZZER_HZ.
+static void play_steps(const step_t *st, size_t n, uint32_t duty)
 {
-    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, hz);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-    vTaskDelay(pdMS_TO_TICKS(on_ms));
+    bool on = false;
+    for (size_t i = 0; i < n; i++) {
+        bool want = st[i].hz != 0;
+        if (want) ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, st[i].hz);
+        if (want != on) {
+            on = want;
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, on ? duty : 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(st[i].ms));
+    }
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-    if (off_ms) vTaskDelay(pdMS_TO_TICKS(off_ms));
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
 }
 
 // A STOP at the head of the queue ends the siren early. A SIREN or TEST
@@ -116,25 +153,37 @@ static bool stop_requested(void)
     return true;
 }
 
-// Takes s_lock for the whole siren; the timer goes back to BOARD_BUZZER_HZ
-// before the lock is released.
+// Hold one klaxon note (hz 0: quiet) for ms, in KLAX_POLL_MS slices. False as
+// soon as a STOP is at the head of the queue.
+static bool klax_hold(int hz, int ms)
+{
+    if (hz) ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, hz);
+    // Duty is a count, so it stays 50 % at any frequency.
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, hz ? BUZ_DUTY_ON : 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
+    while (ms > 0) {
+        int step = ms < KLAX_POLL_MS ? ms : KLAX_POLL_MS;
+        vTaskDelay(pdMS_TO_TICKS(step));
+        ms -= step;
+        if (stop_requested()) return false;
+    }
+    return true;
+}
+
+// The red alert klaxon. Takes s_lock for the whole of it; the timer goes back
+// to BOARD_BUZZER_HZ before the lock is released.
 static void siren_play(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_siren_wanted = false;
-    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, SIREN_LO_HZ);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_ON);   // duty is a count: holds 50 % across frequencies
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-    bool stop = false;
-    const int half = (SIREN_HI_HZ - SIREN_LO_HZ) / SIREN_STEP_HZ;   // 16 steps
-    for (int c = 0; c < SIREN_CYCLES && !stop; c++) {
-        // i 0..16 climbs 2300..3100, i 17..31 falls 3050..2350.
-        for (int i = 0; i < 2 * half; i++) {
-            int up = i <= half ? i : 2 * half - i;
-            ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, SIREN_LO_HZ + up * SIREN_STEP_HZ);
-            vTaskDelay(pdMS_TO_TICKS(SIREN_STEP_MS));
-            if ((stop = stop_requested())) break;
-        }
+    bool go = true;
+    for (int b = 0; b < KLAX_BURSTS && go; b++) {
+        for (int i = 0; i < KLAX_NOTES && go; i++)
+            go = klax_hold(i & 1 ? KLAX_HI_HZ : KLAX_LO_HZ, KLAX_NOTE_MS);
+        for (int i = 0; i < KLAX_RISE_STEPS && go; i++)
+            go = klax_hold(KLAX_RISE_LO_HZ + i * (KLAX_RISE_HI_HZ - KLAX_RISE_LO_HZ) / (KLAX_RISE_STEPS - 1),
+                           KLAX_RISE_STEP_MS);
+        if (go && b + 1 < KLAX_BURSTS) go = klax_hold(0, KLAX_GAP_MS);
     }
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
@@ -148,30 +197,20 @@ static void buzzer_task(void *arg)
     for (;;) {
         uint8_t c;
         if (xQueueReceive(s_cmds, &c, portMAX_DELAY) != pdTRUE) continue;
-        if (c == CMD_CONFIRM) {
+        if (c >= CMD_CHIRP && c < CMD_CHIRP + BUZZER_CHIRP_COUNT) {
             // Touch feedback, so the click setting governs it. Skipped, not
-            // queued, while the boot tune holds the buzzer.
+            // queued, while the klaxon or the boot tune holds the buzzer.
             if (settings_get()->touch_click && xSemaphoreTake(s_lock, 0) == pdTRUE) {
-                tone(CONFIRM_LO_HZ, 40, 30);
-                tone(CONFIRM_HI_HZ, 40, 0);
-                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+                play_steps(CHIRPS[c - CMD_CHIRP].s, CHIRPS[c - CMD_CHIRP].n, BUZ_DUTY_ON);
                 xSemaphoreGive(s_lock);
             }
             continue;
         }
         if (c == CMD_YELLOW) {
-            // The alarm sound setting governs it; waits out a click, not the
-            // boot tune or a siren.
-            if (settings_get()->alarm_sound && xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
-                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, YELLOW_HI_HZ);
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, BUZ_DUTY_SOFT);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-                vTaskDelay(pdMS_TO_TICKS(120));
-                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, YELLOW_LO_HZ);
-                vTaskDelay(pdMS_TO_TICKS(180));
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
-                ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, BOARD_BUZZER_HZ);
+            // An alarm sound, so the alarm sound setting governs it. Waits out
+            // a chirp, not the boot tune (skipped then, as a chirp is).
+            if (settings_get()->alarm_sound && xSemaphoreTake(s_lock, pdMS_TO_TICKS(300)) == pdTRUE) {
+                play_steps(ATTENTION, sizeof(ATTENTION) / sizeof(ATTENTION[0]), BUZ_DUTY_SOFT);
                 xSemaphoreGive(s_lock);
             }
             continue;
@@ -195,6 +234,13 @@ static void buzzer_task(void *arg)
 static void request(buz_cmd_t cmd)
 {
     if (!s_ok) return;
+    if (cmd >= CMD_YELLOW) {
+        // Chirps and the yellow call play only on the buzzer task (no task:
+        // skipped, the UI never blocks), and a full queue drops them quietly.
+        uint8_t c = (uint8_t)cmd;
+        if (s_cmds) xQueueSend(s_cmds, &c, 0);
+        return;
+    }
     if (cmd == CMD_TEST || (cmd == CMD_SIREN && settings_get()->alarm_sound))
         s_siren_wanted = true;          // a tune playing stops for it
     if (s_cmds) {
@@ -209,8 +255,11 @@ static void request(buz_cmd_t cmd)
 void buzzer_alarm(void)  { request(CMD_SIREN); }
 void buzzer_remind(void) { request(CMD_SIREN); }
 void buzzer_test(void)   { request(CMD_TEST); }
-void buzzer_confirm(void){ if (s_cmds) request(CMD_CONFIRM); }   // no task: skip, never block the UI
-void buzzer_yellow(void) { if (s_cmds) request(CMD_YELLOW); }    // no task: skip, never block the alarm
+void buzzer_yellow(void) { request(CMD_YELLOW); }
+void buzzer_chirp(buzzer_chirp_t k)
+{
+    if ((unsigned)k < BUZZER_CHIRP_COUNT) request((buz_cmd_t)(CMD_CHIRP + (int)k));
+}
 
 // To the front of the queue: stop_requested() only looks at the head, so a
 // CONFIRM (or anything else) queued behind the playing siren must not hide it.
@@ -279,10 +328,6 @@ void buzzer_boot(void)
     xSemaphoreGive(s_lock);
 }
 
-void buzzer_click(void)
-{
-    if (!s_ok || !settings_get()->touch_click) return;
-    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return;   // a pattern is playing
-    tone(BOARD_BUZZER_HZ, 10, 0);
-    xSemaphoreGive(s_lock);
-}
+// Every press on the glass: the tap chirp, on the buzzer task (36 ms, too long
+// to play on the UI task as the old 10 ms click did).
+void buzzer_click(void) { buzzer_chirp(BUZZER_CHIRP_TAP); }

@@ -344,23 +344,15 @@ static bool handle_event(const attack_log_t *e, int64_t now)
     return false;
 }
 
-// After an ignore entry was added for incident id: resolve it if every code
-// it has seen from its source is now ignored.
+// After an ignore entry was added for incident id: resolve it, whatever
+// other codes it saw (Rob, 2026-11-01: an explicit ignore means "dealt
+// with"). Its events stay in the logs; a later event whose code is not
+// ignored opens a new incident as usual.
 static void handle_ignored(uint32_t id, alarm_by_t by)
 {
     if (s_info.state == ALARM_IDLE || s_info.id != id) return;
-    uint32_t codes = s_info.codes;
-    int n = describe_code_count();
-    for (int i = 0; i < n && i < 32; i++) {
-        if (!(codes & (1u << i))) continue;
-        if (!ignore_match(s_info.src_ip, s_info.src_mac, describe_code_at(i, NULL, NULL))) {
-            ESP_LOGI(TAG, "Incident #%lu stays open: %s from its source is not ignored",
-                     (unsigned long)id, describe_code_at(i, NULL, NULL));
-            return;
-        }
-    }
     if (s_info.state == ALARM_ACTIVE) buzzer_stop();
-    ESP_LOGI(TAG, "Incident #%lu resolved: its source is ignored", (unsigned long)id);
+    ESP_LOGI(TAG, "Incident #%lu resolved by an ignore (%s)", (unsigned long)id, alarm_by_key(by));
     close_incident(by);
 }
 

@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,20 @@ extern "C" {
  * SCCB shares the touch I2C bus (new i2c_master driver, attached by port), so
  * the legacy I2C driver is never linked.
  */
+
+// Light the face for a panel photo (config.h.example). Defaults for a
+// config.h written before these options.
+#ifndef CAM_FLASH_ENABLE
+#define CAM_FLASH_ENABLE      1
+#endif
+#ifndef CAM_FLASH_SETTLE_MS
+#define CAM_FLASH_SETTLE_MS   500
+#endif
+
+// 0: the camera is never started (no XCLK, no DMA); cam_snap() is a no-op.
+#ifndef CAM_ENABLE
+#define CAM_ENABLE            1
+#endif
 
 #define CAM_ACTION_MAX  12      // incl. NUL; [a-z0-9_-] only, else "press"
 #define CAM_FILE_MAX    64
@@ -54,6 +69,18 @@ bool cam_ready(void);
  * Returns false if the camera is off or the request was dropped.
  */
 bool cam_snap(const char *action);
+
+/*
+ * cam_snap() for a lit face: the caller has just turned the panel white (and
+ * the backlight up). The camera task drops frames for settle_ms (0 to 2000)
+ * while the sensor's auto exposure adjusts to the light, then captures, and
+ * calls done(true) as soon as the frame is taken, or done(false) if no frame
+ * came. done runs on the camera task: copy and queue, never block, no LVGL.
+ * Returns false, and done is never called, if the request was not queued
+ * (camera off, a snapshot under a second ago, or the queue full).
+ */
+typedef void (*cam_done_cb_t)(bool ok);
+bool cam_snap_lit(const char *action, int settle_ms, cam_done_cb_t done);
 
 // Metadata of the last snapshot. False (and *out zeroed) if there is none yet.
 bool cam_last_meta(cam_meta_t *out);

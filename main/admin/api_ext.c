@@ -7,6 +7,7 @@
 // every length is checked and every string is JSON-escaped on the way out.
 
 #include "api_ext.h"
+#include "json_esc.h"
 #include "settings.h"
 #include "sd_log.h"
 #include "alarm.h"
@@ -19,6 +20,8 @@
 #include "detect.h"
 #include "whatsapp.h"
 #include "notify.h"
+#include "ui.h"
+#include "wifi_monitor.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -93,17 +96,15 @@ static void jb_printf(jb_t *j, const char *fmt, ...)
     j->len += (size_t)n;
 }
 
-// A JSON string literal, escaped, reading at most max bytes of s.
+// A JSON string literal, escaped by json_esc() (bytes that are not UTF-8 become
+// U+FFFD), reading at most max bytes of s. The admin task is the only caller,
+// so one static buffer serves; it holds max up to 170 bytes fully escaped.
 static void jb_str(jb_t *j, const char *s, size_t max)
 {
+    static char esc[1024];
     JB_LIT(j, "\"");
-    for (size_t i = 0; s && i < max && s[i]; i++) {
-        unsigned char c = (unsigned char)s[i];
-        char e[8];
-        if (c == '"' || c == '\\') { e[0] = '\\'; e[1] = (char)c; jb_raw(j, e, 2); }
-        else if (c < 0x20 || c == 0x7f) { snprintf(e, sizeof(e), "\\u%04x", c); jb_raw(j, e, 6); }
-        else jb_raw(j, (const char *)&c, 1);
-    }
+    size_t n = json_esc(s, max, esc, sizeof(esc));
+    jb_raw(j, esc, n);
     JB_LIT(j, "\"");
 }
 
@@ -782,7 +783,7 @@ static void get_summary(int sock)
     }
     JB_LIT(&j, "],");
 
-    char alarm_j[256];
+    char alarm_j[WS_ALARM_JSON_MAX];     // was 256: the alarm object came out cut (invalid JSON)
     ws_format_alarm_json(&a, alarm_j, sizeof(alarm_j));
     jb_printf(&j, "\"incidents\":%lu,\"alarm\":%s}", (unsigned long)a.id, alarm_j);
     send_json(sock, &j);
@@ -1033,8 +1034,8 @@ static void post_ignore(int sock, const char *req, int req_len)
 // POST /api/alarm/ack (alias /api/ack): RED -> YELLOW.
 // POST /api/alarm/resolve (alias /api/alarm/clear): RED or YELLOW -> GREEN.
 // POST /api/alarm/ignore {"scope":"error"|"device"}: ignore the incident's
-//   code from its source, or the whole source, and resolve the incident if
-//   that leaves nothing of it unignored.
+//   code from its source, or the whole source, then resolve the incident,
+//   whatever other codes it saw.
 // Each answers 200 {"alarm":{...}} (the /api/status shape) once the alarm
 // task has applied it, or after ALARM_WAIT_MS with the state as it stands;
 // 409 when there is nothing to act on. Logs and metrics are never touched.
@@ -1128,6 +1129,36 @@ static void get_codes(int sock)
     send_json(sock, &j);
 }
 
+// ── POST /api/debug/panel {"paused":bool} (debug, not in the dashboard) ───────
+//
+// Stops the UI task running LVGL, so the panel neither refreshes nor uses the
+// SPI bus, to split network latency between the panel and the rest.
+
+// One debug toggle: reads {"<key>":bool}, calls set(), answers {"<key>":bool}.
+// Also POST /api/debug/promisc {"on":bool} (the Wi-Fi monitor's promiscuous
+// mode) and POST /api/debug/hooks {"on":bool} (detect's IPv4 hook and ARP tap).
+static void post_debug_toggle(int sock, const char *req, int req_len, const char *key, void (*set)(bool))
+{
+    size_t blen = 0;
+    const char *why = NULL;
+    const char *status = read_body(sock, req, req_len, &blen, &why);
+    if (status) { send_error(sock, status, why); return; }
+    cJSON *root = cJSON_ParseWithLength(s_body, blen);
+    const cJSON *p = root ? cJSON_GetObjectItemCaseSensitive(root, key) : NULL;
+    if (!cJSON_IsBool(p)) {
+        cJSON_Delete(root);
+        send_error(sock, "400 Bad Request", "need one boolean field");
+        return;
+    }
+    bool v = cJSON_IsTrue(p);
+    cJSON_Delete(root);
+    set(v);
+    jb_t j;
+    jb_init(&j);
+    jb_printf(&j, "{\"%s\":%s}", key, v ? "true" : "false");
+    send_json(sock, &j);
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 bool api_ext_handle(int sock, const char *req, int req_len)
@@ -1136,6 +1167,9 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     if (!parse_request_line(req, method, sizeof(method), path, sizeof(path), query, sizeof(query)))
         return false;
     bool get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
+    if (post && !strcmp(path, "/api/debug/panel"))   { post_debug_toggle(sock, req, req_len, "paused", ui_debug_pause); return true; }
+    if (post && !strcmp(path, "/api/debug/promisc")) { post_debug_toggle(sock, req, req_len, "on", wifi_monitor_debug_promisc); return true; }
+    if (post && !strcmp(path, "/api/debug/hooks"))   { post_debug_toggle(sock, req, req_len, "on", detect_debug_hooks); return true; }
 
     enum { R_NONE, R_SET_GET, R_SET_POST, R_REBOOT, R_BUZZ, R_SUMMARY, R_LOGS, R_FILE,
            R_DC_TEST, R_DC_STATUS, R_IGN_GET, R_IGN_POST, R_WA_TEST, R_WA_STATUS,

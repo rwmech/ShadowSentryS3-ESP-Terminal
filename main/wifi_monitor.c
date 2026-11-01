@@ -101,6 +101,14 @@ static void raise_wifi_alert(const uint8_t src[6], const char *detail)
     telegram_notify(&e);
 }
 
+// Debug (fork, POST /api/debug/promisc): switch the radio's promiscuous mode
+// off and on at run time, to split network latency. Off stops deauth detection.
+void wifi_monitor_debug_promisc(bool on)
+{
+    esp_err_t err = esp_wifi_set_promiscuous(on);
+    ESP_LOGW(TAG, "Promiscuous mode %s (debug): %s", on ? "on" : "off", esp_err_to_name(err));
+}
+
 void wifi_monitor_task(void *arg)
 {
 #if !WIFI_MON_ENABLE

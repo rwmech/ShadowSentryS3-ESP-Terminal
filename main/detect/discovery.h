@@ -66,8 +66,11 @@ extern "C" {
  *
  * Output:
  *   - an SD line {"kind":"discovery",...} per new device, new protocol, new
- *     label or new query string for a device (DISCOVERY_SD_BURST, then one per
- *     DISCOVERY_SD_REFILL_MS)
+ *     label or hostname, or a query string that device never sent before
+ *     (a per-device LRU set of DISCOVERY_QHASH_N hashes), DISCOVERY_SD_BURST
+ *     then one per DISCOVERY_SD_REFILL_MS; and once an hour one
+ *     {"kind":"discovery_summary"} line per device that sent anything, with
+ *     its packets per protocol. Nothing is written per packet.
  *   - a Discord digest every DISCOVERY_DIGEST_S, only when something new was
  *     seen: "LAN devices seen (last 30 min)", one line per device with news
  *     (label, IP or MAC, what it did in plain words from a table in flash:
@@ -119,6 +122,8 @@ extern "C" {
 #define DISCOVERY_DIGEST_LINES  20      // devices per digest, the rest "+N more"
 #define DISCOVERY_DIGEST_LINE   90      // characters per line, cut at a word
 #define DISCOVERY_DIGEST_MAX    1800    // characters in all (Discord allows 2000)
+#define DISCOVERY_QHASH_N       32      // distinct query strings remembered per device (LRU)
+#define DISCOVERY_SUMMARY_S     3600    // discovery_summary period
 #define DISCOVERY_TASK_STACK    4096    // PSRAM; high-water logged on each new low
 #define DISCOVERY_TASK_PRIO     2
 
@@ -149,6 +154,26 @@ size_t discovery_devices_json(char *buf, size_t cap);
 // newest one's label (or IP) into label and its first-seen uptime (s) into
 // *first_up_s. Either pointer may be NULL. Any task; takes the table lock.
 int discovery_summary(char *label, size_t len, uint32_t *first_up_s);
+
+// For the front panel's LAN talkers: up to max devices with the most packets
+// an hour (all protocols, over first to last seen, at least
+// DISCOVERY_RATE_MIN_S), busiest first, into out. Returns how many. label is
+// the device's best label and vendor its MAC vendor, "" if none. Any task;
+// takes the table lock.
+#define DISCOVERY_VENDOR_LEN    41      // OUI_NAME_MAX
+#define DISCOVERY_RATE_MIN_S    600
+typedef struct {
+    uint32_t ip;                        // network order, 0 = unknown
+    uint8_t  mac[6];
+    uint32_t per_hour;
+    char     label[DISCOVERY_LABEL_LEN];
+    char     vendor[DISCOVERY_VENDOR_LEN];
+} discovery_talker_t;
+int discovery_top_talkers(discovery_talker_t *out, int max);
+
+// The best label of the device with this MAC (if not NULL and known) or IP,
+// into buf. False, and buf "", if there is none. Any task; takes the lock.
+bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len);
 
 #ifdef __cplusplus
 }

@@ -5,6 +5,7 @@
 #include "telegram.h"
 #include "sd_log.h"
 #include "wifi_manager.h"
+#include "detect.h"             // detect_note_logged(): no probe event besides ours
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -324,7 +325,18 @@ static void log_detail(const conn_t *c, cat_t cat, size_t body_len)
     snprintf(num, sizeof(num), "\",\"body_len\":%u,\"head_len\":%u}\n",
              (unsigned)body_len, (unsigned)(c->head_len ? c->head_len : c->len));
     jraw(r->dline, &o, DLINE_MAX, num);
-    if (o + 1 >= DLINE_MAX) { o = DLINE_MAX - 2; r->dline[o++] = '\n'; r->dline[o] = '\0'; }
+    if (o + 1 >= DLINE_MAX) {           // did not fit (escaped UA or body): a valid line without them
+        o = 0;
+        jraw(r->dline, &o, DLINE_MAX, "{\"kind\":\"http\",\"cut\":true,\"ip\":\"");
+        jraw(r->dline, &o, DLINE_MAX, ip);
+        jraw(r->dline, &o, DLINE_MAX, "\",\"category\":\"");
+        jraw(r->dline, &o, DLINE_MAX, CAT[cat].key);
+        jraw(r->dline, &o, DLINE_MAX, "\",\"request\":\"");
+        jput(r->dline, &o, DLINE_MAX / 2, r->rline);
+        snprintf(num, sizeof(num), "\",\"ts\":%lu,\"port\":%u,\"body_len\":%u}\n",
+                 (unsigned long)time(NULL), (unsigned)c->port, (unsigned)body_len);
+        jraw(r->dline, &o, DLINE_MAX, num);
+    }
 
     char *line = heap_caps_malloc(o + 1, MALLOC_CAP_SPIRAM);
     if (!line) return;
@@ -335,6 +347,7 @@ static void log_detail(const conn_t *c, cat_t cat, size_t body_len)
 static void emit_event(const conn_t *c, cat_t cat)
 {
     req_t *r = R;
+    detect_note_logged(c->addr.sin_addr.s_addr, c->port);
     uint32_t now = (uint32_t)(now_ms() / 1000);
     if (now - s_win_start >= 60) {
         if (s_win_dropped) {
