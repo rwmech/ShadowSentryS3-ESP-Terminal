@@ -20,6 +20,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
 
 - Work only in `C:\Users\rwmec\Documents\Development` and the session scratchpad.
 - A managed guard (`C:\Program Files\ClaudeCode\guard`) checks every tool call. When it refuses one, report the refusal and the reason. Never look for a way round it.
+  - Standing rule, every lane (2026-11-01): when the guard refuses a command because it misreads quoted text as a command name, make that edit with the Edit or Write tool directly. Never write a script to run instead, and never look for another route around the refusal. Report the refusal.
 - Dev stack only: git, PlatformIO, Python, the build tools.
 - PlatformIO is `C:\Users\rwmec\.platformio\penv\Scripts\pio.exe`. Run one pio at a time in this tree.
 - Delegate bulk reading (whole files, tree-wide greps, logs) to a subagent that reports conclusions. Read for yourself what a judgement rests on. Put independent tool calls in one message.
