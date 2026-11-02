@@ -14,8 +14,8 @@ extern "C" {
  * in NVS (namespace "settings", one key per field so adding a field never wipes
  * the others) and survives OTA updates.
  *
- * Applied immediately: admin password, timezone, alarm timings, sounds,
- * brightness, Discord, WhatsApp, Pi-hole, MikroTik. Applied after a reboot: Wi-Fi,
+ * Applied immediately: admin password, timezone, panel clock format, alarm
+ * timings, sounds, brightness, Discord, WhatsApp, Pi-hole, MikroTik. Applied after a reboot: Wi-Fi,
  * Telegram.
  *
  * Wi-Fi safety net: if saved Wi-Fi credentials don't get an IP within
@@ -39,6 +39,7 @@ typedef struct {
     bool     alarm_sound;           // incident alarm + reminders on the buzzer
     bool     boot_chirp;            // chirp at power-up / reboot
     bool     touch_click;           // click on every screen press
+    bool     clock_24h;             // panel times: 24-hour "15:39:12", else 12-hour "3:39 PM"
     char     discord_webhook[160];  // secret: "" = off, else https://discord.com/api/webhooks/...
     bool     discord_log_events;    // deduplicated event log to Discord (incidents post regardless)
     // Detection and alerting (applied immediately)

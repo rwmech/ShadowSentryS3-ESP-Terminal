@@ -23,6 +23,9 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_TZ
 #define DISPLAY_TZ "UTC0"
 #endif
+#ifndef DISPLAY_CLOCK_24H
+#define DISPLAY_CLOCK_24H 0
+#endif
 #ifndef DISCORD_WEBHOOK_URL
 #define DISCORD_WEBHOOK_URL ""
 #endif
@@ -101,6 +104,7 @@ static void defaults(settings_t *s)
     s->alarm_sound    = true;
     s->boot_chirp     = true;
     s->touch_click    = true;
+    s->clock_24h      = DISPLAY_CLOCK_24H != 0;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
     // Detection: every type alerts except discovery (ALERT_MASK_DEFAULT),
@@ -182,6 +186,7 @@ void settings_init(void)
         get_bool(h, "alarm_snd", &s_live.alarm_sound);
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
+        get_bool(h, "clock24", &s_live.clock_24h);
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
         get_u32(h, "alert_mask", &s_live.alert_mask);
@@ -513,6 +518,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "alarm_snd",  s->alarm_sound));
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
+    SET(nvs_set_u8(h,  "clock24",    s->clock_24h));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
     SET(nvs_set_u32(h, "alert_mask", s->alert_mask));
