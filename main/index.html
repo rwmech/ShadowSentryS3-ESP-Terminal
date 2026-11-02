@@ -915,6 +915,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-snd">Alarm sound</label><input type="checkbox" id="st-snd">
       <label for="st-chirp">Boot sound</label><input type="checkbox" id="st-chirp">
       <label for="st-click">Touch click</label><input type="checkbox" id="st-click">
+      <label for="st-uivol">UI sound volume</label><select id="st-uivol"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
+      <label for="st-alvol">Alarm volume</label><select id="st-alvol"><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
       <h4>Alert on</h4>
       <div class="alerts" id="st-alerts"></div>
       <div class="hint" style="grid-column:1/-1">Ticked types open an incident (siren, panel, Telegram, Discord). Every event is logged either way.</div>
@@ -931,6 +933,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <div class="ctl" style="margin-top:10px">
         <button class="btn" type="submit">Save</button>
         <button class="btn" type="button" onclick="testBuzzer()">Test buzzer</button>
+        <select id="st-snd-pick" aria-label="Sound to play"><option value="tap">Tap</option><option value="commit">Commit</option><option value="cancel">Cancel</option><option value="ack">Acknowledge</option><option value="boot">Boot beeps</option><option value="yellow">Yellow alert</option><option value="klaxon">Red alert klaxon</option></select>
+        <button class="btn" type="button" onclick="playSound()">Play</button>
         <button class="btn btn-red" type="button" onclick="rebootDev()">Reboot</button>
       </div>
     </form>
@@ -2149,7 +2153,7 @@ async function loadSettings(){
     $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
-    $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
+    $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;if(s.ui_volume!=null)$('st-uivol').value=String(s.ui_volume);if(s.alarm_volume!=null)$('st-alvol').value=String(s.alarm_volume);
     ['st-pw','st-pw2','st-wpw','st-tok','st-dch','st-wakey'].forEach(i=>$(i).value='');
     $('st-dcclr').checked=false;$('st-dch').disabled=false;$('st-dclog').checked=!!s.discord_log_events;
     $('st-dctier').value=String([1,2,3].includes(s.discord_min_tier)?s.discord_min_tier:2);
@@ -2193,7 +2197,7 @@ async function saveSettings(ev){
   }
   const body={wifi_ssid:$('st-ssid').value,tg_chat_id:$('st-chat').value.trim(),tz:$('st-tz').value.trim(),
     alarm_remind_s:Number($('st-rem').value),alarm_quiet_s:Number($('st-quiet').value),brightness:Number($('st-br').value),
-    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,clock_24h:$('st-clk').value==='24'};
+    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,ui_volume:+$('st-uivol').value,alarm_volume:+$('st-alvol').value,clock_24h:$('st-clk').value==='24'};
   let am=0;TNAME.forEach((_,i)=>{if($('st-al-'+i).checked)am|=(1<<i);});
   body.alert_mask=am>>>0;
   body.scan_ports=Number($('st-sp').value);body.scan_window_s=Number($('st-sw').value);
@@ -2407,6 +2411,7 @@ async function testPihole(){
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
 async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
+async function playSound(){try{const r=await fetch('/api/buzzer/test',{...POSTH,headers:{...(POSTH.headers||{}),'Content-Type':'application/json'},body:JSON.stringify({sound:$('st-snd-pick').value})});if(!r.ok)showMsg('err','Play failed: HTTP '+r.status+'.');}catch{showMsg('err','Play failed.');}}
 async function rebootDev(){
   if(!confirm('Reboot the device now?'))return;
   try{await fetch('/api/reboot',POSTH);}catch{}

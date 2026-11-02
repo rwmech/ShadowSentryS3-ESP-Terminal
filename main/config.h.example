@@ -424,6 +424,17 @@
 #define ALARM_REMIND_S              60
 #define ALARM_QUIET_S               600
 
+// Buzzer loudness, set by the LEDC duty of the square wave (the Settings page
+// can change both later; they apply at once).
+// UI_VOLUME_DEFAULT: the panel chirps and the boot beeps. 0 off, 1 low (3 %
+// duty, about 20 dB under full), 2 medium (8 %, about 12 dB under), 3 high
+// (20 %, about 5 dB under). The touch click setting still turns taps off.
+// ALARM_VOLUME_DEFAULT: the red alert klaxon and the yellow call. 1 low, 2
+// medium, 3 high (default, full loudness). There is no 0: switch the alarm
+// sound off for silence.
+#define UI_VOLUME_DEFAULT           1
+#define ALARM_VOLUME_DEFAULT        3
+
 // ── Compile-time validation ───────────────────────────────────────────────────
 //
 // These assertions fire as build errors, not runtime panics, so
@@ -529,6 +540,9 @@ _Static_assert(DISPLAY_CLOCK_24H == 0 || DISPLAY_CLOCK_24H == 1, "DISPLAY_CLOCK_
 
 // Discord tiers
 _Static_assert(DISCORD_MIN_TIER >= 1 && DISCORD_MIN_TIER <= 3, "DISCORD_MIN_TIER must be 1, 2 or 3");
+// Buzzer volumes
+_Static_assert(UI_VOLUME_DEFAULT >= 0 && UI_VOLUME_DEFAULT <= 3, "UI_VOLUME_DEFAULT must be 0..3");
+_Static_assert(ALARM_VOLUME_DEFAULT >= 1 && ALARM_VOLUME_DEFAULT <= 3, "ALARM_VOLUME_DEFAULT must be 1..3");
 
 // Panel camera flash
 _Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");

@@ -26,6 +26,12 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_CLOCK_24H
 #define DISPLAY_CLOCK_24H 0
 #endif
+#ifndef UI_VOLUME_DEFAULT
+#define UI_VOLUME_DEFAULT 1
+#endif
+#ifndef ALARM_VOLUME_DEFAULT
+#define ALARM_VOLUME_DEFAULT 3
+#endif
 #ifndef DISCORD_WEBHOOK_URL
 #define DISCORD_WEBHOOK_URL ""
 #endif
@@ -108,6 +114,8 @@ static void defaults(settings_t *s)
     s->alarm_sound    = true;
     s->boot_chirp     = true;
     s->touch_click    = true;
+    s->ui_volume      = UI_VOLUME_DEFAULT;
+    s->alarm_volume   = ALARM_VOLUME_DEFAULT;
     s->clock_24h      = DISPLAY_CLOCK_24H != 0;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
@@ -191,6 +199,8 @@ void settings_init(void)
         get_bool(h, "alarm_snd", &s_live.alarm_sound);
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
+        get_u8(h, "ui_vol", &s_live.ui_volume);
+        get_u8(h, "al_vol", &s_live.alarm_volume);
         get_bool(h, "clock24", &s_live.clock_24h);
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
@@ -462,6 +472,9 @@ static const char *validate(const settings_t *s)
                                        return "quiet time must be 60-86400 s";
     if (s->brightness < 5 || s->brightness > 100)
                                        return "brightness must be 5-100 %";
+    if (s->ui_volume > 3)              return "UI sound volume must be 0-3 (off, low, medium, high)";
+    if (s->alarm_volume < 1 || s->alarm_volume > 3)
+                                       return "alarm volume must be 1-3 (low, medium, high)";
     if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
         return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
     if (s->discord_min_tier < 1 || s->discord_min_tier > 3)
@@ -527,6 +540,8 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "alarm_snd",  s->alarm_sound));
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
+    SET(nvs_set_u8(h,  "ui_vol",     s->ui_volume));
+    SET(nvs_set_u8(h,  "al_vol",     s->alarm_volume));
     SET(nvs_set_u8(h,  "clock24",    s->clock_24h));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
