@@ -7,7 +7,8 @@
  * frame (top and bottom elbows, segmented bars, title, clock) around a
  * 400 x 282 content box, and a rail of six buttons on the left: 01 OPS,
  * 02 TRAPS, 03 WIRES, 04 NET, 05 DEV and 06 AUTO. In AUTO the pages rotate
- * every LCARS_AUTO_MS; touching 01 to 05 turns AUTO off and holds that page.
+ * every settings panel_rotate_s (DISPLAY_ROTATE_S, read live); touching
+ * 01 to 05 turns AUTO off and holds that page.
  * During an incident the rail and pages are hidden and ui.c fills the alert
  * box (lcars_alert_box()) with the emblem, the details and the buttons.
  * Layout and colours follow docs/mockups/lcars-panel.html.
@@ -38,7 +39,6 @@ extern const lcars_palette_t LCARS_CERRITOS;
 #define LCARS_CONTENT_Y 20
 #define LCARS_CONTENT_W 400
 #define LCARS_CONTENT_H 282
-#define LCARS_AUTO_MS   60000           // a page in AUTO
 
 // Build the frame and pages under scr, hidden.
 void lcars_build(lv_obj_t *scr);
