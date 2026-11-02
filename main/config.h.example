@@ -87,6 +87,17 @@
 
 #define DISCORD_WEBHOOK_URL         ""
 
+// DISCORD_MIN_TIER: which severity tiers reach Discord (see main\alarm\describe.h).
+// 1 posts SEV1 only (RED: logins, shells, scans, tripwires); 2 (default) SEV1
+// and SEV2 (YELLOW: probes, sweeps, scanner requests); 3 every tier, as before
+// (LAN discovery, new devices, unclassified 00-00 events and the 30-minute
+// discovery digest too). It gates the event log lines and the incident embeds
+// (by the incident's code). Boot and block list notices always post. The SD
+// log, the dashboard and the panel get everything whatever the value. The
+// Settings page can change it later.
+
+#define DISCORD_MIN_TIER            2
+
 // ── WhatsApp (CallMeBot) ─────────────────────────────────────────────────────
 //
 // Boot and incident alerts (opened, acknowledged, closed) to your own WhatsApp
@@ -515,6 +526,9 @@ _Static_assert(WIFI_ROAM_INTERVAL_S >= 60 && WIFI_ROAM_INTERVAL_S <= 86400, "WIF
 
 // Panel clock format
 _Static_assert(DISPLAY_CLOCK_24H == 0 || DISPLAY_CLOCK_24H == 1, "DISPLAY_CLOCK_24H must be 0 or 1");
+
+// Discord tiers
+_Static_assert(DISCORD_MIN_TIER >= 1 && DISCORD_MIN_TIER <= 3, "DISCORD_MIN_TIER must be 1, 2 or 3");
 
 // Panel camera flash
 _Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");

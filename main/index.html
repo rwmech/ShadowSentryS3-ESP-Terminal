@@ -864,6 +864,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-dch">Webhook URL</label><input type="password" id="st-dch" maxlength="159" autocomplete="off" spellcheck="false">
       <label for="st-dcclr">Clear webhook (turn Discord off)</label><input type="checkbox" id="st-dcclr" onchange="$('st-dch').disabled=this.checked">
       <label for="st-dclog">Post the event log</label><input type="checkbox" id="st-dclog">
+      <label for="st-dctier">Post to Discord</label><select id="st-dctier"><option value="1">SEV1 only (RED)</option><option value="2">SEV1 and SEV2 (RED and YELLOW)</option><option value="3">Everything (discovery, new devices, digest)</option></select>
       <div class="hint" id="st-dc-hint"></div>
       <div></div>
       <div class="ctl"><button class="btn" type="button" id="st-dctest" onclick="testDiscord()">Send test</button><span id="st-dcres" class="muted"></span></div>
@@ -2151,9 +2152,10 @@ async function loadSettings(){
     $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
     ['st-pw','st-pw2','st-wpw','st-tok','st-dch','st-wakey'].forEach(i=>$(i).value='');
     $('st-dcclr').checked=false;$('st-dch').disabled=false;$('st-dclog').checked=!!s.discord_log_events;
+    $('st-dctier').value=String([1,2,3].includes(s.discord_min_tier)?s.discord_min_tier:2);
     $('st-dch').placeholder=s.discord_webhook_set?'set; blank = unchanged':'not set';
     $('st-dc-hint').textContent='Discord is '+(s.discord_enabled?'on':'off')+
-      '. Incidents post when opened, acknowledged and closed, with a reminder while unacknowledged. The event log posts deduplicated lines every 15 s. Send test uses the saved webhook: save first.';
+      '. Incidents post when opened, acknowledged and closed, with a reminder while unacknowledged. The event log posts deduplicated lines every 15 s. Only the chosen tiers post (incidents by their code); everything is still logged on the card and shown here. Boot and block list notices always post. Send test uses the saved webhook: save first.';
     $('st-waph').value=s.whatsapp_phone||'';$('st-waclr').checked=false;$('st-wakey').disabled=false;
     $('st-wakey').placeholder=s.whatsapp_apikey_set?'set; blank = unchanged':'not set';
     $('st-wa-hint').textContent='WhatsApp is '+(s.whatsapp_enabled?'on':'off')+
@@ -2205,7 +2207,7 @@ async function saveSettings(ev){
   else if($('st-wpw').value)body.wifi_password=$('st-wpw').value;
   else if($('st-wpw').placeholder==='')return showMsg('err','Enter the Wi-Fi password, or tick "Open network".');
   if($('st-tok').value.trim())body.tg_token=$('st-tok').value.trim();
-  body.discord_log_events=$('st-dclog').checked;
+  body.discord_log_events=$('st-dclog').checked;body.discord_min_tier=Number($('st-dctier').value);
   if($('st-dcclr').checked)body.discord_webhook_clear=true;
   else if($('st-dch').value.trim())body.discord_webhook=$('st-dch').value.trim();
   body.whatsapp_phone=$('st-waph').value.replace(/\s+/g,'');
