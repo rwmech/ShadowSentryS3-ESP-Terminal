@@ -19,6 +19,7 @@
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_timer.h"
+#include "blocklist.h"
 #include "lwip/ip4_addr.h"
 #include <string.h>
 #include <stdio.h>
@@ -68,13 +69,13 @@ enum { PG_OPS, PG_TRAPS, PG_WIRES, PG_NET, PG_DEV };
 static const char *const PAGE_TITLE[PAGES] = { "OPS", "TRAPS", "TRIPWIRES", "NET", "DEVICES" };
 static const char *const RAIL_TXT[6] = { "01\nOPS", "02\nTRAPS", "03\nWIRES", "04\nNET", "05\nDEV", "06\nAUTO" };
 
-static lv_obj_t *s_root, *s_rail, *s_title, *s_clock, *s_content, *s_alert;
-static lv_obj_t *s_page[PAGES];
-static lv_obj_t *s_rail_mark[6];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_root, *s_rail, *s_title, *s_clock, *s_content, *s_alert;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_page[PAGES];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_rail_mark[6];
 static int       s_cur = PG_OPS;
 static bool      s_auto = true;
-static bool      s_green;               // the pages are shown (GREEN, LCARS style)
-static uint32_t  s_page_at;             // tick of the last page change, for AUTO
+EXT_RAM_BSS_ATTR static bool      s_green;               // the pages are shown (GREEN, LCARS style)
+EXT_RAM_BSS_ATTR static uint32_t  s_page_at;             // tick of the last page change, for AUTO
 
 // ── Today's figures (UI task) ─────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ EXT_RAM_BSS_ATTR static struct {
 } s_t;
 
 EXT_RAM_BSS_ATTR static lc_port_t s_ports[LC_PORTS_MAX];
-static int s_nports;
+EXT_RAM_BSS_ATTR static int s_nports;
 
 static bool s_chart_dirty = true;
 
@@ -582,12 +583,12 @@ static void build_frame(void)
 #define CH_H    48
 #define FOC_Y   178
 
-static lv_obj_t *s_cond, *s_tile_v[4], *s_tile_d[4];
-static lv_obj_t *s_bar[24], *s_scan, *s_scale_top, *s_tick[5];
-static lv_obj_t *s_foc_h, *s_foc_k[3], *s_foc_v[3];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_cond, *s_tile_v[4], *s_tile_d[4];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_bar[24], *s_scan, *s_scale_top, *s_tick[5];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_foc_h, *s_foc_k[3], *s_foc_v[3];
 static int       s_scan_x, s_port_cur = -1, s_focus;
-static uint32_t  s_focus_at, s_stats_at, s_data_at, s_tick_hour;
-static sd_stats_t *s_stats;             // PSRAM, about 10 KB
+EXT_RAM_BSS_ATTR static uint32_t  s_focus_at, s_stats_at, s_data_at, s_tick_hour;
+EXT_RAM_BSS_ATTR static sd_stats_t *s_stats;             // PSRAM, about 10 KB
 
 static void build_ops(lv_obj_t *pg)
 {
@@ -838,7 +839,7 @@ static bool pihole_share(uint32_t ip, const uint8_t *mac, uint32_t *tot, uint32_
 
 #define LC_DEVS 6
 EXT_RAM_BSS_ATTR static discovery_talker_t s_talk[LC_DEVS];
-static int s_ntalk;
+EXT_RAM_BSS_ATTR static int s_ntalk;
 
 // ── 02 TRAPS ──────────────────────────────────────────────────────────────────
 //
@@ -852,8 +853,8 @@ static int s_ntalk;
 #define TR_BAR_X  138
 #define TR_BAR_W  164
 
-static lv_obj_t *s_tr_fill[LC_TRAPS], *s_tr_n[LC_TRAPS], *s_tr_w[LC_TRAPS], *s_tr_mark[LC_TRAPS];
-static detail_t  s_tr_det;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_tr_fill[LC_TRAPS], *s_tr_n[LC_TRAPS], *s_tr_w[LC_TRAPS], *s_tr_mark[LC_TRAPS];
+EXT_RAM_BSS_ATTR static detail_t  s_tr_det;
 static int       s_tr_sel = -1;
 
 static void traps_refresh(bool force)
@@ -915,9 +916,9 @@ static void build_traps(lv_obj_t *pg)
 
 enum { WS_ARMED, WS_HIT, WS_OFF };
 
-static lv_obj_t *s_wi_bar[LC_WIRES], *s_wi_nm[LC_WIRES], *s_wi_n[LC_WIRES], *s_wi_mark[LC_WIRES];
-static uint8_t   s_wi_st[LC_WIRES];
-static detail_t  s_wi_det;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_wi_bar[LC_WIRES], *s_wi_nm[LC_WIRES], *s_wi_n[LC_WIRES], *s_wi_mark[LC_WIRES];
+EXT_RAM_BSS_ATTR static uint8_t   s_wi_st[LC_WIRES];
+EXT_RAM_BSS_ATTR static detail_t  s_wi_det;
 static int       s_wi_sel = -1;
 
 // Why a cell is off, or NULL when it is armed.
@@ -995,10 +996,10 @@ static void build_wires(lv_obj_t *pg)
 #define G_N 5
 #define G_H 92
 
-static lv_obj_t *s_g_fill[G_N], *s_g_v[G_N];
-static lv_obj_t *s_nl_v[9];
-static uint32_t  s_ipfix_rec, s_ipfix_at, s_ipfix_rate;
-static bool      s_ipfix_have;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_g_fill[G_N], *s_g_v[G_N];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_nl_v[9];
+EXT_RAM_BSS_ATTR static uint32_t  s_ipfix_rec, s_ipfix_at, s_ipfix_rate;
+EXT_RAM_BSS_ATTR static bool      s_ipfix_have;
 
 static void gauge_set(int i, const char *v, int32_t pct)
 {
@@ -1127,6 +1128,222 @@ static void build_net(lv_obj_t *pg)
     }
 }
 
+// ── 05 DEV ────────────────────────────────────────────────────────────────────
+//
+// List (busiest first, discovery_top_talkers()): header, then 6 rows of 30 px
+// from y 16: name (14 px, c2) and "IP | VENDOR" (12 px, dim) x 0..235,
+// Pi-hole's blocked share (12 px, c4, right) x 244..339, five activity
+// lights x 348..399, a track line under each row. A tap opens the detail:
+// name (20 px), Pi-hole's lookups and blocked count, the last allowed and
+// blocked names, the router's flow summary, BACK and BLOCK DEVICE (asks
+// first; blocklist_add() on confirm: the router drops the device's forward
+// traffic within a minute; the dashboard undoes it).
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_list, *s_dv_det;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_row[LC_DEVS], *s_dv_nm[LC_DEVS], *s_dv_sub[LC_DEVS], *s_dv_q[LC_DEVS];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_dot[LC_DEVS][5];
+EXT_RAM_BSS_ATTR static uint8_t   s_dv_lit[LC_DEVS];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_dd_nm, *s_dd_sub, *s_dd_v[4], *s_dd_block;
+EXT_RAM_BSS_ATTR static discovery_talker_t s_dv_sel;     // the device shown in the detail (a copy)
+EXT_RAM_BSS_ATTR static bool      s_dv_open;
+EXT_RAM_BSS_ATTR static router_flow_dev_t s_flow;   // about 2.6 KB
+
+static void dev_name(const discovery_talker_t *t, char *b, size_t len)
+{
+    if (t->label[0])       strlcpy(b, t->label, len);
+    else if (t->vendor[0]) snprintf(b, len, "%s device", t->vendor);
+    else                   strlcpy(b, "unknown device", len);
+    lcars_upper(b);
+}
+
+static void dev_sub(const discovery_talker_t *t, char *b, size_t len)
+{
+    char ip[16];
+    if (t->ip) fmt_ip(t->ip, ip, sizeof(ip)); else strlcpy(ip, "NO IP", sizeof(ip));
+    if (t->vendor[0]) snprintf(b, len, "%s | %s", ip, t->vendor); else strlcpy(b, ip, len);
+    lcars_upper(b);
+}
+
+static void dev_detail(void)
+{
+    char b[96];
+    const discovery_talker_t *t = &s_dv_sel;
+    dev_name(t, b, sizeof(b));
+    fit(b, F20, 400);
+    set_text(s_dd_nm, b);
+    dev_sub(t, b, sizeof(b));
+    fit(b, F12, 400);
+    set_text(s_dd_sub, b);
+    if (correlate_pihole_device(t->ip, t->mac, &s_dns) && s_dns.total) {
+        snprintf(b, sizeof(b), "%u LOOKUPS, %u BLOCKED IN %lu MIN", (unsigned)s_dns.total, (unsigned)s_dns.blocked,
+                 (unsigned long)(s_dns.window_s / 60));
+        set_text(s_dd_v[0], b);
+        const char *al = "-", *bl = "-";
+        for (int i = s_dns.n - 1; i >= 0; i--) {             // newest first: keep the first of each
+            if (s_dns.q[i].blocked) bl = s_dns.q[i].domain; else al = s_dns.q[i].domain;
+        }
+        strlcpy(b, al, sizeof(b)); lcars_upper(b); fit(b, F12, 400); set_text(s_dd_v[1], b);
+        strlcpy(b, bl, sizeof(b)); lcars_upper(b); fit(b, F12, 400); set_text(s_dd_v[2], b);
+    } else {
+        set_text(s_dd_v[0], "NO PI-HOLE DATA");
+        set_text(s_dd_v[1], "-");
+        set_text(s_dd_v[2], "-");
+    }
+    if (t->ip && router_flow_device(t->ip, &s_flow) && s_flow.state == ROUTER_FLOW_ST_OK) {
+        uint64_t up = 0;
+        for (int i = 0; i < s_flow.n && i < ROUTER_FLOW_DST; i++) up += s_flow.d[i].bytes_out;
+        snprintf(b, sizeof(b), "%u HOSTS | %lu.%lu MB UP", (unsigned)s_flow.n,
+                 (unsigned long)(up / 1000000), (unsigned long)(up % 1000000 / 100000));
+    } else strlcpy(b, "NO FLOW DATA", sizeof(b));
+    set_text(s_dd_v[3], b);
+    show(s_dd_block, t->ip != 0);
+}
+
+static void dev_open(bool on)
+{
+    s_dv_open = on;
+    show(s_dv_list, !on);
+    show(s_dv_det, on);
+    if (on) dev_detail();
+}
+
+static void dev_refresh(bool force)
+{
+    if (s_dv_open) { if (force) dev_detail(); return; }
+    talkers_load();
+    for (int i = 0; i < LC_DEVS; i++) {
+        if (i >= s_ntalk) { show(s_dv_row[i], false); continue; }
+        const discovery_talker_t *t = &s_talk[i];
+        char b[96];
+        dev_name(t, b, sizeof(b));
+        fit(b, F14, 236);
+        set_text(s_dv_nm[i], b);
+        dev_sub(t, b, sizeof(b));
+        fit(b, F12, 236);
+        set_text(s_dv_sub[i], b);
+        uint32_t tot, blk;
+        if (pihole_share(t->ip, t->mac, &tot, &blk)) snprintf(b, sizeof(b), "%lu %% BLOCKED", (unsigned long)(blk * 100 / tot));
+        else snprintf(b, sizeof(b), "%lu / H", (unsigned long)t->per_hour);
+        set_text(s_dv_q[i], b);
+        uint32_t ph = t->per_hour;
+        uint8_t n = ph < 30 ? 1 : ph < 100 ? 2 : ph < 300 ? 3 : ph < 600 ? 4 : 5;
+        if (n != s_dv_lit[i]) {
+            s_dv_lit[i] = n;
+            for (int k = 0; k < 5; k++)
+                lv_obj_set_style_bg_color(s_dv_dot[i][k], k < n ? LCARS_COL(c1) : LCARS_COL(track), 0);
+        }
+        show(s_dv_row[i], true);
+    }
+}
+
+static void dev_row_cb(lv_event_t *ev)
+{
+    int i = (int)(uintptr_t)lv_event_get_user_data(ev);
+    if (i >= s_ntalk) return;
+    s_dv_sel = s_talk[i];
+    s_page_at = lv_tick_get();
+    dev_open(true);
+}
+
+static void dev_back_cb(lv_event_t *ev)
+{
+    (void)ev;
+    s_page_at = lv_tick_get();
+    dev_open(false);
+    dev_refresh(true);
+}
+
+static const char *BLOCK_BTNS[] = { "CANCEL", "CONFIRM", "" };
+EXT_RAM_BSS_ATTR static uint32_t s_block_ip;
+
+static void block_mb_cb(lv_event_t *ev)
+{
+    lv_obj_t *mb = lv_event_get_current_target(ev);
+    const char *b = lv_msgbox_get_active_btn_text(mb);
+    bool yes = b && !strcmp(b, "CONFIRM");
+    lv_msgbox_close_async(mb);
+    if (!yes || !s_block_ip) return;
+    char why[96] = "", ip[16];
+    fmt_ip(s_block_ip, ip, sizeof(ip));
+    block_result_t r = blocklist_add(s_block_ip, BLOCK_SRC, "front panel", why, sizeof(why));
+    ESP_LOGW(TAG, "BLOCK DEVICE %s from the panel: result %d%s%s", ip, (int)r, why[0] ? ", " : "", why);
+    char body[160];
+    if (r == BLOCK_OK || r == BLOCK_UPDATED)
+        snprintf(body, sizeof(body), "%s is on the block list. The router drops it within a minute; "
+                 "the dashboard can undo it.", ip);
+    else
+        snprintf(body, sizeof(body), "%s was not blocked: %s", ip,
+                 why[0] ? why : r == BLOCK_FULL ? "the block list is full" : "could not save the list");
+    lv_obj_t *m = lv_msgbox_create(NULL, r == BLOCK_OK || r == BLOCK_UPDATED ? "BLOCKED" : "NOT BLOCKED",
+                                   body, NULL, true);
+    lv_obj_set_width(m, 360);
+    lcars_style_msgbox(m);
+    lv_obj_center(m);
+}
+
+static void dev_block_cb(lv_event_t *ev)
+{
+    (void)ev;
+    if (!s_dv_sel.ip) return;
+    s_block_ip = s_dv_sel.ip;
+    s_page_at = lv_tick_get();
+    char name[48], ip[16];
+    EXT_RAM_BSS_ATTR static char body[200];
+    dev_name(&s_dv_sel, name, sizeof(name));
+    fmt_ip(s_dv_sel.ip, ip, sizeof(ip));
+    snprintf(body, sizeof(body), "Block %s (%s) from the internet? The router drops it within a minute. "
+             "Undo on the dashboard.", name, ip);
+    lv_obj_t *mb = lv_msgbox_create(NULL, "BLOCK DEVICE", body, BLOCK_BTNS, false);
+    lv_obj_set_width(mb, 360);
+    lcars_style_msgbox(mb);
+    lv_obj_t *bt = lv_msgbox_get_btns(mb);
+    lv_obj_set_size(bt, 320, 40);
+    lv_obj_center(mb);
+    lv_obj_add_event_cb(mb, block_mb_cb, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+// A rounded LCARS button: a fill with dark 14 px text.
+static lv_obj_t *lc_btn(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c,
+                        const char *t, lv_event_cb_t cb)
+{
+    lv_obj_t *b = fill(p, x, y, w, h, c);
+    lv_obj_set_style_radius(b, h / 2, 0);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *l = text(b, F14, COL_BLACK, 0, 0, 0, t);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, 0);
+    return b;
+}
+
+static void build_dev(lv_obj_t *pg)
+{
+    s_dv_list = area(pg, 0, 0, 400, 282);
+    text(s_dv_list, F12, LCARS_COL(c4), 0, 0, 0, "BUSIEST FIRST | TAP FOR DETAIL");
+    for (int i = 0; i < LC_DEVS; i++) {
+        lv_obj_t *r = s_dv_row[i] = area(s_dv_list, 0, (lv_coord_t)(16 + i * 30), 400, 30);
+        lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(r, dev_row_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+        s_dv_nm[i] = text(r, F14, LCARS_COL(c2), 0, 0, 236, "");
+        s_dv_sub[i] = text(r, F12, LCARS_COL(dim), 0, 16, 236, "");
+        s_dv_q[i] = text(r, F12, LCARS_COL(c4), 244, 8, 96, "");
+        lv_obj_set_style_text_align(s_dv_q[i], LV_TEXT_ALIGN_RIGHT, 0);
+        for (int k = 0; k < 5; k++) s_dv_dot[i][k] = fill(r, (lv_coord_t)(348 + k * 11), 11, 8, 8, LCARS_COL(track));
+        fill(r, 0, 29, 400, 1, LCARS_COL(track));
+        show(r, false);
+    }
+    s_dv_det = area(pg, 0, 0, 400, 282);
+    s_dd_nm = text(s_dv_det, F20, LCARS_COL(c1), 0, 0, 400, "");
+    s_dd_sub = text(s_dv_det, F12, LCARS_COL(c4), 0, 26, 400, "");
+    static const char *const K[4] = { "PI-HOLE", "LAST ALLOWED (LEFT THE HOUSE)", "LAST BLOCKED", "ROUTER, OUTBOUND" };
+    for (int i = 0; i < 4; i++) {
+        text(s_dv_det, F12, LCARS_COL(c4), 0, (lv_coord_t)(48 + i * 32), 0, K[i]);
+        s_dd_v[i] = text(s_dv_det, F12, LCARS_COL(c2), 0, (lv_coord_t)(62 + i * 32), 400, "-");
+    }
+    lc_btn(s_dv_det, 0, 186, 100, 34, LCARS_COL(c4), "BACK", dev_back_cb);
+    s_dd_block = lc_btn(s_dv_det, 106, 186, 160, 34, LCARS_COL(accent), "BLOCK DEVICE", dev_block_cb);
+    show(s_dv_det, false);
+}
+
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
 static void page_refresh(bool force)
@@ -1136,6 +1353,7 @@ static void page_refresh(bool force)
     case PG_TRAPS: traps_refresh(force); break;
     case PG_WIRES: wires_refresh(force); break;
     case PG_NET:   net_refresh(force);   break;
+    case PG_DEV:   dev_refresh(force);   break;
     default: break;
     }
 }
@@ -1143,13 +1361,14 @@ static void page_refresh(bool force)
 static void page_show(int p)
 {
     if (p < 0 || p >= PAGES) p = PG_OPS;
+    if (p == PG_DEV && s_cur != PG_DEV) { s_dv_open = false; show(s_dv_list, true); show(s_dv_det, false); }
     s_cur = p;
     s_page_at = lv_tick_get();
     for (int i = 0; i < PAGES; i++) show(s_page[i], i == p);
     marks_update();
     title_set(ALARM_COND_GREEN);
     page_refresh(true);
-    static bool measured[PAGES];            // the first show of each page after boot
+    EXT_RAM_BSS_ATTR static bool measured[PAGES];            // the first show of each page after boot
     if (!measured[p]) {
         measured[p] = true;
         ui_refr_measure(p == PG_OPS ? "LCARS OPS, scan line and port highlight" : PAGE_TITLE[p]);
@@ -1214,7 +1433,7 @@ void lcars_build(lv_obj_t *scr)
     build_traps(s_page[PG_TRAPS]);
     build_wires(s_page[PG_WIRES]);
     build_net(s_page[PG_NET]);
-    text(s_page[PG_DEV], F14, LCARS_COL(c4), 0, 0, 0, PAGE_TITLE[PG_DEV]);
+    build_dev(s_page[PG_DEV]);
     s_alert = fill(s_content, 0, 0, LCARS_CONTENT_W, LCARS_CONTENT_H, COL_BLACK);
     show(s_alert, false);
     show(s_root, false);

@@ -144,6 +144,18 @@ typedef struct {
     bool      holding;      // from press start until done, release or slide-off
 } hold_t;
 static hold_t s_h_ack;
+EXT_RAM_BSS_ATTR static hold_t s_h_lc_ack;
+
+// The LCARS alert view, in lcars_alert_box() (content coordinates):
+//   y   0..111  the emblem
+//   y 114       code and name (20 px, c5), y 139 source (14 px, c2), y 158
+//               the headline's detail (12 px, c2)
+//   y 178..216  three cells: EVENTS, OPEN FOR, ALSO SEEN
+//   y 232..279  ACKNOWLEDGE (RED, hold), IGNORE ERROR, IGNORE DEVICE
+#define LC_BTN_Y 232
+#define LC_BTN_H 48
+EXT_RAM_BSS_ATTR static lv_obj_t *s_lc_code, *s_lc_src, *s_lc_head, *s_lc_stat[3];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_lc_ack, *s_lc_ack_lbl, *s_lc_ign_err, *s_lc_ign_dev;
 
 // One alert emblem (see build_emblem()): drawn once, static, but for the
 // stripes rolling inside its chevrons.
@@ -159,6 +171,7 @@ typedef struct {
     int32_t    off;                             // offset last applied, -1 none
 } emblem_t;
 static emblem_t s_emb_red, s_emb_yel;
+EXT_RAM_BSS_ATTR static emblem_t s_emb_lc_red, s_emb_lc_yel;   // LCARS alert view
 static emblem_t *s_emb;             // the one shown, NULL when green
 
 // The incident view: black, under the status bar
@@ -186,12 +199,12 @@ static bool     s_fm_on;                // measuring the stripes, after a view c
 static uint32_t s_fm_start, s_fm_n, s_fm_px_max;
 static int64_t  s_fm_sum, s_fm_max;
 static bool     s_fm_full;              // the next refresh is a view's full repaint
-static const char *s_fm_what;           // what is measured: NULL the emblem's stripes
+EXT_RAM_BSS_ATTR static const char *s_fm_what;           // what is measured: NULL the emblem's stripes
 
 // Panel style (settings panel_style): true LCARS (ui_lcars.c), false the dashboard
-static bool       s_style_lc;
+EXT_RAM_BSS_ATTR static bool       s_style_lc;
 static lv_coord_t s_btn_y = 320;        // top of the shown button row (the face light stops above it)
-static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
+EXT_RAM_BSS_ATTR static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
 
 // ── Listeners (run on other tasks: copy and queue only) ───────────────────────
 
@@ -422,6 +435,12 @@ static void ack_done(void)
     alarm_ack(ALARM_BY_PANEL);
 }
 
+static void lc_ack_done(void)
+{
+    lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGING...");
+    alarm_ack(ALARM_BY_PANEL);
+}
+
 static void lit_snap(const char *action);
 
 // ACKNOWLEDGE press start. The photo is taken here, while the person is
@@ -503,6 +522,7 @@ static void runlight_set(lv_color_t c)
 // nothing else.
 
 typedef struct {
+    lv_coord_t w;                       // 0: the screen's 480
     lv_coord_t h, bar_h, foot, top, lw, stripe_h, stripe_gap, stripes;
     lv_coord_t title_dy, cond_dy, title_ls;
     const lv_font_t *f_title, *f_cond;
@@ -525,8 +545,26 @@ static const emblem_spec_t EMB_YELLOW = {
     .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .roll_ms = EMB_ROLL_YELLOW_MS,
 };
 
+// The LCARS alert view's emblems: the YELLOW geometry at h 112 in the 400 px
+// content box, no side bars; only the stripes move.
+#define LC_EMB_H 112
+static const emblem_spec_t EMB_LC_RED = {
+    .w = LCARS_CONTENT_W, .h = LC_EMB_H, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
+    .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
+    .title_dy = -8, .cond_dy = 14, .title_ls = 2,
+    .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
+    .cond = "CONDITION: RED", .col_hex = 0xe00000, .roll_ms = EMB_ROLL_RED_MS,
+};
+static const emblem_spec_t EMB_LC_YELLOW = {
+    .w = LCARS_CONTENT_W, .h = LC_EMB_H, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
+    .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
+    .title_dy = -8, .cond_dy = 14, .title_ls = 2,
+    .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
+    .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .roll_ms = EMB_ROLL_YELLOW_MS,
+};
+
 // lv_line keeps a pointer to its points, so they live here.
-static lv_point_t s_emb_pts[2][2][4];   // [emblem][upper, lower][point]
+static lv_point_t s_emb_pts[4][2][4];   // [emblem][upper, lower][point]
 
 static lv_obj_t *emb_pill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c)
 {
@@ -578,11 +616,12 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
                          const emblem_spec_t *s)
 {
     const lv_color_t col = lv_color_hex(s->col_hex);
+    const lv_coord_t W = s->w ? s->w : 480, cx = W / 2;
     const lv_coord_t cy = s->h / 2, last = s->h - 1;
     const lv_coord_t yt = s->lw / 2 + 2, yb = cy - s->bar_h / 2 - s->lw / 2;
 
     e->root = box(parent, COL_EMB_BG);
-    lv_obj_set_size(e->root, 480, s->h);
+    lv_obj_set_size(e->root, W, s->h);
     lv_obj_set_pos(e->root, 0, y);
     e->col = col;
     e->roll_ms = s->roll_ms;
@@ -601,10 +640,10 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
     for (int k = 0; k < 2; k++) {           // 0 upper, 1 lower (mirrored)
         lv_coord_t t = k ? last - yt : yt, b = k ? last - yb : yb;
         lv_point_t *p = pts[k];
-        p[0] = (lv_point_t){ 240 - s->foot, b };
-        p[1] = (lv_point_t){ 240 - s->top,  t };
-        p[2] = (lv_point_t){ 240 + s->top,  t };
-        p[3] = (lv_point_t){ 240 + s->foot, b };
+        p[0] = (lv_point_t){ cx - s->foot, b };
+        p[1] = (lv_point_t){ cx - s->top,  t };
+        p[2] = (lv_point_t){ cx + s->top,  t };
+        p[3] = (lv_point_t){ cx + s->foot, b };
         lv_obj_t *l = lv_line_create(e->root);
         lv_line_set_points(l, p, 4);
         lv_obj_set_style_line_width(l, s->lw, 0);
@@ -616,7 +655,7 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
         // The stripe area clips its stripes (children are clipped to their parent).
         lv_obj_t *a = e->clip[k] = lv_obj_create(e->root);
         lv_obj_remove_style_all(a);
-        lv_obj_set_pos(a, 240 - e->hw_max, k ? s->h - e->area_y - e->area_h : e->area_y);
+        lv_obj_set_pos(a, cx - e->hw_max, k ? s->h - e->area_y - e->area_h : e->area_y);
         lv_obj_set_size(a, 2 * e->hw_max, e->area_h);
         lv_obj_clear_flag(a, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
         for (int i = 0; i <= e->n; i++)
@@ -717,12 +756,13 @@ static void lit_snap(const char *action)
 typedef enum { IGN_ERROR, IGN_DEVICE } ign_kind_t;
 static struct { ign_kind_t kind; uint32_t id; } s_ign;     // what the open dialog is about
 static const char *IGN_BTNS[] = { "Ignore", "Cancel", "" };
+static const char *IGN_BTNS_LC[] = { "CANCEL", "CONFIRM", "" };
 
 static void ignore_mb_cb(lv_event_t *ev)
 {
     lv_obj_t *mb = lv_event_get_current_target(ev);
     const char *b = lv_msgbox_get_active_btn_text(mb);
-    bool yes = b && !strcmp(b, "Ignore");
+    bool yes = b && (!strcmp(b, "Ignore") || !strcmp(b, "CONFIRM"));
     lv_msgbox_close_async(mb);
     alarm_info_t a;
     alarm_get(&a);
@@ -747,6 +787,7 @@ static void ignore_mb_cb(lv_event_t *ev)
       : r == ESP_ERR_INVALID_STATE ? "The incident has closed."
                                    : "Could not save the ignore list.", NULL, true);
     lv_obj_set_width(e, 400);
+    if (s_style_lc) lcars_style_msgbox(e);
     lv_obj_center(e);
 }
 
@@ -767,12 +808,19 @@ static void ignore_ask_cb(lv_event_t *ev)
         snprintf(body, sizeof(body), "Ignore all alerts from %s?\n\n"
                  "Its events are still logged. The dashboard can undo it.", who);
     }
-    lv_obj_t *mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "Ignore error" : "Ignore device",
-                                    body, IGN_BTNS, false);
-    lv_obj_set_width(mb, 440);
-    lv_obj_set_style_text_font(mb, &lv_font_montserrat_20, 0);
-    lv_obj_t *btns = lv_msgbox_get_btns(mb);
-    lv_obj_set_size(btns, 400, 56);
+    lv_obj_t *mb;
+    if (s_style_lc) {
+        mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "IGNORE ERROR" : "IGNORE DEVICE", body, IGN_BTNS_LC, false);
+        lv_obj_set_width(mb, 360);
+        lcars_style_msgbox(mb);
+        lv_obj_set_size(lv_msgbox_get_btns(mb), 320, 40);
+    } else {
+        mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "Ignore error" : "Ignore device", body, IGN_BTNS, false);
+        lv_obj_set_width(mb, 440);
+        lv_obj_set_style_text_font(mb, &lv_font_montserrat_20, 0);
+        lv_obj_t *btns = lv_msgbox_get_btns(mb);
+        lv_obj_set_size(btns, 400, 56);
+    }
     lv_obj_center(mb);
     lv_obj_add_event_cb(mb, ignore_mb_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
@@ -1140,6 +1188,13 @@ static void refresh_age(void)
                  (unsigned long)s_alarm.count, s_alarm.count == 1 ? "" : "s", t0, t1,
                  age[0] ? ",  " : "", age);
         set_text(s_d_times, buf);
+        time_t now = time(NULL);
+        if (s_alarm.first_ts >= 1600000000 && now >= (time_t)s_alarm.first_ts) {
+            unsigned long d = (unsigned long)(now - (time_t)s_alarm.first_ts);
+            if (d < 3600) snprintf(buf, sizeof(buf), "%lu:%02lu", d / 60, d % 60);
+            else          snprintf(buf, sizeof(buf), "%lu:%02lu:%02lu", d / 3600, d % 3600 / 60, d % 60);
+        } else strlcpy(buf, "-", sizeof(buf));
+        set_text(s_lc_stat[1], buf);
         return;
     }
 }
@@ -1204,6 +1259,68 @@ static void view_armed(void)
     dash_refresh(true);                     // not kept up while hidden
 }
 
+// The LCARS alert view: the frame without its rail, the alert box.
+static void view_lcars_alert(alarm_cond_t c)
+{
+    bool red = c == ALARM_COND_RED;
+    show(s_inc, false);
+    show(s_bar, false);
+    show(s_rl_track, false);
+    show(s_idle, false);
+    lcars_view(c, true);
+    s_emb = red ? &s_emb_lc_red : &s_emb_lc_yel;
+    show(s_emb_lc_red.root, red);
+    show(s_emb_lc_yel.root, !red);
+    bool dev = s_alarm.src_ip || !mac_zero(s_alarm.src_mac);
+    if (red) {
+        place(s_lc_ack, 0, LC_BTN_Y, 132, LC_BTN_H);
+        place(s_lc_ign_err, 138, LC_BTN_Y, 126, LC_BTN_H);
+        place(s_lc_ign_dev, 270, LC_BTN_Y, 130, LC_BTN_H);
+    } else {
+        show(s_lc_ack, false);
+        place(s_lc_ign_err, 0, LC_BTN_Y, 126, LC_BTN_H);
+        place(s_lc_ign_dev, 132, LC_BTN_Y, 130, LC_BTN_H);
+    }
+    show(s_lc_ign_dev, dev);
+    s_btn_y = LCARS_CONTENT_Y + LC_BTN_Y;
+}
+
+// The LCARS alert's texts, upper case and fitted to the 400 px box.
+static void lcars_alert_text(const alarm_info_t *a)
+{
+    char buf[DESCRIBE_MAX + 48], ip[WIFI_MAC_STR_LEN > 16 ? WIFI_MAC_STR_LEN : 16], lbl[48];   // an IP, or the MAC
+    fmt_what(a, buf, sizeof(buf));
+    lcars_upper(buf);
+    fit_words(buf, &lv_font_montserrat_20, LCARS_CONTENT_W);
+    set_text(s_lc_code, buf);
+    const char *v = wifi_manager_mac_vendor(a->src_mac);
+    if (a->src_ip) fmt_ip(a->src_ip, ip, sizeof(ip));
+    else           wifi_manager_format_mac(a->src_mac, ip, sizeof(ip));
+    if (!discovery_label_for(a->src_ip, mac_zero(a->src_mac) ? NULL : a->src_mac, lbl, sizeof(lbl))) lbl[0] = '\0';
+    snprintf(buf, sizeof(buf), "%s%s%s%s%s", ip, v[0] ? " | " : "", v, lbl[0] ? " | " : "", lbl);
+    lcars_upper(buf);
+    fit_words(buf, &lv_font_montserrat_14, LCARS_CONTENT_W);
+    set_text(s_lc_src, buf);
+    const char *bar = strstr(a->headline, " | ");
+    strlcpy(buf, bar ? bar + 3 : a->headline, sizeof(buf));
+    fit_words(buf, &lv_font_montserrat_12, LCARS_CONTENT_W);
+    set_text(s_lc_head, buf);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)a->count);
+    set_text(s_lc_stat[0], buf);
+    strlcpy(buf, "-", sizeof(buf));
+    for (int i = 0; i < describe_code_count() && i < 64; i++) {
+        const char *nm;
+        int tier;
+        const char *code = describe_code_at(i, &nm, &tier);
+        if (!code || !(a->codes & (1ULL << i)) || !strcmp(code, a->code)) continue;
+        snprintf(buf, sizeof(buf), "%s %s", code, nm);
+        lcars_upper(buf);
+        fit_words(buf, &lv_font_montserrat_14, 129);
+        break;
+    }
+    set_text(s_lc_stat[2], buf);
+}
+
 // The LCARS panel, GREEN: its frame, rail and pages over everything.
 static void view_lcars_green(void)
 {
@@ -1221,6 +1338,15 @@ static void view_lcars_green(void)
 static void log_view(alarm_cond_t c)
 {
     lv_obj_update_layout(lv_scr_act());
+    if (c != ALARM_COND_GREEN && s_style_lc) {
+        lv_area_t e;
+        lv_obj_get_coords(s_emb->root, &e);
+        ESP_LOGI(TAG, "UI state: %s #%lu, LCARS, emblem y %d..%d, buttons %s%s, rail hidden",
+                 COND_NAME[c], (unsigned long)s_alarm.id, e.y1, e.y2,
+                 c == ALARM_COND_RED ? "ACKNOWLEDGE, IGNORE ERROR" : "IGNORE ERROR",
+                 lv_obj_has_flag(s_lc_ign_dev, LV_OBJ_FLAG_HIDDEN) ? "" : ", IGNORE DEVICE");
+        return;
+    }
     if (c == ALARM_COND_GREEN && s_style_lc) {
         ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, LCARS panel", (unsigned long)s_alarm.id);
         return;
@@ -1253,7 +1379,7 @@ static void apply_alarm(const alarm_info_t *a)
     bool changed = c != was || a->id != s_alarm.id || lc != s_style_lc;
     s_style_lc = lc;
     s_alarm = *a;
-    if (changed) hold_reset(&s_h_ack);
+    if (changed) { hold_reset(&s_h_ack); hold_reset(&s_h_lc_ack); }
 
     if (c != ALARM_COND_GREEN) {
         bool red = c == ALARM_COND_RED;
@@ -1271,8 +1397,10 @@ static void apply_alarm(const alarm_info_t *a)
         set_text(s_note, a->acked_by == ALARM_BY_PANEL     ? "Acknowledged on the panel. Resolve from the dashboard"
                        : a->acked_by == ALARM_BY_DASHBOARD ? "Acknowledged on the dashboard. Resolve from the dashboard"
                                                            : "Resolve from the dashboard");
-        view_incident(c);
-        if (changed && red) lv_label_set_text(s_b_ack_lbl, TXT_ACK);
+        lcars_alert_text(a);
+        if (lc) view_lcars_alert(c);
+        else    view_incident(c);
+        if (changed && red) { lv_label_set_text(s_b_ack_lbl, TXT_ACK); lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGE"); }
     } else {
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         set_text(s_pill_lbl, COND_NAME[c]);
@@ -1514,6 +1642,72 @@ static void build_incident(lv_obj_t *scr)
     lv_obj_add_event_cb(s_b_ign_dev, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_DEVICE);
 }
 
+// An LCARS alert button: a pill with dark 14 px text; with fill, a c5 hold
+// fill at 55 % under the label.
+static lv_obj_t *lc_alert_button(lv_obj_t *parent, uint32_t col, const char *text,
+                                 lv_obj_t **fill, lv_obj_t **lbl)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_style_bg_color(b, lv_color_hex(col), 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_radius(b, LC_BTN_H / 2, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_clip_corner(b, true, 0);
+    if (fill) {
+        *fill = box(b, lv_color_hex(LCARS_PAL->c5));
+        lv_obj_set_style_bg_opa(*fill, 140, 0);
+        lv_obj_set_size(*fill, 0, LV_PCT(100));
+        lv_obj_align(*fill, LV_ALIGN_LEFT_MID, 0, 0);
+    }
+    lv_obj_t *l = label(b, &lv_font_montserrat_14, lv_color_black());
+    lv_label_set_text(l, text);
+    lv_obj_center(l);
+    if (lbl) *lbl = l;
+    lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+    return b;
+}
+
+static void build_lcars_alert(void)
+{
+    lv_obj_t *p = lcars_alert_box();
+    build_emblem(&s_emb_lc_red, s_emb_pts[2], p, 0, &EMB_LC_RED);
+    build_emblem(&s_emb_lc_yel, s_emb_pts[3], p, 0, &EMB_LC_YELLOW);
+    const lv_coord_t W = LCARS_CONTENT_W;
+    s_lc_code = label(p, &lv_font_montserrat_20, LCARS_COL(c5));
+    lv_obj_set_pos(s_lc_code, 0, 114);
+    s_lc_src = label(p, &lv_font_montserrat_14, LCARS_COL(c2));
+    lv_obj_set_pos(s_lc_src, 0, 139);
+    s_lc_head = label(p, &lv_font_montserrat_12, LCARS_COL(c2));
+    lv_obj_set_pos(s_lc_head, 0, 158);
+    lv_obj_t *t[] = { s_lc_code, s_lc_src, s_lc_head };
+    for (int i = 0; i < 3; i++) {
+        lv_label_set_long_mode(t[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(t[i], W);
+        lv_obj_set_style_text_align(t[i], LV_TEXT_ALIGN_CENTER, 0);
+    }
+    static const char *const K[3] = { "EVENTS", "OPEN FOR", "ALSO SEEN" };
+    for (int i = 0; i < 3; i++) {
+        lv_coord_t x = (lv_coord_t)(i * 135);
+        lv_obj_t *bar = box(p, LCARS_COL(c3));
+        lv_obj_set_pos(bar, x, 178);
+        lv_obj_set_size(bar, 129, 3);
+        lv_obj_t *k = label(p, &lv_font_montserrat_12, LCARS_COL(c4));
+        lv_label_set_text(k, K[i]);
+        lv_obj_set_pos(k, x, 183);
+        s_lc_stat[i] = label(p, &lv_font_montserrat_14, LCARS_COL(c2));
+        lv_label_set_long_mode(s_lc_stat[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(s_lc_stat[i], 129);
+        lv_obj_set_pos(s_lc_stat[i], x, 197);
+    }
+    lv_obj_t *fill;
+    s_lc_ack = lc_alert_button(p, LCARS_PAL->accent, "ACKNOWLEDGE", &fill, &s_lc_ack_lbl);
+    hold_attach(&s_h_lc_ack, s_lc_ack, fill, lc_ack_done, ack_press_start_cb);
+    s_lc_ign_err = lc_alert_button(p, LCARS_PAL->c4, "IGNORE ERROR", NULL, NULL);
+    lv_obj_add_event_cb(s_lc_ign_err, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_ERROR);
+    s_lc_ign_dev = lc_alert_button(p, LCARS_PAL->c4, "IGNORE DEVICE", NULL, NULL);
+    lv_obj_add_event_cb(s_lc_ign_dev, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_DEVICE);
+}
+
 static void build_ui(void)
 {
     lv_obj_t *scr = lv_scr_act();
@@ -1561,6 +1755,7 @@ static void build_ui(void)
 
     build_dash();
     lcars_build(scr);                       // over the dashboard, hidden until chosen
+    build_lcars_alert();
 
     // Running light: a dark track the full width, and the moving segment on
     // it. On the top layer, so a dialog cannot stop it. Green only.
