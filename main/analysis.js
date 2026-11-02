@@ -116,3 +116,88 @@ window.ssAnalysis=(function(){
   }
   return analyse;
 })();
+
+// Plain-words notes for well-known tracker, telemetry, analytics and service
+// domains, for the device page's Pi-hole table (lane drill). Keyed by
+// registrable domain (or a longer name where one service sits under a shared
+// one, like an NTP pool); ssDomainNote(name) tries the name, then each parent
+// down to two labels, so "a.b.conviva.com" finds "conviva.com". Descriptive
+// only: what the service is, not whether it is good or bad. Returns "" when
+// the table does not know the name.
+window.ssDomainNote=(function(){
+  'use strict';
+  const NOTES={
+    // Analytics, telemetry, error reports
+    'conviva.com':'video viewing analytics (streaming apps)',
+    'braze.com':'marketing and push tracking',
+    'google-analytics.com':'Google Analytics: website and app usage analytics',
+    'app-measurement.com':'Google Firebase app analytics',
+    'crashlytics.com':'Firebase Crashlytics: app crash reports',
+    'scorecardresearch.com':'Comscore audience measurement',
+    'nr-data.net':'New Relic app performance monitoring',
+    'newrelic.com':'New Relic app performance monitoring',
+    'datadoghq.com':'Datadog monitoring telemetry',
+    'sentry.io':'Sentry: app error reports',
+    'bugsnag.com':'Bugsnag: app error reports',
+    'mixpanel.com':'Mixpanel product analytics',
+    'amplitude.com':'Amplitude product analytics',
+    'segment.io':'Segment analytics data collection',
+    'appsflyer.com':'AppsFlyer app install and marketing attribution',
+    'adjust.com':'Adjust app marketing attribution',
+    'branch.io':'Branch app links and attribution tracking',
+    'hotjar.com':'Hotjar website usage recording',
+    'data.microsoft.com':'Microsoft telemetry (Windows and Office diagnostics)',
+    'device-metrics-us.amazon.com':'Amazon device usage metrics',
+    'samsungacr.com':'Samsung TV viewing recognition (ACR)',
+    'alphonso.tv':'TV viewing recognition (ACR)',
+    // Advertising
+    'doubleclick.net':'Google advertising',
+    'googlesyndication.com':'Google advertising',
+    'googleadservices.com':'Google advertising',
+    'amazon-adsystem.com':'Amazon advertising',
+    'adnxs.com':'Xandr (Microsoft) advertising',
+    'criteo.com':'Criteo advertising',
+    'moatads.com':'Moat ad measurement',
+    'taboola.com':'Taboola sponsored content',
+    'outbrain.com':'Outbrain sponsored content',
+    'lgsmartad.com':'LG TV advertising',
+    // Time, connectivity checks
+    'datadog.pool.ntp.org':'time sync via Datadog\'s NTP pool',
+    'pool.ntp.org':'time sync via the public NTP pool',
+    'time.apple.com':'Apple time sync',
+    'time.windows.com':'Windows time sync',
+    'msftconnecttest.com':'Windows network connectivity check',
+    'connectivitycheck.gstatic.com':'Android network connectivity check',
+    'captive.apple.com':'Apple network connectivity check',
+    // Platform services and content delivery
+    'googleapis.com':'Google services',
+    'gstatic.com':'Google static content',
+    'googlevideo.com':'YouTube video',
+    'icloud.com':'Apple iCloud',
+    'lgtvsdp.com':'LG TV platform services',
+    'roku.com':'Roku services',
+    'nflxvideo.net':'Netflix video',
+    'netflix.com':'Netflix',
+    'spotify.com':'Spotify',
+    'xboxlive.com':'Xbox network',
+    'playstation.net':'PlayStation Network',
+    'nintendo.net':'Nintendo network',
+    'tuyaus.com':'Tuya smart-home cloud',
+    'tuyaeu.com':'Tuya smart-home cloud',
+    'meethue.com':'Philips Hue cloud',
+    'amazonaws.com':'Amazon Web Services cloud hosting (used by many apps)',
+    'cloudfront.net':'Amazon CloudFront content delivery',
+    'akamaized.net':'Akamai content delivery',
+    'akadns.net':'Akamai DNS and content delivery',
+    'fastly.net':'Fastly content delivery'};
+  return function(name){
+    let n=String(name==null?'':name).toLowerCase().replace(/\.$/,'');
+    if(!/^[a-z0-9._-]{1,253}$/.test(n))return'';
+    for(;;){
+      if(Object.prototype.hasOwnProperty.call(NOTES,n))return NOTES[n];
+      const i=n.indexOf('.');
+      if(i<0||n.indexOf('.',i+1)<0)return'';      // stop at two labels
+      n=n.slice(i+1);
+    }
+  };
+})();

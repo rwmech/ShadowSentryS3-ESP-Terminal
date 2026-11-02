@@ -2,8 +2,8 @@
 #include <stdbool.h>
 
 /*
- * Per-device log route on the admin port (fork addition, Robert Mech; Basic
- * auth already checked by admin_panel.c):
+ * Per-device and per-type log routes on the admin port (fork addition,
+ * Robert Mech; Basic auth already checked by admin_panel.c):
  *
  *   (The device page itself, GET /device, and /analysis.js are served by
  *   web_assets.c.)
@@ -30,6 +30,20 @@
  *     then the matching lines as written on the card, newest first. Lines
  *     over DEVLOG_CHUNK bytes are skipped and counted; a last line still
  *     being written is left out.
+ *
+ *   GET /api/logs/type?type=T[&user=U][&limit=M][&cursor=C]
+ *
+ *     The same scan, paging, limits, time box, buffers and answer (meta line
+ *     first), for the lines of one or more attack types across every day
+ *     file: T is a type number (attack_type_t) or key (rtsp, http, telnet,
+ *     ssh, ftp, arp, wifi, shell, scan, probe, arp_sweep, adb, tripwire,
+ *     discovery, new_device, router), or a comma list of up to 8. A line
+ *     matches when it is an attack line ({"kind":"attack",...) with
+ *     "type":N, for one of them, or a line of a kind that belongs to one:
+ *     http (HTTP), discovery and discovery_summary (Discovery), netdev (New
+ *     device), router_log (Router). With user= (at most 64 bytes after
+ *     percent-decoding; empty matches an empty user name) the line must also
+ *     hold "user":"U" as the log writes it (json_esc()).
  *
  * Buffers (a 16 KB read piece and a 256 KB arena for the matching lines,
  * 32 KB if PSRAM is short) are in PSRAM, freed before returning. Reads the

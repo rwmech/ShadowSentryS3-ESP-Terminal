@@ -112,3 +112,8 @@ CONFIG_ESP_WIFI_11KV_SUPPORT=y
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
 CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+# System event task (sys_evt): Wi-Fi and IP event handlers run on it (wifi_manager's
+# connect and IP handlers, which start SNTP and mDNS, wifi_roam's note, the IDF's own).
+# 416 B of the 2304 B default were left free on ecb9fe3 (/api/tasks); 3584 costs
+# 1280 B more internal heap (the stack is allocated when the default loop is created).
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584

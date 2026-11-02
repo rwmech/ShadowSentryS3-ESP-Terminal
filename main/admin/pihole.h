@@ -32,9 +32,18 @@ extern "C" {
  *   GET    /api/stats/top_clients   clients[]: ip, name, count; with
  *                                   blocked=true count is the blocked count.
  *                                   In-memory data: the last 24 h by default.
- *   GET    /api/queries?client_ip=  queries[]: domain (newest first), for the
- *                                   top domains of a device's last
- *                                   PIHOLE_TOP_SAMPLE queries
+ *   GET    /api/queries?client_ip=  queries[]: domain and status (newest first),
+ *                                   for the top domains of a device's last
+ *                                   PIHOLE_TOP_SAMPLE queries, each with its
+ *                                   allowed and blocked counts and how it was
+ *                                   blocked. status is FTL's
+ *                                   get_query_status_str() (src/datastructure.c):
+ *                                   allowed FORWARDED, CACHE, CACHE_STALE,
+ *                                   RETRIED, RETRIED_DNSSEC; blocked as FTL's
+ *                                   is_blocked(): GRAVITY, REGEX, DENYLIST and
+ *                                   their _CNAME forms, EXTERNAL_BLOCKED_IP,
+ *                                   _NULL, _NXRA, _EDE15, SPECIAL_DOMAIN,
+ *                                   DBBUSY; UNKNOWN and IN_PROGRESS neither
  * The SID goes in the X-FTL-SID header on every request. One session is kept
  * until it expires (re-auth on a 401), so the client never takes more than one
  * of Pi-hole's session seats.
