@@ -46,27 +46,23 @@ static uint8_t alarm_level(void)
 // ── Tone tables ──────────────────────────────────────────────────────────────
 // Every sound the buzzer plays is in this section, so a retune is one edit.
 
-// Red alert klaxon, after the DS9 / Voyager red alert: a deep two-tone warble
-// with a rising tail, three bursts. The piezo is weak far below its 2.7 kHz
-// resonance, so the low notes are chosen for their harmonics: a 50 % square
-// wave carries odd harmonics (1/3 of the fundamental at 3f, 1/5 at 5f), and the
-// 3rd harmonics of 860 Hz (2580 Hz) and 1000 Hz (3000 Hz) sit either side of
-// the resonance, so both notes come out loud and about equally so, while the
-// ear still hears the 860 / 1000 Hz pitch. A lower pair puts the 3rd harmonic
-// below 2.3 kHz and leans on the 5th, at a fifth of the level.
-// Per burst: 12 notes of 75 ms alternating low and high (900 ms), then a rise
-// from 2300 to 3100 Hz in 8 steps of 20 ms across the resonance (the loudest
-// part), then 200 ms quiet. 3 bursts, 3.28 s with no gap after the last.
-#define KLAX_LO_HZ          860
-#define KLAX_HI_HZ          1000
-#define KLAX_NOTE_MS        75
-#define KLAX_NOTES          12
-#define KLAX_RISE_LO_HZ     2300
-#define KLAX_RISE_HI_HZ     3100
-#define KLAX_RISE_STEPS     8
-#define KLAX_RISE_STEP_MS   20
-#define KLAX_GAP_MS         200
-#define KLAX_BURSTS         3
+// Red alert klaxon, after the TNG red alert: a rising "whoop", cut off at the
+// top, repeated. Designed, not measured: the meWho Titan samples
+// (https://www.mewho.com/titan/assets/redalert1a-lTLACCH2.mp3 and
+// redalert2a-8uSShXFi.mp3) are MP3 and could not be decoded here. Timing from
+// a hobbyist description of the TNG klaxon (homemade-circuits.com, 555
+// recreation): a rise from low to high over about 1.15 s, then 0.35 s off,
+// repeated. No published pitch, so the sweep is placed for the piezo: 1600 to
+// 3000 Hz, an octave less a tone, rising into and through the 2.7 kHz
+// resonance, so it swells to its loudest at the top as the real one does.
+// Per whoop: 46 steps of 25 ms (1150 ms), then 350 ms quiet. 3 whoops, 4.15 s
+// with no gap after the last. Duty from alarm_volume (KLAX_DUTY).
+#define KLAX_SWEEP_LO_HZ    1600
+#define KLAX_SWEEP_HI_HZ    3000
+#define KLAX_SWEEP_STEPS    46
+#define KLAX_STEP_MS        25
+#define KLAX_GAP_MS         350
+#define KLAX_WHOOPS         3
 #define KLAX_POLL_MS        25      // a STOP ends the klaxon within this
 
 // Steps are played back to back, the tone held across frequency changes;
@@ -93,9 +89,13 @@ static const step_t ACKED[]   = { { 3000, 50 }, { 0, 30 }, { 3400, 110 } };
 // style, 290 ms. Designed, not measured from a sample.
 static const step_t BOOT[]    = { { 2500, 45 }, { 0, 50 }, { 2900, 45 }, { 0, 50 }, { 3300, 100 } };
 
-// YELLOW incident opened (buzzer_yellow): one soft two-note "attention" call,
-// rising, 290 ms, at YELLOW_DUTY.
-static const step_t ATTENTION[] = { { 2000, 100 }, { 0, 30 }, { 2600, 160 } };
+// YELLOW incident opened (buzzer_yellow): one short, soft whoop, the red
+// alert's shape in small: 2000 to 2800 Hz in 10 steps of 25 ms (250 ms), at
+// YELLOW_DUTY. Designed, not measured (no yellow alert sample found).
+static const step_t ATTENTION[] = {
+    { 2000, 25 }, { 2089, 25 }, { 2178, 25 }, { 2267, 25 }, { 2356, 25 },
+    { 2444, 25 }, { 2533, 25 }, { 2622, 25 }, { 2711, 25 }, { 2800, 25 },
+};
 
 #define STEPS(a) { a, sizeof(a) / sizeof(a[0]) }
 typedef struct { const step_t *s; uint8_t n; } steps_t;
@@ -236,13 +236,11 @@ static void siren_play(void)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_klax_duty = KLAX_DUTY[alarm_level()];
     bool go = true;
-    for (int b = 0; b < KLAX_BURSTS && go; b++) {
-        for (int i = 0; i < KLAX_NOTES && go; i++)
-            go = klax_hold(i & 1 ? KLAX_HI_HZ : KLAX_LO_HZ, KLAX_NOTE_MS);
-        for (int i = 0; i < KLAX_RISE_STEPS && go; i++)
-            go = klax_hold(KLAX_RISE_LO_HZ + i * (KLAX_RISE_HI_HZ - KLAX_RISE_LO_HZ) / (KLAX_RISE_STEPS - 1),
-                           KLAX_RISE_STEP_MS);
-        if (go && b + 1 < KLAX_BURSTS) go = klax_hold(0, KLAX_GAP_MS);
+    for (int w = 0; w < KLAX_WHOOPS && go; w++) {
+        for (int i = 0; i < KLAX_SWEEP_STEPS && go; i++)
+            go = klax_hold(KLAX_SWEEP_LO_HZ + i * (KLAX_SWEEP_HI_HZ - KLAX_SWEEP_LO_HZ) / (KLAX_SWEEP_STEPS - 1),
+                           KLAX_STEP_MS);
+        if (go && w + 1 < KLAX_WHOOPS) go = klax_hold(0, KLAX_GAP_MS);
     }
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);

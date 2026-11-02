@@ -10,7 +10,7 @@ extern "C" {
  * Passive buzzer on BOARD_BUZZER, driven with an LEDC tone.
  *
  * buzzer_alarm(), buzzer_remind() and buzzer_test() only queue a request and
- * return at once: the red alert klaxon (about 3.3 s) plays on the buzzer's own
+ * return at once: the red alert klaxon (about 4.2 s) plays on the buzzer's own
  * task, one request after another, so call them from any task. buzzer_stop()
  * ends the klaxon that is playing.
  * buzzer_boot(), buzzer_click(), buzzer_chirp() and buzzer_yellow() queue a
@@ -34,8 +34,8 @@ void buzzer_remind(void);
 // Incident acknowledged or cleared: cut the klaxon short.
 void buzzer_stop(void);
 
-// YELLOW incident opened (SEV2 events only): one soft two-note attention call
-// (about 290 ms), never the klaxon, if the alarm sound setting is on. No
+// YELLOW incident opened (SEV2 events only): one short soft whoop (250 ms),
+// never the klaxon, if the alarm sound setting is on. No
 // reminders. Queued to the buzzer task; skipped if there is no buzzer task or
 // the boot tune or the klaxon is playing.
 void buzzer_yellow(void);
