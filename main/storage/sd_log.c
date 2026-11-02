@@ -10,6 +10,7 @@
 #include "ignore.h"
 #include "http_engine.h"
 #include "tripwire.h"
+#include "trap_listen.h"
 #include "describe.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -85,7 +86,7 @@ static bool               s_stats_dirty;
 
 #define STATS_PATH     SD_MOUNT_POINT "/stats.bin"
 #define STATS_MAGIC    0x53535354u      // "TSSS"
-#define STATS_VERSION  2              // 2: by_type[STATS_TYPE_SLOTS], was [8]
+#define STATS_VERSION  3              // 3: cred[] keeps types, ports and last_ts; 2: by_type[STATS_TYPE_SLOTS], was [8]
 
 static const char *TYPE_NAME[] = {
     "RTSP", "HTTP", "Telnet", "SSH", "FTP", "ARP spoof", "WiFi deauth", "Shell",
@@ -94,7 +95,15 @@ static const char *TYPE_NAME[] = {
 _Static_assert(sizeof(TYPE_NAME) / sizeof(TYPE_NAME[0]) == ATTACK_TYPE_COUNT, "TYPE_NAME: one per attack_type_t");
 _Static_assert(ATTACK_TYPE_COUNT <= STATS_TYPE_SLOTS, "stats.bin by_type[] too small: bump STATS_VERSION");
 
-// stats.bin version 1: the same fields with by_type[8]. Read once and migrated.
+// stats.bin versions 1 and 2 kept a credential as the pair and its count.
+typedef struct {
+    char     user[32];
+    char     pass[32];
+    uint32_t count;
+} stat_cred_v2_t;
+_Static_assert(sizeof(stat_cred_v2_t) == 68, "stats.bin v1/v2 credential layout");
+
+// stats.bin version 1: by_type[8]. Read once and migrated.
 typedef struct {
     uint32_t magic, version;
     uint32_t total;
@@ -104,9 +113,24 @@ typedef struct {
     uint32_t hour_count[24];
     uint32_t day_key[STATS_DAYS];
     uint32_t day_count[STATS_DAYS];
-    stat_src_t  src[STATS_SRC_MAX];
-    stat_cred_t cred[STATS_CRED_MAX];
+    stat_src_t     src[STATS_SRC_MAX];
+    stat_cred_v2_t cred[STATS_CRED_MAX];
 } sd_stats_v1_t;
+
+// stats.bin version 2: by_type[STATS_TYPE_SLOTS], credentials as in v1.
+typedef struct {
+    uint32_t magic, version;
+    uint32_t total;
+    uint32_t by_type[STATS_TYPE_SLOTS];
+    uint32_t first_ts, last_ts;
+    uint32_t hour_key[24];
+    uint32_t hour_count[24];
+    uint32_t day_key[STATS_DAYS];
+    uint32_t day_count[STATS_DAYS];
+    stat_src_t     src[STATS_SRC_MAX];
+    stat_cred_v2_t cred[STATS_CRED_MAX];
+} sd_stats_v2_t;
+_Static_assert(ATTACK_FTP < STATS_CRED_TYPES && ATTACK_RTSP == 0, "stat_cred_t.port[]: one per credential trap type");
 
 // ── Listeners (other tasks: copy and queue only) ──────────────────────────────
 
@@ -341,9 +365,51 @@ static void stats_add_source(const attack_log_t *e, uint32_t ts)
     memcpy(slot->mac, e->src_mac, sizeof(slot->mac));
 }
 
-static void stats_add_cred(const attack_log_t *e)
+// The port a credential event came in on. The HTTP engine's payload starts
+// "<label> on <port>:", a Telnet or SSH login on the alternate port ends
+// "(port N)"; anything else, or a number that is not one of that trap's ports
+// (an attacker's password could end in "(port 9)"), is the trap's main port.
+static uint16_t cred_port(const attack_log_t *e)
 {
-    if (e->type > ATTACK_FTP || (!e->username[0] && !e->password[0])) return;
+    const char *p = e->payload;
+    size_t n = strnlen(p, sizeof(e->payload));
+    unsigned v = 0;
+    switch (e->type) {
+    case ATTACK_HTTP:
+        if (http_engine_category_key(p)) {
+            const char *on = memchr(p, ' ', n);
+            while (on && (size_t)(on - p) + 4 <= n && strncmp(on, " on ", 4) != 0)
+                on = memchr(on + 1, ' ', n - (size_t)(on + 1 - p));
+            if (on && (size_t)(on - p) + 4 < n) {
+                const char *d = on + 4, *end = p + n;
+                int digits = 0;
+                while (d < end && *d >= '0' && *d <= '9' && digits < 5) { v = v * 10 + (unsigned)(*d - '0'); d++; digits++; }
+                if (digits && d < end && *d == ':' && v > 0 && v <= 65535) return (uint16_t)v;
+            }
+        }
+        return HTTP_PORT;
+    case ATTACK_TELNET:
+    case ATTACK_SSH: {
+        unsigned alt = e->type == ATTACK_TELNET ? TELNET_ALT_PORT : SSH_ALT_PORT;
+        const char *tail = n >= 8 ? p + n - 1 : NULL;          // the ')'
+        if (tail && *tail == ')') {
+            const char *d = tail;
+            int digits = 0;
+            unsigned mul = 1;
+            while (d > p && d[-1] >= '0' && d[-1] <= '9' && digits < 5) { d--; v += (unsigned)(*d - '0') * mul; mul *= 10; digits++; }
+            if (digits && d - p >= 6 && strncmp(d - 6, "(port ", 6) == 0 && alt && v == alt) return (uint16_t)v;
+        }
+        return e->type == ATTACK_TELNET ? TELNET_PORT : SSH_PORT;
+    }
+    case ATTACK_RTSP: return RTSP_PORT;
+    case ATTACK_FTP:  return FTP_PORT;
+    default:          return 0;
+    }
+}
+
+static void stats_add_cred(const attack_log_t *e, uint32_t ts)
+{
+    if ((unsigned)e->type > ATTACK_FTP || (!e->username[0] && !e->password[0])) return;
     stat_cred_t *slot = NULL, *min = &s_stats->cred[0];
     for (int i = 0; i < STATS_CRED_MAX; i++) {
         stat_cred_t *c = &s_stats->cred[i];
@@ -360,6 +426,9 @@ static void stats_add_cred(const attack_log_t *e)
         slot = min;
     }
     slot->count++;
+    if (clock_valid(ts)) slot->last_ts = ts;
+    slot->types |= (uint8_t)(1u << e->type);
+    slot->port[e->type] = cred_port(e);
 }
 
 static void stats_add(const attack_log_t *e, uint32_t ts)
@@ -386,7 +455,7 @@ static void stats_add(const attack_log_t *e, uint32_t ts)
         s_stats->day_count[slot]++;
     }
     stats_add_source(e, ts);
-    stats_add_cred(e);
+    stats_add_cred(e, ts);
     s_stats_dirty = true;
     xSemaphoreGive(s_mutex);
 }
@@ -403,25 +472,51 @@ static void stats_load(void)
     if (tmp && fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == STATS_MAGIC && fseek(f, 0, SEEK_SET) == 0) {
         if (hdr[1] == STATS_VERSION) {
             ok = fread(tmp, sizeof(*tmp), 1, f) == 1;
-        } else if (hdr[1] == 1) {           // older firmware: by_type[8], migrate
-            sd_stats_v1_t *v1 = heap_caps_malloc(sizeof(*v1), MALLOC_CAP_SPIRAM);
-            if (v1 && fread(v1, sizeof(*v1), 1, f) == 1) {
+        } else if (hdr[1] == 1 || hdr[1] == 2) {    // older firmware: migrate
+            // v1 is v2 with by_type[8]: read either into v2's layout.
+            sd_stats_v2_t *v2 = heap_caps_calloc(1, sizeof(*v2), MALLOC_CAP_SPIRAM);
+            bool rd = false;
+            if (v2 && hdr[1] == 2) {
+                rd = fread(v2, sizeof(*v2), 1, f) == 1;
+            } else if (v2) {
+                sd_stats_v1_t *v1 = heap_caps_malloc(sizeof(*v1), MALLOC_CAP_SPIRAM);
+                if (v1 && fread(v1, sizeof(*v1), 1, f) == 1) {
+                    v2->total    = v1->total;
+                    memcpy(v2->by_type, v1->by_type, sizeof(v1->by_type));
+                    v2->first_ts = v1->first_ts;
+                    v2->last_ts  = v1->last_ts;
+                    memcpy(v2->hour_key, v1->hour_key, sizeof(v2->hour_key));
+                    memcpy(v2->hour_count, v1->hour_count, sizeof(v2->hour_count));
+                    memcpy(v2->day_key, v1->day_key, sizeof(v2->day_key));
+                    memcpy(v2->day_count, v1->day_count, sizeof(v2->day_count));
+                    memcpy(v2->src, v1->src, sizeof(v2->src));
+                    memcpy(v2->cred, v1->cred, sizeof(v2->cred));
+                    rd = true;
+                }
+                heap_caps_free(v1);
+            }
+            if (rd) {
                 tmp->magic    = STATS_MAGIC;
                 tmp->version  = STATS_VERSION;
-                tmp->total    = v1->total;
-                memcpy(tmp->by_type, v1->by_type, sizeof(v1->by_type));
-                tmp->first_ts = v1->first_ts;
-                tmp->last_ts  = v1->last_ts;
-                memcpy(tmp->hour_key, v1->hour_key, sizeof(tmp->hour_key));
-                memcpy(tmp->hour_count, v1->hour_count, sizeof(tmp->hour_count));
-                memcpy(tmp->day_key, v1->day_key, sizeof(tmp->day_key));
-                memcpy(tmp->day_count, v1->day_count, sizeof(tmp->day_count));
-                memcpy(tmp->src, v1->src, sizeof(tmp->src));
-                memcpy(tmp->cred, v1->cred, sizeof(tmp->cred));
+                tmp->total    = v2->total;
+                memcpy(tmp->by_type, v2->by_type, sizeof(tmp->by_type));
+                tmp->first_ts = v2->first_ts;
+                tmp->last_ts  = v2->last_ts;
+                memcpy(tmp->hour_key, v2->hour_key, sizeof(tmp->hour_key));
+                memcpy(tmp->hour_count, v2->hour_count, sizeof(tmp->hour_count));
+                memcpy(tmp->day_key, v2->day_key, sizeof(tmp->day_key));
+                memcpy(tmp->day_count, v2->day_count, sizeof(tmp->day_count));
+                memcpy(tmp->src, v2->src, sizeof(tmp->src));
+                // The pair and its count; which trap, ports and time were not kept.
+                for (int i = 0; i < STATS_CRED_MAX; i++) {
+                    memcpy(tmp->cred[i].user, v2->cred[i].user, sizeof(tmp->cred[i].user));
+                    memcpy(tmp->cred[i].pass, v2->cred[i].pass, sizeof(tmp->cred[i].pass));
+                    tmp->cred[i].count = v2->cred[i].count;
+                }
                 ok = true;
-                ESP_LOGI(TAG, "Summary metrics: stats.bin v1 migrated to v%d", STATS_VERSION);
+                ESP_LOGI(TAG, "Summary metrics: stats.bin v%lu migrated to v%d", (unsigned long)hdr[1], STATS_VERSION);
             }
-            heap_caps_free(v1);
+            heap_caps_free(v2);
         }
     }
     if (ok) {
@@ -429,6 +524,7 @@ static void stats_load(void)
         for (int i = 0; i < STATS_CRED_MAX; i++) {
             tmp->cred[i].user[sizeof(tmp->cred[i].user) - 1] = '\0';
             tmp->cred[i].pass[sizeof(tmp->cred[i].pass) - 1] = '\0';
+            tmp->cred[i].types &= (1u << STATS_CRED_TYPES) - 1;    // nor the bits
         }
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         // Events counted before the card mounted are added on top.

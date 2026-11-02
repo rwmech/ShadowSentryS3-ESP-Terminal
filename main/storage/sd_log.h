@@ -87,10 +87,19 @@ typedef struct {
     uint32_t first_ts, last_ts;
 } stat_src_t;
 
+// The traps that take credentials: attack_type_t 0..4 (RTSP, HTTP, Telnet,
+// SSH, FTP). stats.bin v3 keeps, per pair, which of them saw it and the last
+// port each one saw it on.
+#define STATS_CRED_TYPES 5
+
 typedef struct {
     char     user[32];
     char     pass[32];
     uint32_t count;
+    uint32_t last_ts;                       // v3: newest try, 0 unknown (migrated)
+    uint8_t  types;                         // v3: bit per attack_type_t 0..4
+    uint8_t  _pad;
+    uint16_t port[STATS_CRED_TYPES];        // v3: last port per type, 0 none
 } stat_cred_t;
 
 typedef struct {
@@ -103,7 +112,7 @@ typedef struct {
     uint32_t day_key[STATS_DAYS];   // local YYYYMMDD
     uint32_t day_count[STATS_DAYS];
     stat_src_t  src[STATS_SRC_MAX];
-    stat_cred_t cred[STATS_CRED_MAX];
+    stat_cred_t cred[STATS_CRED_MAX];   // v1 and v2: without types, ports and last_ts
 } sd_stats_t;
 
 // Consistent snapshot of the metrics.

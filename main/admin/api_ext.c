@@ -857,7 +857,26 @@ static void get_summary(int sock)
         jb_str(&j, c->user, sizeof(c->user));
         JB_LIT(&j, ",\"pass\":");
         jb_str(&j, c->pass, sizeof(c->pass));
-        jb_printf(&j, ",\"count\":%lu}", (unsigned long)c->count);
+        jb_printf(&j, ",\"count\":%lu", (unsigned long)c->count);
+        // Where it was tried, named as what each trap pretends to be (stats.bin
+        // v3; empty for pairs migrated from v1 or v2), and the newest try.
+        if (c->last_ts) jb_printf(&j, ",\"last\":%lu", (unsigned long)c->last_ts);
+        JB_LIT(&j, ",\"where\":[");
+        bool w1 = true;
+        for (int t = 0; t < STATS_CRED_TYPES; t++) {
+            if (!(c->types & (1u << t))) continue;
+            static const char *const WHERE[STATS_CRED_TYPES] = {
+                "Camera stream RTSP", "Hikvision login", "Telnet", "SSH", "FTP",
+            };
+            char lbl[48];
+            unsigned port = c->port[t];
+            if (!port) snprintf(lbl, sizeof(lbl), "%s", WHERE[t]);
+            else if (t == ATTACK_HTTP) snprintf(lbl, sizeof(lbl), "%s (port %u)", WHERE[t], port);
+            else snprintf(lbl, sizeof(lbl), "%s (%u)", WHERE[t], port);
+            jb_printf(&j, "%s{\"type\":%d,\"port\":%u,\"label\":\"%s\"}", w1 ? "" : ",", t, port, lbl);  // our text
+            w1 = false;
+        }
+        JB_LIT(&j, "]}");
     }
     JB_LIT(&j, "],");
 

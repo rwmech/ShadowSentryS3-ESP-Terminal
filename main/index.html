@@ -796,8 +796,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
   <div class="grid2">
     <div class="table-card"><div class="table-hdr"><div class="card-title">Top sources</div></div>
       <div class="tbl-wrap"><table><thead><tr><th>Source IP</th><th>Vendor (MAC)</th><th>Events</th><th>Last seen</th><th>Last type</th></tr></thead><tbody id="top-src"></tbody></table></div></div>
-    <div class="table-card"><div class="table-hdr"><div class="card-title">Top credentials</div></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Username</th><th>Password</th><th>Tries</th></tr></thead><tbody id="top-cred"></tbody></table></div></div>
+    <div class="table-card"><div class="table-hdr"><div class="card-title">Login attempts on the traps</div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Username</th><th>Password</th><th>Tries</th><th>Where</th><th>Last</th></tr></thead><tbody id="top-cred"></tbody></table></div></div>
   </div>
   <div class="table-card">
     <div class="table-hdr" style="flex-wrap:wrap;gap:10px">
@@ -1805,9 +1805,22 @@ function renderSummary(d){
     ip.title='Filter the log by this IP';ip.onclick=()=>{$('lg-q').value=String(s.ip);renderDay();$('lg-q').scrollIntoView({block:'center'});};
     tr.append(ip,mac,td(s.count),td(fmt(s.last_ts),'td-ts'),td(TNAME[s.last_type]||'?'));return tr;}));
   const tc=$('top-cred');
-  if(!(d.top_creds||[]).length)emptyRow(tc,3,'No credentials yet');
-  else tc.replaceChildren(...d.top_creds.map(c=>{const tr=el('tr');tr.append(td(c.user===''?'(empty)':c.user,'td-cred'),td(c.pass===''?'(empty)':c.pass,'td-cred'),td(c.count));return tr;}));
+  // A row opens the log below in all-days mode: the traps that saw the pair
+  // (every login trap when the board does not know), matched by user name.
+  if(!(d.top_creds||[]).length)emptyRow(tc,5,'No login attempts yet');
+  else tc.replaceChildren(...d.top_creds.map(c=>{
+    const tr=el('tr','go'),u=S(c.user),wh=(Array.isArray(c.where)?c.where:[]).filter(w=>w&&typeof w==='object'&&Number.isInteger(w.type)&&w.type>=0&&w.type<CRED_T.length);
+    const wc=td('','where');
+    if(wh.length)wh.forEach(w=>wc.append(el('div','',S(w.label)||TNAME[w.type])));
+    else wc.append(el('span','muted','not recorded (older firmware)'));
+    tr.append(td(u===''?'(empty)':u,'td-cred'),td(S(c.pass)===''?'(empty)':S(c.pass),'td-cred'),td(c.count),wc,td(+c.last?fmt(+c.last):'-','td-ts nw'));
+    const types=wh.length?[...new Set(wh.map(w=>w.type))]:CRED_T,names=types.map(t=>TNAME[t]).join(', ');
+    goRow(tr,'Every login as this user name on '+names+', all days, newest first',
+      ()=>openTypeLog(types,u,'User: '+(u===''?'(empty)':u)+' on '+names+', all days'));
+    return tr;}));
 }
+// The traps that take user names and passwords (attack_type_t 0..4).
+const CRED_T=[0,1,2,3,4];
 
 // ── Log files ──
 let _days=[],_lines=[],_tail=262144,_loaded=null;
