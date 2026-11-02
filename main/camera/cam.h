@@ -25,7 +25,7 @@ extern "C" {
 // Light the face for a panel photo (config.h.example). Defaults for a
 // config.h written before these options.
 #ifndef CAM_FLASH_ENABLE
-#define CAM_FLASH_ENABLE      1
+#define CAM_FLASH_ENABLE      0
 #endif
 #ifndef CAM_FLASH_SETTLE_MS
 #define CAM_FLASH_SETTLE_MS   500

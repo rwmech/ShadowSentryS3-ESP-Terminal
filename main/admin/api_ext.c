@@ -362,6 +362,7 @@ static void get_settings(int sock)
     jb_bool(&j, "alarm_sound", s.alarm_sound);              JB_LIT(&j, ",");
     jb_bool(&j, "boot_chirp", s.boot_chirp);                JB_LIT(&j, ",");
     jb_bool(&j, "touch_click", s.touch_click);              JB_LIT(&j, ",");
+    jb_bool(&j, "clock_24h", s.clock_24h);                  JB_LIT(&j, ",");
     jb_bool(&j, "admin_password_set", s.admin_password[0]); JB_LIT(&j, ",");
     jb_bool(&j, "wifi_password_set", s.wifi_password[0]);   JB_LIT(&j, ",");
     jb_bool(&j, "tg_token_set", secret_set(s.tg_token));    JB_LIT(&j, ",");
@@ -585,6 +586,7 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "alarm_sound", &s.alarm_sound);
     if (!err) err = take_bool(root, "boot_chirp", &s.boot_chirp);
     if (!err) err = take_bool(root, "touch_click", &s.touch_click);
+    if (!err) err = take_bool(root, "clock_24h", &s.clock_24h);
     if (!err) err = take_str(root, "discord_webhook", s.discord_webhook, sizeof(s.discord_webhook), true);
     bool dc_clear = false;      // blank means "unchanged", so clearing needs saying
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);

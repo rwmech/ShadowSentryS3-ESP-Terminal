@@ -10,6 +10,7 @@
 #include "describe.h"
 #include "discovery.h"
 #include "tripwire.h"           // with http_engine.h and trap_listen.h: the port config
+#include "settings.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -217,13 +218,21 @@ static void fmt_ip(uint32_t ip_net, char *buf, size_t len)
     ip4addr_ntoa_r(&a, buf, (int)len);
 }
 
-static void fmt_time(uint32_t ts, char *buf, size_t len)
+// Every time the panel shows, in the clock setting's format: 24-hour
+// "15:39:12", or 12-hour "3:39:12 PM" (no leading zero). secs false drops the
+// seconds in 12-hour form only: the status bar clock, where "10:44:44 AM"
+// (86 px at 14 px) would run into the network label. 12 bytes hold either.
+static void fmt_time(uint32_t ts, bool secs, char *buf, size_t len)
 {
     if (ts < 1600000000) { strlcpy(buf, "--:--:--", len); return; }   // pre-SNTP
     time_t t = (time_t)ts;
     struct tm tm;
     localtime_r(&t, &tm);
-    strftime(buf, len, "%H:%M:%S", &tm);
+    if (settings_get()->clock_24h) { strftime(buf, len, "%H:%M:%S", &tm); return; }
+    int h = tm.tm_hour % 12;
+    const char *ap = tm.tm_hour < 12 ? "AM" : "PM";
+    if (secs) snprintf(buf, len, "%d:%02d:%02d %s", h ? h : 12, tm.tm_min, tm.tm_sec, ap);
+    else      snprintf(buf, len, "%d:%02d %s", h ? h : 12, tm.tm_min, ap);
 }
 
 // How long the incident has been open, from its first event. Empty before SNTP.
@@ -405,8 +414,8 @@ static void ack_done(void)
 static void lit_snap(const char *action);
 
 // ACKNOWLEDGE press start. The photo is taken here, while the person is
-// still at the glass, under the face light; the hold that goes on under the
-// white layer decides whether the action fires.
+// still at the glass (under the face light if CAM_FLASH_ENABLE); the hold
+// decides whether the action fires.
 static void ack_press_start_cb(lv_event_t *ev)
 {
     hold_begin((hold_t *)lv_event_get_user_data(ev));
@@ -642,12 +651,14 @@ static void backlight_update(void)
     display_set_backlight_override(s_bl_red || s_bl_lit);
 }
 
+#if CAM_FLASH_ENABLE
 static void lit_done_cb(bool ok)            // camera task: queue only
 {
     (void)ok;
     umsg_t m = { .kind = UMSG_LIT_DONE };
     xQueueSend(s_q, &m, 0);                 // dropped: the timeout takes the white down
 }
+#endif
 
 static void lit_off(void)
 {
@@ -1091,8 +1102,8 @@ static void refresh_age(void)
     char age[24] = "";
     if (s_alarm.state != ALARM_IDLE) {
         char t0[12], t1[12], buf[96];
-        fmt_time(s_alarm.first_ts, t0, sizeof(t0));
-        fmt_time(s_alarm.last_ts, t1, sizeof(t1));
+        fmt_time(s_alarm.first_ts, true, t0, sizeof(t0));
+        fmt_time(s_alarm.last_ts, true, t1, sizeof(t1));
         fmt_age(s_alarm.first_ts, age, sizeof(age));
         snprintf(buf, sizeof(buf), "%lu event%s,  first %s,  last %s%s%s",
                  (unsigned long)s_alarm.count, s_alarm.count == 1 ? "" : "s", t0, t1,
@@ -1291,8 +1302,8 @@ static void clock_cb(lv_timer_t *t)
 {
     (void)t;
     char buf[12];
-    fmt_time((uint32_t)time(NULL), buf, sizeof(buf));
-    lv_label_set_text(s_clock, buf);
+    fmt_time((uint32_t)time(NULL), false, buf, sizeof(buf));
+    set_text(s_clock, buf);
     alarm_info_t a;
     alarm_get(&a);
     if (a.state != s_alarm.state || a.id != s_alarm.id) {

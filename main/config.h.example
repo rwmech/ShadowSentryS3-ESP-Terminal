@@ -385,12 +385,13 @@
 // ── Panel camera (OV2640) ─────────────────────────────────────────────────────
 //
 // The panel photographs whoever presses ACKNOWLEDGE, or confirms IGNORE ERROR
-// or IGNORE DEVICE. With CAM_FLASH_ENABLE 1 the screen turns full white and
-// the backlight full on for under a second first, to light the face, and the
-// camera lets its exposure settle on that light for CAM_FLASH_SETTLE_MS
-// (200..1500) before it captures. 0: no flash, the photo is taken at once.
+// or IGNORE DEVICE. CAM_FLASH_ENABLE is 0 by default: no face light, the photo
+// is taken at once and the screen does not change. 1: the screen above the
+// button row turns white and the backlight full on for under a second first,
+// to light the face, and the camera lets its exposure settle on that light for
+// CAM_FLASH_SETTLE_MS (200..1500) before it captures.
 // main/camera/cam.h has the defaults for a config.h without these.
-#define CAM_FLASH_ENABLE            1
+#define CAM_FLASH_ENABLE            0
 #define CAM_FLASH_SETTLE_MS         500
 
 // ── Front panel and incident alarm (CrowPanel 3.5") ──────────────────────────
@@ -398,12 +399,17 @@
 // DISPLAY_TZ is a POSIX TZ string for the panel clock and event times, e.g.
 // "EST5EDT,M3.2.0,M11.1.0", "CET-1CEST,M3.5.0,M10.5.0/3", "UTC0".
 //
+// DISPLAY_CLOCK_24H sets the panel's time format: 0 (default) 12-hour with
+// AM/PM, the status bar clock "3:39 PM" and incident times "3:39:12 PM";
+// 1 24-hour, "15:39:12" everywhere. The Settings page can change it later.
+//
 // Any event opens an incident: a 3 s siren on the buzzer, then the siren
 // again every ALARM_REMIND_S (60..3600) until it is acknowledged on the panel
 // (hold the button) or the dashboard. An acknowledged incident closes after
 // ALARM_QUIET_S without events, or at once on Re-arm; a new source re-alarms
 // immediately.
 #define DISPLAY_TZ                  "UTC0"
+#define DISPLAY_CLOCK_24H           0
 #define ALARM_REMIND_S              60
 #define ALARM_QUIET_S               600
 
@@ -506,6 +512,9 @@ _Static_assert(WIFI_ROAM_RSSI_DBM >= -95 && WIFI_ROAM_RSSI_DBM <= -40, "WIFI_ROA
 _Static_assert(WIFI_ROAM_LOW_S >= 10 && WIFI_ROAM_LOW_S <= 3600, "WIFI_ROAM_LOW_S must be 10..3600");
 _Static_assert(WIFI_ROAM_GAIN_DB >= 3 && WIFI_ROAM_GAIN_DB <= 30, "WIFI_ROAM_GAIN_DB must be 3..30");
 _Static_assert(WIFI_ROAM_INTERVAL_S >= 60 && WIFI_ROAM_INTERVAL_S <= 86400, "WIFI_ROAM_INTERVAL_S must be 60..86400");
+
+// Panel clock format
+_Static_assert(DISPLAY_CLOCK_24H == 0 || DISPLAY_CLOCK_24H == 1, "DISPLAY_CLOCK_24H must be 0 or 1");
 
 // Panel camera flash
 _Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");
