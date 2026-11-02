@@ -405,8 +405,8 @@ static void ack_done(void)
 static void lit_snap(const char *action);
 
 // ACKNOWLEDGE press start. The photo is taken here, while the person is
-// still at the glass, under the face light; the hold that goes on under the
-// white layer decides whether the action fires.
+// still at the glass (under the face light if CAM_FLASH_ENABLE); the hold
+// decides whether the action fires.
 static void ack_press_start_cb(lv_event_t *ev)
 {
     hold_begin((hold_t *)lv_event_get_user_data(ev));
@@ -642,12 +642,14 @@ static void backlight_update(void)
     display_set_backlight_override(s_bl_red || s_bl_lit);
 }
 
+#if CAM_FLASH_ENABLE
 static void lit_done_cb(bool ok)            // camera task: queue only
 {
     (void)ok;
     umsg_t m = { .kind = UMSG_LIT_DONE };
     xQueueSend(s_q, &m, 0);                 // dropped: the timeout takes the white down
 }
+#endif
 
 static void lit_off(void)
 {
