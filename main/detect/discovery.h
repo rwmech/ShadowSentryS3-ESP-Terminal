@@ -172,6 +172,10 @@ typedef struct {
 } discovery_talker_t;
 int discovery_top_talkers(discovery_talker_t *out, int max);
 
+// The UDP ports the listeners bind (DHCP 67 only with DISCOVERY_DHCP; none
+// without DISCOVERY_ENABLE), in table order, into out. Returns how many.
+int discovery_ports(uint16_t *out, int max);
+
 // The best label of the device with this MAC (if not NULL and known) or IP,
 // into buf. False, and buf "", if there is none. Any task; takes the lock.
 bool discovery_label_for(uint32_t ip, const uint8_t mac[6], char *buf, size_t len);

@@ -364,6 +364,7 @@ static void get_settings(int sock)
     jb_bool(&j, "touch_click", s.touch_click);              JB_LIT(&j, ",");
     jb_printf(&j, "\"ui_volume\":%u,\"alarm_volume\":%u,", (unsigned)s.ui_volume, (unsigned)s.alarm_volume);
     jb_bool(&j, "clock_24h", s.clock_24h);                  JB_LIT(&j, ",");
+    jb_printf(&j, "\"panel_style\":%u,", (unsigned)s.panel_style);
     jb_bool(&j, "admin_password_set", s.admin_password[0]); JB_LIT(&j, ",");
     jb_bool(&j, "wifi_password_set", s.wifi_password[0]);   JB_LIT(&j, ",");
     jb_bool(&j, "tg_token_set", secret_set(s.tg_token));    JB_LIT(&j, ",");
@@ -574,6 +575,7 @@ static void post_settings(int sock, const char *req, int req_len)
     uint32_t bright = s.brightness;
     uint32_t dc_tier = s.discord_min_tier;
     uint32_t ui_vol = s.ui_volume, al_vol = s.alarm_volume;
+    uint32_t pstyle = s.panel_style;
     const char *err = NULL;
     if (!err) err = take_str(root, "admin_password", s.admin_password, sizeof(s.admin_password), true);
     if (!err) err = take_str(root, "wifi_ssid", s.wifi_ssid, sizeof(s.wifi_ssid), false);
@@ -593,6 +595,7 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_u32(root, "ui_volume", &ui_vol, 3);
     if (!err) err = take_u32(root, "alarm_volume", &al_vol, 3);
     if (!err) err = take_bool(root, "clock_24h", &s.clock_24h);
+    if (!err) err = take_u32(root, "panel_style", &pstyle, 1);
     if (!err) err = take_str(root, "discord_webhook", s.discord_webhook, sizeof(s.discord_webhook), true);
     bool dc_clear = false;      // blank means "unchanged", so clearing needs saying
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
@@ -645,6 +648,7 @@ static void post_settings(int sock, const char *req, int req_len)
     s.discord_min_tier = (uint8_t)dc_tier;
     s.ui_volume = (uint8_t)ui_vol;
     s.alarm_volume = (uint8_t)al_vol;
+    s.panel_style = (uint8_t)pstyle;
     bool pw_changed = false;
     {
         const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, "admin_password");

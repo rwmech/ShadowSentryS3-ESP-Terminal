@@ -68,6 +68,20 @@ static const lsn_t LSN[L_N] = {
     [L_DHCP]  = { 67,    { 0 },                  "DHCP" },
 };
 
+int discovery_ports(uint16_t *out, int max)
+{
+    int n = 0;
+#if DISCOVERY_ENABLE
+    for (int i = 0; i < L_N && n < max; i++) {
+        if (i == L_DHCP && !DISCOVERY_DHCP) continue;
+        out[n++] = LSN[i].port;
+    }
+#else
+    (void)out; (void)max;
+#endif
+    return n;
+}
+
 static inline bool disc_port(uint16_t p)
 {
     switch (p) {

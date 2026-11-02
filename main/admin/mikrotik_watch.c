@@ -703,6 +703,11 @@ void mikrotik_watch_load(void)
              s_armed ? "armed" : "not armed");
 }
 
+bool mikrotik_watch_armed(void)
+{
+    return s_armed;
+}
+
 bool mikrotik_watch_arm(void)
 {
     if (!W || !mikrotik_running()) return false;

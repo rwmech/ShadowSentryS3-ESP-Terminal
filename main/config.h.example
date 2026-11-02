@@ -414,6 +414,11 @@
 // AM/PM, the status bar clock "3:39 PM" and incident times "3:39:12 PM";
 // 1 24-hour, "15:39:12" everywhere. The Settings page can change it later.
 //
+// DISPLAY_PANEL_STYLE picks the front panel: 1 (default) LCARS, a frame with
+// a rail of pages (OPS, TRAPS, WIRES, NET, DEV) that rotate every 60 s;
+// 0 the dashboard (tiles, top offenders, LAN talkers). The Settings page can
+// change it later; the panel switches at once, no reboot.
+//
 // Any event opens an incident: a 3 s siren on the buzzer, then the siren
 // again every ALARM_REMIND_S (60..3600) until it is acknowledged on the panel
 // (hold the button) or the dashboard. An acknowledged incident closes after
@@ -421,6 +426,7 @@
 // immediately.
 #define DISPLAY_TZ                  "UTC0"
 #define DISPLAY_CLOCK_24H           0
+#define DISPLAY_PANEL_STYLE         1
 #define ALARM_REMIND_S              60
 #define ALARM_QUIET_S               600
 
@@ -537,6 +543,7 @@ _Static_assert(WIFI_ROAM_INTERVAL_S >= 60 && WIFI_ROAM_INTERVAL_S <= 86400, "WIF
 
 // Panel clock format
 _Static_assert(DISPLAY_CLOCK_24H == 0 || DISPLAY_CLOCK_24H == 1, "DISPLAY_CLOCK_24H must be 0 or 1");
+_Static_assert(DISPLAY_PANEL_STYLE == 0 || DISPLAY_PANEL_STYLE == 1, "DISPLAY_PANEL_STYLE must be 0 or 1");
 
 // Discord tiers
 _Static_assert(DISCORD_MIN_TIER >= 1 && DISCORD_MIN_TIER <= 3, "DISCORD_MIN_TIER must be 1, 2 or 3");

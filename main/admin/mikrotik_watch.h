@@ -72,6 +72,10 @@ void mikrotik_watch_tick(void);
 // one pass over the menus, about 30 s). False when MikroTik is not running.
 bool mikrotik_watch_arm(void);
 
+// True once a baseline is armed (the panel shows the router config tripwire
+// as off until then). Any task.
+bool mikrotik_watch_armed(void);
+
 // The status as JSON into buf (cap bytes): {"armed","armed_at","arming",
 // "last_check","checks":[{"key","title","code","state","records","armed_records",
 // "changes","last","note","findings"}]}. Every router string escaped.

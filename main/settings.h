@@ -42,6 +42,7 @@ typedef struct {
     uint8_t  ui_volume;             // chirps and boot beeps: 0 off, 1 low, 2 medium, 3 high
     uint8_t  alarm_volume;          // klaxon and yellow call: 1 low, 2 medium, 3 high (never off)
     bool     clock_24h;             // panel times: 24-hour "15:39:12", else 12-hour "3:39 PM"
+    uint8_t  panel_style;           // front panel: 0 dashboard, 1 LCARS (live, no reboot)
     char     discord_webhook[160];  // secret: "" = off, else https://discord.com/api/webhooks/...
     bool     discord_log_events;    // deduplicated event log to Discord (incidents post regardless)
     uint8_t  discord_min_tier;      // Discord posts SEV1..this: 1 SEV1, 2 SEV1 and SEV2, 3 every tier
