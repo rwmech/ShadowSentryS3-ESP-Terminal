@@ -167,17 +167,6 @@ static const char *TAG = "MAIN";
     }                                                                   \
 } while(0)
 
-// Boot sound (about 3.6 s, skipped if the boot sound setting is off): plays
-// once, then the task deletes itself, so app_main never waits for it.
-static void startup_melody_task(void *arg)
-{
-    (void)arg;
-    buzzer_boot();
-    ESP_LOGI(TAG, "Startup melody done, stack high-water %u B",
-             (unsigned)uxTaskGetStackHighWaterMark(NULL));
-    vTaskDelete(NULL);
-}
-
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 void app_main(void)
@@ -223,9 +212,7 @@ void app_main(void)
 
     // ── Incident alarm, microSD log, front panel (before Wi-Fi) ──────────────
     alarm_init();                   // also brings up the buzzer
-    if (xTaskCreate(startup_melody_task, "melody", 3072, NULL, 1, NULL) != pdPASS) {
-        ESP_LOGW(TAG, "No heap for the startup melody task, skipping it");
-    }
+    buzzer_boot();                  // boot beeps, queued to the buzzer task
     notify_init();                  // reset reason (the SD boot line uses it), incident listener
     sd_log_init();
     crash_init();                   // last run's crash record (RTC) to SPIFFS, then to the card
