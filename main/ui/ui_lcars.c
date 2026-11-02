@@ -10,6 +10,15 @@
 #include "router_trip.h"
 #include "pihole.h"
 #include "mikrotik.h"
+#include "mikrotik_watch.h"
+#include "mt_decoy.h"
+#include "correlate.h"
+#include "router_flow.h"
+#include "cam.h"
+#include "discord.h"
+#include "wifi_manager.h"
+#include "esp_wifi.h"
+#include "esp_timer.h"
 #include "lwip/ip4_addr.h"
 #include <string.h>
 #include <stdio.h>
@@ -362,6 +371,12 @@ static const char *const WIRE_CODE[LC_WIRES] = {
 };
 enum { WI_LAN0 = 0, WI_DECOY0 = 7, WI_ROUTER0 = 12, WI_NEWDEV = 16, WI_CONFIG = 17 };
 
+static const uint16_t WIRE_PORT[WI_ROUTER0] = {
+    TRIPWIRE_RDP_PORT, TRIPWIRE_VNC_PORT, TRIPWIRE_SMB_PORT, TRIPWIRE_REDIS_PORT,
+    TRIPWIRE_MYSQL_PORT, TRIPWIRE_MSSQL_PORT, TRIPWIRE_JETDIRECT_PORT, TRIPWIRE_WINBOX_PORT,
+    TRIPWIRE_ROSAPI_PORT, TRIPWIRE_BTEST_PORT, TRIPWIRE_MNDP_PORT, TRIPWIRE_MACTELNET_PORT,
+};
+
 static void names_init(void)
 {
     static const char *const NM[LC_WIRES] = {
@@ -369,13 +384,8 @@ static void names_init(void)
         "BTEST", "MNDP", "MAC-TELNET", "ROUTER LOGIN FAIL", "ROUTER MGMT PORT", "ROUTER PORT SCAN",
         "DNS BYPASS", "NEW DEVICE", "ROUTER CONFIG",
     };
-    static const uint16_t WP[WI_ROUTER0] = {
-        TRIPWIRE_RDP_PORT, TRIPWIRE_VNC_PORT, TRIPWIRE_SMB_PORT, TRIPWIRE_REDIS_PORT,
-        TRIPWIRE_MYSQL_PORT, TRIPWIRE_MSSQL_PORT, TRIPWIRE_JETDIRECT_PORT, TRIPWIRE_WINBOX_PORT,
-        TRIPWIRE_ROSAPI_PORT, TRIPWIRE_BTEST_PORT, TRIPWIRE_MNDP_PORT, TRIPWIRE_MACTELNET_PORT,
-    };
     for (int i = 0; i < LC_WIRES; i++) {
-        if (i < WI_ROUTER0) snprintf(s_t.wire[i].name, sizeof(s_t.wire[i].name), "%s %u", NM[i], (unsigned)WP[i]);
+        if (i < WI_ROUTER0) snprintf(s_t.wire[i].name, sizeof(s_t.wire[i].name), "%s %u", NM[i], (unsigned)WIRE_PORT[i]);
         else                strlcpy(s_t.wire[i].name, NM[i], sizeof(s_t.wire[i].name));
     }
     int alt = 0;
@@ -790,12 +800,342 @@ static void ops_refresh(bool force)
     if (force) focus_update();
 }
 
+
+// ── Shared: a detail box, Pi-hole shares ──────────────────────────────────────
+
+// The detail box under a list (y 228..281): an accent bar, a heading line in
+// accent and up to two lines under it.
+typedef struct { lv_obj_t *h, *v; } detail_t;
+
+static void detail_build(detail_t *d, lv_obj_t *pg, const char *hint)
+{
+    fill(pg, 0, 228, 4, 54, LCARS_COL(accent));
+    d->h = text(pg, F12, LCARS_COL(accent), 12, 230, 388, "");
+    d->v = text(pg, F12, LCARS_COL(txt), 12, 246, 0, hint);
+    lv_label_set_long_mode(d->v, LV_LABEL_LONG_WRAP);
+    lv_obj_set_size(d->v, 388, 32);
+}
+
+static void detail_set(detail_t *d, const lc_hit_t *h, const char *idle)
+{
+    char b[64], t[12];
+    if (h->ts) fmt_hm(h->ts, t, sizeof(t)); else strlcpy(t, "-", sizeof(t));
+    snprintf(b, sizeof(b), "%s | LAST HIT %s", h->name, h->n ? t : "-");
+    set_text(d->h, b);
+    set_text(d->v, h->n ? h->what : idle);
+}
+
+EXT_RAM_BSS_ATTR static correlate_dns_t s_dns;     // about 1.3 KB
+
+// Queries and blocked from Pi-hole's cache for one device; false if none.
+static bool pihole_share(uint32_t ip, const uint8_t *mac, uint32_t *tot, uint32_t *blk)
+{
+    if (!correlate_pihole_device(ip, mac, &s_dns) || !s_dns.total) return false;
+    *tot = s_dns.total;
+    *blk = s_dns.blocked;
+    return true;
+}
+
+#define LC_DEVS 6
+EXT_RAM_BSS_ATTR static discovery_talker_t s_talk[LC_DEVS];
+static int s_ntalk;
+
+// ── 02 TRAPS ──────────────────────────────────────────────────────────────────
+//
+//   y   0       header (12 px, c4)
+//   y  16 + i * 25, 8 rows of 22 px: tag x 0..131 (rounded left, dark text),
+//               bar x 138..301 (8 px on the track), hits x 308..337 (14 px),
+//               last x 344..399 (12 px, dim)
+//   y 228..281  the selected trap's last hit
+
+#define TR_TAG_W  132
+#define TR_BAR_X  138
+#define TR_BAR_W  164
+
+static lv_obj_t *s_tr_fill[LC_TRAPS], *s_tr_n[LC_TRAPS], *s_tr_w[LC_TRAPS], *s_tr_mark[LC_TRAPS];
+static detail_t  s_tr_det;
+static int       s_tr_sel = -1;
+
+static void traps_refresh(bool force)
+{
+    (void)force;
+    uint32_t max = 0;
+    for (int i = 0; i < LC_TRAPS; i++) if (s_t.trap[i].n > max) max = s_t.trap[i].n;
+    for (int i = 0; i < LC_TRAPS; i++) {
+        const lc_hit_t *h = &s_t.trap[i];
+        char b[12];
+        lv_coord_t w = max ? (lv_coord_t)((uint64_t)TR_BAR_W * h->n / max) : 0;
+        if (lv_obj_get_width(s_tr_fill[i]) != w) lv_obj_set_width(s_tr_fill[i], w);
+        snprintf(b, sizeof(b), "%lu", (unsigned long)h->n);
+        set_text(s_tr_n[i], b);
+        if (h->n && h->ts) fmt_hm(h->ts, b, sizeof(b)); else strlcpy(b, "-", sizeof(b));
+        set_text(s_tr_w[i], b);
+        show(s_tr_mark[i], i == s_tr_sel);
+    }
+    if (s_tr_sel >= 0) detail_set(&s_tr_det, &s_t.trap[s_tr_sel], "NO HITS TODAY");
+}
+
+static void trap_cb(lv_event_t *ev)
+{
+    s_tr_sel = (int)(uintptr_t)lv_event_get_user_data(ev);
+    s_page_at = lv_tick_get();                  // AUTO waits a full page after a touch
+    traps_refresh(true);
+}
+
+static void build_traps(lv_obj_t *pg)
+{
+    text(pg, F12, LCARS_COL(c4), 0, 0, 0, "TRAPS | HITS TODAY | LAST");
+    for (int i = 0; i < LC_TRAPS; i++) {
+        lv_obj_t *r = area(pg, 0, (lv_coord_t)(16 + i * 25), 400, 22);
+        lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(r, trap_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+        lv_obj_t *d = fill(r, 0, 0, 22, 22, LCARS_COL(c6));
+        lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+        lv_obj_t *tag = fill(r, 11, 0, TR_TAG_W - 11, 22, LCARS_COL(c6));
+        lv_obj_t *l = text(tag, F12, COL_BLACK, 0, 0, 0, s_t.trap[i].name);
+        lv_obj_align(l, LV_ALIGN_RIGHT_MID, -6, 0);
+        s_tr_mark[i] = mark(tag, TR_TAG_W - 11, 22);
+        lv_obj_t *tr = fill(r, TR_BAR_X, 7, TR_BAR_W, 8, LCARS_COL(track));
+        s_tr_fill[i] = fill(tr, 0, 0, 0, 8, LCARS_COL(c1));
+        s_tr_n[i] = text(r, F14, LCARS_COL(c2), 308, 2, 30, "0");
+        lv_obj_set_style_text_align(s_tr_n[i], LV_TEXT_ALIGN_RIGHT, 0);
+        s_tr_w[i] = text(r, F12, LCARS_COL(dim), 344, 4, 56, "-");
+        lv_obj_set_style_text_align(s_tr_w[i], LV_TEXT_ALIGN_RIGHT, 0);
+    }
+    detail_build(&s_tr_det, pg, "TAP A TRAP FOR ITS LAST HIT");
+}
+
+// ── 03 WIRES ──────────────────────────────────────────────────────────────────
+//
+//   y   0       header
+//   y  17 + row * 23, two columns x 0 and 204, cells 196 x 20: a 6 px state
+//               bar (hit accent, armed c4, off dark), name (12 px), hits or
+//               OFF (right, x 164..191)
+//   y 228..281  the selected cell's last hit, or why it is off
+
+enum { WS_ARMED, WS_HIT, WS_OFF };
+
+static lv_obj_t *s_wi_bar[LC_WIRES], *s_wi_nm[LC_WIRES], *s_wi_n[LC_WIRES], *s_wi_mark[LC_WIRES];
+static uint8_t   s_wi_st[LC_WIRES];
+static detail_t  s_wi_det;
+static int       s_wi_sel = -1;
+
+// Why a cell is off, or NULL when it is armed.
+static const char *wire_off(int i)
+{
+    if (i < WI_DECOY0)  return TRIPWIRE_ENABLE && WIRE_PORT[i] ? NULL : "NOT LISTENING (PORT OFF)";
+    if (i < WI_DECOY0 + MT_TCP_N) {
+        if (!TRIPWIRE_ENABLE || !WIRE_PORT[i]) return "NOT LISTENING (PORT OFF)";
+        return mikrotik_tcp_listening((mt_tcp_kind_t)(i - WI_DECOY0)) ? NULL : "NOT LISTENING";
+    }
+    if (i < WI_ROUTER0) return mikrotik_udp_on() && WIRE_PORT[i] ? NULL : "NOT LISTENING";
+    if (i < WI_NEWDEV)  return router_trip_syslog_live() ? NULL : "NEEDS THE ROUTER SYSLOG (TRIPWIRES.RSC)";
+    if (i == WI_NEWDEV) return mikrotik_running() ? NULL : "NEEDS THE ROUTER LOGIN (SETTINGS)";
+    return mikrotik_watch_armed() ? NULL : "NOT ARMED: ARM THE BASELINE IN SETTINGS";
+}
+
+static void wires_refresh(bool force)
+{
+    (void)force;
+    for (int i = 0; i < LC_WIRES; i++) {
+        const lc_hit_t *h = &s_t.wire[i];
+        const char *off = wire_off(i);
+        uint8_t st = h->n ? WS_HIT : off ? WS_OFF : WS_ARMED;
+        char b[12];
+        if (st != s_wi_st[i]) {
+            s_wi_st[i] = st;
+            lv_obj_set_style_bg_color(s_wi_bar[i], st == WS_HIT ? LCARS_COL(accent)
+                                      : st == WS_OFF ? lv_color_hex(0x3a2a1a) : LCARS_COL(c4), 0);
+            lv_obj_set_style_text_color(s_wi_nm[i], st == WS_OFF ? LCARS_COL(dim) : LCARS_COL(txt), 0);
+        }
+        if (st == WS_OFF) strlcpy(b, "OFF", sizeof(b));
+        else snprintf(b, sizeof(b), "%lu", (unsigned long)h->n);
+        set_text(s_wi_n[i], b);
+        show(s_wi_mark[i], i == s_wi_sel);
+    }
+    if (s_wi_sel >= 0) {
+        const char *off = wire_off(s_wi_sel);
+        detail_set(&s_wi_det, &s_t.wire[s_wi_sel], off ? off : "NOTHING YET TODAY");
+    }
+}
+
+static void wire_cb(lv_event_t *ev)
+{
+    s_wi_sel = (int)(uintptr_t)lv_event_get_user_data(ev);
+    s_page_at = lv_tick_get();
+    wires_refresh(true);
+}
+
+static void build_wires(lv_obj_t *pg)
+{
+    text(pg, F12, LCARS_COL(c4), 0, 0, 0, "TRIPWIRES | ANY TOUCH ALERTS");
+    for (int i = 0; i < LC_WIRES; i++) {
+        lv_obj_t *c = area(pg, (lv_coord_t)((i % 2) * 204), (lv_coord_t)(17 + (i / 2) * 23), 196, 20);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(c, wire_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+        s_wi_bar[i] = fill(c, 0, 0, 6, 20, LCARS_COL(c4));
+        s_wi_nm[i] = text(c, F12, LCARS_COL(txt), 12, 3, 150, s_t.wire[i].name);
+        s_wi_n[i] = text(c, F12, LCARS_COL(c2), 164, 3, 28, "0");
+        lv_obj_set_style_text_align(s_wi_n[i], LV_TEXT_ALIGN_RIGHT, 0);
+        s_wi_mark[i] = mark(c, 196, 20);
+        s_wi_st[i] = WS_ARMED;
+    }
+    detail_build(&s_wi_det, pg, "TAP A TRIPWIRE FOR ITS LAST HIT");
+}
+
+// ── 04 NET ────────────────────────────────────────────────────────────────────
+//
+//   y   0..91   five gauges, x i * 81, 76 wide: Wi-Fi RSSI, the UI loop (the
+//               slowest lv_timer_handler() in the last second; there is no
+//               pinger), free internal RAM, Pi-hole's blocked share over the
+//               busiest devices, sockets (no getter: "-"); ticks at 25, 50
+//               and 75 %; value (14 px) at y 94, name (12 px) at y 112
+//   y 150..245  3 x 3 link states, x col * 136, y 150 + row * 34
+
+#define G_N 5
+#define G_H 92
+
+static lv_obj_t *s_g_fill[G_N], *s_g_v[G_N];
+static lv_obj_t *s_nl_v[9];
+static uint32_t  s_ipfix_rec, s_ipfix_at, s_ipfix_rate;
+static bool      s_ipfix_have;
+
+static void gauge_set(int i, const char *v, int32_t pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    lv_coord_t h = (lv_coord_t)(G_H * pct / 100);
+    if (lv_obj_get_height(s_g_fill[i]) != h) {
+        lv_obj_set_height(s_g_fill[i], h);
+        lv_obj_set_y(s_g_fill[i], G_H - h);
+        lv_obj_set_style_bg_color(s_g_fill[i], pct >= 100 ? LCARS_COL(c1) : LCARS_COL(c4), 0);
+    }
+    set_text(s_g_v[i], v);
+}
+
+static void nl_set(int i, const char *v)
+{
+    char b[72];
+    strlcpy(b, v, sizeof(b));
+    lcars_upper(b);
+    fit(b, F12, 128);
+    set_text(s_nl_v[i], b);
+}
+
+static void talkers_load(void)
+{
+    s_ntalk = discovery_top_talkers(s_talk, LC_DEVS);
+}
+
+static void net_refresh(bool force)
+{
+    char b[72];
+    wifi_ap_record_t ap;
+    bool up = wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    if (up) { snprintf(b, sizeof(b), "%d DBM", (int)ap.rssi); gauge_set(0, b, (ap.rssi + 100) * 100 / 70); }
+    else    gauge_set(0, "-", 0);
+    uint32_t ms = (ui_loop_max_us() + 500) / 1000;
+    snprintf(b, sizeof(b), "%lu MS", (unsigned long)ms);
+    gauge_set(1, b, (int32_t)(ms * 2));                     // 50 ms full
+    uint32_t kb = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+    snprintf(b, sizeof(b), "%lu KB", (unsigned long)kb);
+    gauge_set(2, b, (int32_t)kb);                           // 100 KB full
+    if (force || !s_ntalk) talkers_load();
+    uint32_t tot = 0, blk = 0;
+    for (int i = 0; i < s_ntalk; i++) {
+        uint32_t t, k;
+        if (pihole_share(s_talk[i].ip, s_talk[i].mac, &t, &k)) { tot += t; blk += k; }
+    }
+    if (tot) { snprintf(b, sizeof(b), "%lu %%", (unsigned long)(blk * 100 / tot)); gauge_set(3, b, (int32_t)(blk * 100 / tot)); }
+    else     gauge_set(3, "-", 0);
+    gauge_set(4, "-", 0);
+
+    if (up) snprintf(b, sizeof(b), "%02X:%02X:%02X:%02X:%02X:%02X", ap.bssid[0], ap.bssid[1], ap.bssid[2],
+                     ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+    else    strlcpy(b, "NOT CONNECTED", sizeof(b));
+    nl_set(0, b);
+    if (time(NULL) >= 1600000000) snprintf(b, sizeof(b), "SET | %s", settings_get()->tz);
+    else                          strlcpy(b, "NOT SET (NO SNTP YET)", sizeof(b));
+    nl_set(1, b);
+    uint32_t s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    snprintf(b, sizeof(b), "%lu D %02lu H %02lu M", (unsigned long)(s / 86400), (unsigned long)(s % 86400 / 3600),
+             (unsigned long)(s % 3600 / 60));
+    nl_set(2, b);
+    pihole_status_t *p = heap_caps_malloc(sizeof(*p), MALLOC_CAP_SPIRAM);
+    if (p) {
+        pihole_get_status(p);
+        if (p->enabled) snprintf(b, sizeof(b), "%s | %lu DEVICES", p->state, (unsigned long)p->devices);
+        else            strlcpy(b, "OFF", sizeof(b));
+        nl_set(3, b);
+        heap_caps_free(p);
+    }
+    mikrotik_status_t *m = heap_caps_malloc(sizeof(*m), MALLOC_CAP_SPIRAM);
+    if (m) {
+        mikrotik_get_status(m);
+        const char *st = m->state < sizeof(MT_STATE) / sizeof(MT_STATE[0]) ? MT_STATE[m->state] : "?";
+        if (m->state == MIKROTIK_ST_OK) snprintf(b, sizeof(b), "%s | %u HOSTS", st, (unsigned)m->hosts);
+        else                            strlcpy(b, st, sizeof(b));
+        nl_set(4, b);
+        heap_caps_free(m);
+    }
+    uint32_t rec, drop;
+    router_flow_counters(&rec, &drop);
+    if (!s_ipfix_have) { s_ipfix_have = true; s_ipfix_rec = rec; s_ipfix_at = lv_tick_get(); }
+    else if (lv_tick_elaps(s_ipfix_at) >= 60000) {
+        s_ipfix_rate = (rec - s_ipfix_rec) * 60000u / lv_tick_elaps(s_ipfix_at);
+        s_ipfix_rec = rec;
+        s_ipfix_at = lv_tick_get();
+    }
+    if (!rec) strlcpy(b, "NO RECORDS YET", sizeof(b));
+    else      snprintf(b, sizeof(b), "%lu FLOWS / MIN", (unsigned long)s_ipfix_rate);
+    nl_set(5, b);
+    sd_status_t sd;
+    sd_log_status(&sd);
+    if (sd.mounted) {
+        unsigned long tenths = (unsigned long)(sd.free_bytes / 100000000ULL);
+        snprintf(b, sizeof(b), "%lu.%lu GB FREE", tenths / 10, tenths % 10);
+    } else strlcpy(b, "NO CARD", sizeof(b));
+    nl_set(6, b);
+    nl_set(7, cam_ready() ? "READY" : "NOT FOUND");
+    if (settings_get()->discord_webhook[0]) {
+        discord_status_t d;
+        discord_get_status(&d);
+        snprintf(b, sizeof(b), "%lu POSTED | LAST %d", (unsigned long)d.posted, d.last_status);
+    } else strlcpy(b, "OFF", sizeof(b));
+    nl_set(8, b);
+}
+
+static void build_net(lv_obj_t *pg)
+{
+    static const char *const GK[G_N] = { "WI-FI", "UI LOOP", "FREE RAM", "BLOCKED", "SOCKETS" };
+    for (int i = 0; i < G_N; i++) {
+        lv_coord_t x = (lv_coord_t)(i * 81);
+        lv_obj_t *col = fill(pg, x, 0, 76, G_H, LCARS_COL(track));
+        s_g_fill[i] = fill(col, 0, G_H, 76, 0, LCARS_COL(c4));
+        for (int k = 1; k <= 3; k++) fill(col, 0, (lv_coord_t)(G_H - G_H * k / 4), 76, 1, COL_BLACK);
+        s_g_v[i] = text(pg, F14, LCARS_COL(c2), x, 94, 76, "-");
+        lv_obj_set_style_text_align(s_g_v[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_t *k = text(pg, F12, LCARS_COL(c4), x, 112, 76, GK[i]);
+        lv_obj_set_style_text_align(k, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    static const char *const NK[9] = { "ACCESS POINT", "CLOCK", "UPTIME", "PI-HOLE", "ROUTER", "IPFIX",
+                                       "MICROSD", "CAMERA", "DISCORD" };
+    for (int i = 0; i < 9; i++) {
+        lv_coord_t x = (lv_coord_t)((i % 3) * 136), y = (lv_coord_t)(150 + (i / 3) * 34);
+        text(pg, F12, LCARS_COL(c4), x, y, 128, NK[i]);
+        s_nl_v[i] = text(pg, F12, LCARS_COL(c2), x, y + 14, 128, "-");
+    }
+}
+
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
 static void page_refresh(bool force)
 {
     switch (s_cur) {
-    case PG_OPS: ops_refresh(force); break;
+    case PG_OPS:   ops_refresh(force);   break;
+    case PG_TRAPS: traps_refresh(force); break;
+    case PG_WIRES: wires_refresh(force); break;
+    case PG_NET:   net_refresh(force);   break;
     default: break;
     }
 }
@@ -871,8 +1211,10 @@ void lcars_build(lv_obj_t *scr)
         show(s_page[i], false);
     }
     build_ops(s_page[PG_OPS]);
-    for (int i = PG_TRAPS; i < PAGES; i++)
-        text(s_page[i], F14, LCARS_COL(c4), 0, 0, 0, PAGE_TITLE[i]);
+    build_traps(s_page[PG_TRAPS]);
+    build_wires(s_page[PG_WIRES]);
+    build_net(s_page[PG_NET]);
+    text(s_page[PG_DEV], F14, LCARS_COL(c4), 0, 0, 0, PAGE_TITLE[PG_DEV]);
     s_alert = fill(s_content, 0, 0, LCARS_CONTENT_W, LCARS_CONTENT_H, COL_BLACK);
     show(s_alert, false);
     show(s_root, false);
