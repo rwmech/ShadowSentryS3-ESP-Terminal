@@ -35,7 +35,23 @@ static const char *TAG = "PIHOLE";
 
 // ── Cache (PSRAM) ─────────────────────────────────────────────────────────────
 
-typedef struct { char d[PIHOLE_DOMAIN_LEN]; uint32_t n; } ph_top_t;
+// How Pi-hole blocked a name, a bit each (ph_top_t.how), from the query status.
+#define PH_BLK_GRAVITY   0x01           // GRAVITY, GRAVITY_CNAME: a block list
+#define PH_BLK_REGEX     0x02           // REGEX, REGEX_CNAME
+#define PH_BLK_DENYLIST  0x04           // DENYLIST, DENYLIST_CNAME: the user's own
+#define PH_BLK_UPSTREAM  0x08           // EXTERNAL_BLOCKED_*: the upstream server
+#define PH_BLK_OTHER     0x10           // SPECIAL_DOMAIN, DBBUSY
+static const char *const BLK_KEY[] = { "gravity", "regex", "denylist", "upstream", "other" };   // by bit, for the JSON
+_Static_assert(PIHOLE_TOP_SAMPLE <= UINT16_MAX, "ph_top_t counts are 16 bit");
+
+// n queries of the sample; allowed + blocked <= n (UNKNOWN, IN_PROGRESS and
+// statuses this firmware does not know count in neither).
+typedef struct {
+    char     d[PIHOLE_DOMAIN_LEN];
+    uint32_t n;
+    uint16_t allowed, blocked;
+    uint8_t  how;                       // PH_BLK_* bits
+} ph_top_t;
 
 typedef struct {
     bool     used, mac_known;
@@ -82,7 +98,7 @@ typedef struct {
     discovery_talker_t talk[DISCOVERY_DEV_MAX];
     attack_log_t       recent[PIHOLE_RECENT];
     known_t            known[PIHOLE_KNOWN_MAX];
-    struct { const char *d; uint32_t n; } cnt[PIHOLE_TOP_SAMPLE];
+    struct { const char *d; uint32_t n; uint16_t allowed, blocked; uint8_t how; } cnt[PIHOLE_TOP_SAMPLE];
     ph_table_t         tab[2];
 } work_t;
 
@@ -593,8 +609,30 @@ static bool sync_clients(const conn_t *c, ph_table_t *t, bool blocked, bool *com
     return true;
 }
 
+// A query's status string (FTL's get_query_status_str()): 1 allowed, 2
+// blocked with *how set, 0 neither (UNKNOWN, IN_PROGRESS, absent, or a status
+// this firmware does not know). Blocked is FTL's is_blocked() list.
+static int query_verdict(const char *st, uint8_t *how)
+{
+    static const struct { const char *s; uint8_t how; } BLK[] = {
+        { "GRAVITY", PH_BLK_GRAVITY },        { "GRAVITY_CNAME", PH_BLK_GRAVITY },
+        { "REGEX", PH_BLK_REGEX },            { "REGEX_CNAME", PH_BLK_REGEX },
+        { "DENYLIST", PH_BLK_DENYLIST },      { "DENYLIST_CNAME", PH_BLK_DENYLIST },
+        { "EXTERNAL_BLOCKED_IP", PH_BLK_UPSTREAM },   { "EXTERNAL_BLOCKED_NULL", PH_BLK_UPSTREAM },
+        { "EXTERNAL_BLOCKED_NXRA", PH_BLK_UPSTREAM }, { "EXTERNAL_BLOCKED_EDE15", PH_BLK_UPSTREAM },
+        { "SPECIAL_DOMAIN", PH_BLK_OTHER },   { "DBBUSY", PH_BLK_OTHER },
+    };
+    static const char *const OK[] = { "FORWARDED", "CACHE", "CACHE_STALE", "RETRIED", "RETRIED_DNSSEC" };
+    if (!st) return 0;
+    for (size_t i = 0; i < sizeof(OK) / sizeof(OK[0]); i++) if (!strcmp(st, OK[i])) return 1;
+    for (size_t i = 0; i < sizeof(BLK) / sizeof(BLK[0]); i++)
+        if (!strcmp(st, BLK[i].s)) { *how |= BLK[i].how; return 2; }
+    return 0;
+}
+
 // GET /api/queries?client_ip=&length=: the client's newest queries; the top
-// PIHOLE_TOP_N domains among them, by count (ties: the most recent first).
+// PIHOLE_TOP_N domains among them, by count (ties: the most recent first),
+// each with its allowed and blocked counts from the queries' status.
 static bool sync_top(const conn_t *c, ph_dev_t *d, uint32_t ip)
 {
     char ips[16], path[96];
@@ -614,8 +652,17 @@ static bool sync_top(const conn_t *c, ph_dev_t *d, uint32_t ip)
         seen++;
         int k = 0;
         while (k < nd && strcmp(W->cnt[k].d, dom)) k++;
-        if (k == nd) { W->cnt[nd].d = dom; W->cnt[nd].n = 0; nd++; }
+        if (k == nd) {
+            W->cnt[nd].d = dom;
+            W->cnt[nd].n = 0;
+            W->cnt[nd].allowed = W->cnt[nd].blocked = 0;
+            W->cnt[nd].how = 0;
+            nd++;
+        }
         W->cnt[k].n++;
+        int v = query_verdict(jstr(it, "status"), &W->cnt[k].how);
+        if (v == 1) W->cnt[k].allowed++;
+        else if (v == 2) W->cnt[k].blocked++;
     }
     d->n_top = 0;
     for (int pick = 0; pick < PIHOLE_TOP_N; pick++) {
@@ -625,6 +672,9 @@ static bool sync_top(const conn_t *c, ph_dev_t *d, uint32_t ip)
         if (best < 0) break;
         strlcpy(d->top[d->n_top].d, W->cnt[best].d, PIHOLE_DOMAIN_LEN);
         d->top[d->n_top].n = W->cnt[best].n;
+        d->top[d->n_top].allowed = W->cnt[best].allowed;
+        d->top[d->n_top].blocked = W->cnt[best].blocked;
+        d->top[d->n_top].how = W->cnt[best].how;
         d->n_top++;
         W->cnt[best].n = 0;
     }
@@ -1074,7 +1124,13 @@ size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t c
         for (int i = 0; i < d->n_top; i++) {
             jw_raw(&j, "%s{\"d\":", i ? "," : "");
             jw_str(&j, d->top[i].d, PIHOLE_DOMAIN_LEN);
-            jw_raw(&j, ",\"n\":%lu}", (unsigned long)d->top[i].n);
+            const ph_top_t *t = &d->top[i];
+            jw_raw(&j, ",\"n\":%lu,\"allowed\":%u,\"blocked\":%u,\"block\":[",
+                   (unsigned long)t->n, (unsigned)t->allowed, (unsigned)t->blocked);
+            bool first = true;
+            for (int b = 0; b < (int)(sizeof(BLK_KEY) / sizeof(BLK_KEY[0])); b++)
+                if (t->how & (1u << b)) { jw_raw(&j, "%s\"%s\"", first ? "" : ",", BLK_KEY[b]); first = false; }
+            jw_raw(&j, "]}");
         }
         jw_raw(&j, "],\"top_of\":%u,\"top_ts\":%lu", (unsigned)d->top_of,
                (unsigned long)(d->top_ts > 1 ? d->top_ts : 0));
@@ -1089,8 +1145,8 @@ size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t c
 // correlate.c's weak hook, from the published table: a read under s_mux, no
 // request. Pi-hole v6's top_clients counts cover FTL's in-memory window (24 h
 // by default); the top domains are counted over the device's last top_of
-// queries and carry no blocked flag or answer address, so blocked is false and
-// ip[] 0 for each.
+// queries and carry no answer address, so ip[] is 0 for each; blocked is set
+// for a name Pi-hole refused every time in that sample (none of it allowed).
 bool correlate_pihole_device(uint32_t ip, const uint8_t *mac, correlate_dns_t *out)
 {
     if (!out) return false;
@@ -1114,6 +1170,7 @@ bool correlate_pihole_device(uint32_t ip, const uint8_t *mac, correlate_dns_t *o
             for (int i = 0; i < d->n_top && out->n < CORRELATE_DNS_MAX; i++) {
                 correlate_dns_q_t *q = &out->q[out->n++];
                 strlcpy(q->domain, d->top[i].d, sizeof(q->domain));
+                q->blocked = d->top[i].blocked && !d->top[i].allowed;
                 q->ts = d->top_ts > 1 ? d->top_ts : 0;
             }
         }

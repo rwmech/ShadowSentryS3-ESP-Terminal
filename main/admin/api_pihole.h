@@ -29,8 +29,11 @@
  *                                  carries as "pihole": {"enabled":true,
  *                                  "found":bool,"pihole":{names, ips, mac,
  *                                  vendor, first, last, all_queries, queries,
- *                                  blocked, top_domains [{d,n}], top_of,
- *                                  top_ts, as_of}}; {"enabled":false} when off.
+ *                                  blocked, top_domains [{d,n,allowed,blocked,
+ *                                  block}], top_of, top_ts, as_of}};
+ *                                  {"enabled":false} when off. block lists how
+ *                                  Pi-hole blocked the name: "gravity",
+ *                                  "regex", "denylist", "upstream", "other".
  *                                  mac is aa:bb:cc:dd:ee:ff (":" may be %3A),
  *                                  ip a dotted quad; either may be left out.
  *

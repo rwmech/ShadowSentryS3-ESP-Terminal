@@ -106,6 +106,10 @@ progress{width:220px}
 .sub{display:block;font-size:13px;color:var(--muted)}
 td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .card h4{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--g);margin-top:6px}
+/* Pi-hole verdicts, and a row or message the page points at (drill) */
+.ph-ok{background:rgba(0,210,160,.12);color:#99f6e4;border:1px solid rgba(0,210,160,.35)}
+tr.hit td{background:rgba(251,191,36,.12)}
+.mr.hit{background:rgba(251,191,36,.14);box-shadow:inset 3px 0 0 var(--amber)}
 </style>
 </head>
 <body>
@@ -345,8 +349,20 @@ async function getJson(url){
 // ── Pi-hole: GET /api/pihole/device, POST /api/pihole/refresh ──
 // {"enabled":false} hides the section; {"enabled":true,"found":false} says so;
 // else "pihole" holds names, ips, vendor, first, last, all_queries, queries and
-// blocked (Pi-hole's 24 h window), top_domains [{d,n}] over its last top_of queries.
-let _ph=null;
+// blocked (Pi-hole's 24 h window), top_domains [{d,n,allowed,blocked,block}] over
+// its last top_of queries (allowed, blocked and block are newer firmware: block
+// lists how Pi-hole blocked it: gravity, regex, denylist, upstream, other).
+let _ph=null,_phD=null;
+const BLOCK_WORD={gravity:'on a block list',regex:'by a regex rule',denylist:'on your deny list',upstream:'by the upstream DNS server',other:'by Pi-hole (special name or busy)'};
+// One top domain: r (sort rank: 0 allowed, 1 mixed, 2 blocked, 3 not reported), chip text and class, sub line.
+function phVerdict(e){
+  if(e.allowed==null&&e.blocked==null)return{r:3,t:'Not reported',cls:'tier-none',sub:'older firmware'};
+  const a=+e.allowed||0,b=+e.blocked||0,how=arr(e.block).map(k=>BLOCK_WORD[k]||k).join(', ');
+  if(!a&&!b)return{r:3,t:'Unknown',cls:'tier-none',sub:'no answer recorded yet'};
+  if(b&&!a)return{r:2,t:'Blocked',cls:'tier-alert',sub:how};
+  if(b)return{r:1,t:'Mixed',cls:'tier-probe',sub:a+' allowed, '+b+' blocked'+(how?' ('+how+')':'')};
+  return{r:0,t:'Allowed',cls:'ph-ok',sub:a<(+e.n||0)?a+' of '+(+e.n||0)+' answered':''};
+}
 async function loadPihole(){
   $('ph-body').replaceChildren(spinner('Asking the board for Pi-hole\'s view...'));
   let d;
@@ -355,6 +371,7 @@ async function loadPihole(){
   renderPihole(d);
 }
 function renderPihole(d){
+  _phD=d;
   if(!d||d.enabled!==true){$('ph-card').hidden=true;_ph=null;return;}
   $('ph-card').hidden=false;$('ph-ref').hidden=!devIp();
   const p=d.found===true?obj(d.pihole):null;_ph=p;
@@ -366,13 +383,26 @@ function renderPihole(d){
     ['Pi-hole data as of',fmt(+p.as_of)]];
   const out=[el('div','tsub','The names this device asked your Pi-hole to look up. "Blocked" are lookups Pi-hole refused (ads, trackers, block lists). A device can skip Pi-hole by using another DNS server; the router section shows that.'),kvBox(rows)];
   if(Array.isArray(p.top_domains)){
-    const td=p.top_domains.map(obj).filter(Boolean);
+    const td=p.top_domains.map(obj).filter(Boolean).map(e=>Object.assign({},e,{_v:phVerdict(e)}));
+    // What left the house first: allowed, then mixed, then blocked; busiest first in each.
+    td.sort((a,b)=>a._v.r-b._v.r||(+b.n||0)-(+a.n||0));
     out.push(el('h4','','Top domains of its last '+(+p.top_of||0)+' lookups'+(p.top_ts?', counted '+fmt(+p.top_ts):'')));
     if(!td.length)out.push(el('div','muted','None'));
     else{
+      out.push(el('div','tsub','Allowed: Pi-hole answered, so the device could reach it. Blocked: Pi-hole refused every lookup. Mixed: some of each (often a name on a block list that was allowed for a while, or blocked only through another name it points to). '+
+        'The note says what a well-known name is used for. "Router" links to the router\'s outbound rows for an allowed name, when it shows any.'));
       const t=el('table'),hd=el('thead'),hr=el('tr'),tb=el('tbody');
-      hr.append(el('th','','Domain'),el('th','','Lookups'));hd.append(hr);
-      td.forEach(e=>{const tr=el('tr');tr.append(el('td','mono',S(e.d)),el('td','num',+e.n||0));tb.append(tr);});
+      ['Domain','Lookups','Pi-hole','Router'].forEach(h=>hr.append(el('th','',h)));hd.append(hr);
+      td.forEach(e=>{
+        const tr=el('tr'),dc=el('td'),v=e._v,note=window.ssDomainNote?ssDomainNote(S(e.d)):'';
+        dc.append(el('div','mono',S(e.d)));if(note)dc.append(el('span','sub',note));
+        const sc=el('td','nw');sc.append(el('span','tier-chip '+v.cls,v.t));if(v.sub)sc.append(el('span','sub',v.sub));
+        const rc=el('td','nw'),hits=v.r<2?rtRowsFor(S(e.d)):0;
+        if(hits){const a=el('a','',hits+' outbound row'+(hits===1?'':'s'));a.href='#rt-card';
+          a.onclick=ev=>{ev.preventDefault();rtShow(S(e.d));};rc.append(a);}
+        else rc.append(el('span','muted','-'));
+        tr.append(dc,el('td','num',+e.n||0),sc,rc);tb.append(tr);
+      });
       t.append(hd,tb);const w=el('div','tbl-wrap');w.append(t);out.push(w);
     }
   }else out.push(el('div','muted','Pi-hole has not been asked for this device\'s lookups yet.'+(devIp()?' Refresh from Pi-hole asks it now.':'')));
@@ -443,6 +473,22 @@ function connectedBy(id){
   return'not known';
 }
 const sigWord=s=>s>=-60?'strong':s>=-70?'good':s>=-80?'fair':'weak';
+// The outbound rows whose name is this domain (the Pi-hole table's Router link).
+let _rtHi='';
+const dnName=s=>S(s).toLowerCase().replace(/\.$/,'');
+const rtNameIs=(t,d)=>!!d&&dnName(t.name)===d;
+function rtRowsFor(d){
+  const cn=obj(obj(_intel&&_intel.mikrotik)&&_intel.mikrotik.conn);
+  return cn?dstList(cn).filter(t=>rtNameIs(t,dnName(d))).length:0;
+}
+function rtShow(d){
+  _rtHi=dnName(d);
+  const cn=obj(obj(_intel&&_intel.mikrotik)&&_intel.mikrotik.conn);
+  if(cn&&dstList(cn).some(t=>rtNameIs(t,_rtHi)&&t.external!==true))_rtLan=true;
+  renderIntel(_intel);
+  const r=document.querySelector('#rt-body tr.hit');
+  (r||$('rt-card')).scrollIntoView({block:'center',behavior:'smooth'});
+}
 async function loadIntel(auto){
   const b=$('rt-ref'),m=$('rt-msg');
   if(!auto){_rtTries=0;if(!_intel)$('rt-body').replaceChildren(spinner('Asking the board for the router\'s view...'));}
@@ -456,6 +502,7 @@ async function loadIntel(auto){
   }
   if(!d){$('rt-card').hidden=true;_intel=null;return;}       // firmware without the route
   _intel=d;m.textContent='';renderIntel(d);
+  if(_phD)renderPihole(_phD);         // its Router links follow the new snapshot
   const cn=obj(obj(d.mikrotik)&&d.mikrotik.conn)||{};
   if(cn.pending===true&&_rtTries<RT_TRIES){_rtTries++;setTimeout(()=>loadIntel(true),3000);return;}
   if(cn.pending===true)m.textContent='The router has not answered yet; Refresh asks again.';
@@ -529,6 +576,7 @@ function dstTable(rows){
   heads.forEach(h=>hr.append(el('th','',h)));hd.append(hr);
   rows.forEach(x=>{
     const tr=el('tr'),dc=el('td');
+    if(rtNameIs(x,_rtHi))tr.className='hit';
     dc.append(el('div','',S(x.name)||(x.external===true?'no name':'local')));
     if(x.name&&x.name_src)dc.append(el('span','sub','name from '+(NAME_SRC[x.name_src]||S(x.name_src))));
     dc.append(el('span','sub mono',S(x.ip)));
@@ -823,7 +871,8 @@ function aiNet(room){
     L.push('Pi-hole view');
     if(_ph.queries!=null)L.push('- '+(+_ph.queries)+' lookups in the last 24 h'+(_ph.blocked!=null?', '+(+_ph.blocked)+' blocked':''));
     const td=(Array.isArray(_ph.top_domains)?_ph.top_domains:[]).map(obj).filter(Boolean).slice(0,10);
-    if(td.length)L.push('- Top domains of its last '+(+_ph.top_of||0)+' lookups: '+td.map(e=>S(e.d)+' x'+(+e.n||0)).join(', '));
+    if(td.length)L.push('- Top domains of its last '+(+_ph.top_of||0)+' lookups: '+td.map(e=>{const v=phVerdict(e);
+      return S(e.d)+' x'+(+e.n||0)+(v.r<3?' ('+v.t.toLowerCase()+')':'');}).join(', '));
   }
   let t='';
   for(const l of L){if(t.length+l.length+1>room)break;t+=l+'\n';}

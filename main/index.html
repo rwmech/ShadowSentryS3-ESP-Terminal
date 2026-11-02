@@ -1535,7 +1535,10 @@ function dvPihole(x){
   if(Array.isArray(p.top_domains)){
     const t=el('div');t.append(el('div','ph-top','Top domains of its last '+(p.top_of||0)+' queries:'));
     if(!p.top_domains.length)t.append(el('div','dev-sub','none'));
-    p.top_domains.forEach(e=>t.append(el('div','ph-top',S(e&&e.d)+'  x'+(e&&e.n||0))));
+    // allowed / blocked per domain: newer firmware; the device page has the full table.
+    const how=e=>{const a=+e.allowed||0,b=+e.blocked||0;
+      return e.allowed==null&&e.blocked==null||!a&&!b?'':!b?', allowed':!a?', blocked':', mixed: '+a+' allowed, '+b+' blocked';};
+    p.top_domains.forEach(e=>{if(e&&typeof e==='object')t.append(el('div','ph-top',S(e.d)+'  x'+(+e.n||0)+how(e)));});
     s.append(t);
   }
   if(p.as_of)s.append(el('div','dev-sub','as of '+fmt(p.as_of)));

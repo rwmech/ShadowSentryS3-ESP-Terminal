@@ -13,7 +13,7 @@
 #include <time.h>
 
 #define SEND_TIMEOUT_S  10
-#define OUT_MAX         (8 * 1024)      // status about 1.5 KB, one device at most about 4 KB
+#define OUT_MAX         (8 * 1024)      // status about 1.5 KB, one device at most about 4.6 KB
 
 static bool send_all(int sock, const void *p, size_t n)
 {
