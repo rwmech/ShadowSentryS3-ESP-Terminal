@@ -206,8 +206,8 @@ const dur=s=>{s=s|0;const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Mat
 const ago=s=>{s=+s||0;return s<60?s+' s ago':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';};
 const JH={'X-ShadowSentry':'1','Content-Type':'application/json'};
 // One entry per attack_type_t (main/storage/log_store.h), as in the dashboard.
-const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery'];
-const TPORT=[554,80,23,22,21,0,0,23,0,0,0,5555,0,0];
+const TNAME=['RTSP','HTTP','Telnet','SSH','FTP','ARP spoof','WiFi deauth','Shell session','Port scan','Probe','ARP sweep','ADB','Tripwire','Discovery','New device','Router'];
+const TPORT=[554,80,23,22,21,0,0,23,0,0,0,5555,0,0,0,0];
 const PORT_RE={1:/^[A-Za-z_ ]{1,32} on (\d{1,5}):/,2:/\(port (\d{1,5})\)$/,3:/\(port (\d{1,5})\)$/,
   7:/^shell session opened \(port (\d{1,5})\)$/,9:/^Probe: TCP SYN to port (\d{1,5})\b/,12:/^[A-Za-z][A-Za-z -]{1,15} on (\d{1,5})\b/};
 function trapPort(o){
@@ -260,6 +260,8 @@ function textRows(rows){
 const Q=new URLSearchParams(location.search);
 const qMac=(Q.get('mac')||'').toLowerCase(),qIp=Q.get('ip')||'';
 const DEV={mac:/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(qMac)&&isMac(qMac)?qMac:'',ip:/^\d{1,3}(\.\d{1,3}){3}$/.test(qIp)?qIp:''};
+// at=<unix time>: a message to show (from a dashboard log row): pages are read back to it.
+const AT=(v=>/^\d{9,10}$/.test(v)?+v:0)(Q.get('at')||'');
 let _dev=null,_ai=null,_ign=null;
 
 // ── Analysis: main/analysis.js (GET /analysis.js), shared with the dashboard ──
@@ -766,7 +768,7 @@ async function loadChunk(limit){
     try{const o=JSON.parse(ln);
       if(!o||typeof o!=='object'||Array.isArray(o)){bad++;continue;}
       if(o.kind==='meta'&&!meta){meta=o;continue;}
-      _lines.push(o);fr.append(lineRow(o));}catch{bad++;}
+      const row=lineRow(o);_rowOf.set(o,row);_lines.push(o);fr.append(row);}catch{bad++;}
   }
   $('ml').append(fr);
   meta=meta||{};
@@ -790,6 +792,33 @@ async function older(limit){
     _busy=false;$('older').disabled=_scanning;$('full').disabled=false;return;}
   _busy=false;$('older').disabled=_scanning;$('full').disabled=false;
   renderSummary();
+}
+// at=: read pages back until a loaded line is as old as t (or the history
+// ends, or AT_PAGES pages), then highlight the line(s) at t, else the nearest,
+// and scroll to it. The rows stay in the list as usual.
+const _rowOf=new WeakMap(),AT_PAGES=100;
+async function findAt(t){
+  const pg=$('prog');let n=0;
+  const oldest=()=>_lines.length?+_lines[_lines.length-1].ts||0:Infinity;
+  if(_more&&oldest()>t){
+    _scanning=true;$('full').disabled=true;pg.hidden=false;pg.removeAttribute('value');
+    while(_more&&oldest()>t&&n<AT_PAGES){const c=_cursor;await older(300);n++;if(_cursor===c)break;}   // a failed read keeps the cursor
+    _scanning=false;$('full').disabled=false;$('older').disabled=false;pg.hidden=true;pg.value=0;
+  }
+  let hits=_lines.filter(o=>+o.ts===t),exact=hits.length>0;
+  if(!exact&&_lines.length){
+    let best=null;for(const o of _lines){const d=Math.abs((+o.ts||0)-t);if(!best||d<best.d)best={o,d};}
+    hits=[best.o];
+  }
+  document.querySelectorAll('#ml .mr.hit').forEach(r=>r.classList.remove('hit'));
+  const rows=hits.map(o=>_rowOf.get(o)).filter(Boolean);
+  rows.forEach(r=>r.classList.add('hit'));
+  const what='the message of '+fmt(t);
+  status(!rows.length?'No message here to show for '+what:
+    exact?(rows.length>1?rows.length+' messages at '+fmt(t)+' are':'The message of '+fmt(t)+' is')+' highlighted':
+    (n>=AT_PAGES&&_more?'Stopped looking for '+what+' after '+n+' pages; the nearest so far is highlighted, and Load older goes on':
+      'No message at exactly '+fmt(t)+'; the nearest, '+fmt(+hits[0].ts)+', is highlighted'));
+  if(rows.length)rows[0].scrollIntoView({block:'center',behavior:'smooth'});
 }
 // Page to the end of the history; the bar is bytes read over the day files' total.
 async function fullScan(){
@@ -929,6 +958,7 @@ $('blk-dev-un').onclick=()=>{const ip=devIp();if(!ip||!confirm('Unblock this dev
   // first, since its connection fetch takes a few seconds on the board.
   loadBlock();loadIntel();loadPihole();
   await older(100);
+  if(AT)await findAt(AT);
 })();
 </script>
 </body>

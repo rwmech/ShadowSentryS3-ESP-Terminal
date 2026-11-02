@@ -469,6 +469,18 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .ph-box>summary span{text-transform:none;letter-spacing:0;color:var(--muted)}
 .ph-box>.form{margin-top:10px}
 .ph-top{font-size:14px;margin:2px 0;overflow-wrap:anywhere}
+/* Drill-downs (drill): By type and credential rows open the log in all-days mode */
+.hbar.go,tr.go{cursor:pointer;border-radius:4px}
+.hbar.go:hover,tr.go:hover td{background:rgba(0,210,160,.06)}
+.hbar.go:focus-visible,tr.go:focus-visible{outline:2px solid var(--g);outline-offset:2px}
+.tf-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 22px 0}
+.tf-chip{display:inline-flex;align-items:center;gap:8px;padding:3px 6px 3px 12px;border-radius:14px;font-size:14px;font-weight:600;
+  background:rgba(0,210,160,.12);color:var(--text);border:1px solid rgba(0,210,160,.4)}
+.tf-chip button{background:none;border:0;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:0 6px}
+.tf-chip button:hover,.tf-chip button:focus-visible{color:var(--text)}
+.dev-link{display:block;font-size:12px;color:var(--muted);font-family:inherit}
+.dev-link:hover{color:var(--g)}
+.where{font-size:13px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -791,9 +803,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <div class="table-hdr" style="flex-wrap:wrap;gap:10px">
       <div class="card-title">Log file</div>
       <div class="ctl">
-        <select id="lg-day" onchange="updDl()"></select>
+        <span class="ctl" id="lg-daybox"><select id="lg-day" onchange="updDl()"></select>
         <label class="muted"><input type="checkbox" id="lg-full"> whole file</label>
-        <button class="btn" onclick="loadDay()">Load</button>
+        <button class="btn" onclick="loadDay()">Load</button></span>
         <input id="lg-q" placeholder="Filter: text, IP, user" oninput="renderDay()">
         <select id="lg-kind" onchange="renderDay()"><option value="">All kinds</option><option>attack</option><option>alarm</option><option>http</option><option>boot</option><option>snap</option><option>discovery</option><option>discovery_summary</option><option>wifi</option><option>crash</option><option>netdev</option><option>router_log</option><option>block</option></select>
         <select id="lg-type" onchange="renderDay()"><option value="">All types</option></select>
@@ -801,6 +813,12 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
         <label class="muted"><input type="checkbox" id="lg-disco" onchange="setShowDisco(this.checked)"> Show discovery</label>
         <a class="btn" id="lg-dl" href="#" download>Download</a>
       </div>
+    </div>
+    <div class="tf-bar" id="lg-tf" hidden>
+      <span class="tf-chip"><span id="lg-tf-text"></span><button type="button" id="lg-tf-x" title="Back to the one-day view" aria-label="Clear the filter">&times;</button></span>
+      <button class="btn" type="button" id="lg-tf-older">Load older</button>
+      <button class="btn" type="button" id="lg-tf-full">Scan full history</button>
+      <progress id="lg-tf-prog" max="100" value="0" hidden></progress>
     </div>
     <div class="note" id="lg-note"></div>
     <div class="tbl-wrap"><table id="lg-table" class="no-cred">
@@ -1763,7 +1781,9 @@ function renderSummary(d){
   bars('ch-daily',dv,dl);
 
   const bt=(d.by_type||[]).map(Number),bmax=Math.max(1,...bt);
-  $('ch-type').replaceChildren(...TNAME.map((n,i)=>{const r=el('div','hbar'),t=el('div','t'),f=el('div','f');f.style.width=((bt[i]||0)/bmax*100)+'%';t.append(f);r.append(el('span','n',n),t,el('span','v',bt[i]||0));return r;}));
+  // A row opens the log below in all-days mode for that type.
+  $('ch-type').replaceChildren(...TNAME.map((n,i)=>{const r=el('div','hbar go'),t=el('div','t'),f=el('div','f');f.style.width=((bt[i]||0)/bmax*100)+'%';t.append(f);r.append(el('span','n',n),t,el('span','v',bt[i]||0));
+    goRow(r,'Every '+n+' line on the card, all days, newest first',()=>openTypeLog([i],null,'Type: '+n+', all days'));return r;}));
 
   const sd=d.sd||{};
   $('sd-info').replaceChildren(...(sd.mounted?[
@@ -1796,7 +1816,7 @@ function note(t){$('lg-note').textContent=t;}
 // The code filter lists the codes in the loaded file, then every code in the
 // table, each with its name; the current choice is kept.
 function fillCodeFilter(){
-  const sel=$('lg-code'),cur=sel.value,seen=new Set(_lines.map(codeOf).filter(Boolean));
+  const sel=$('lg-code'),cur=sel.value,seen=new Set((_tf?_tf.lines:_lines).map(codeOf).filter(Boolean));
   const all=[...new Set([...seen].sort().concat(Object.keys(CODES).sort()))];
   const o0=el('option','','All codes');o0.value='';
   sel.replaceChildren(o0,...all.map(c=>{const o=el('option','','Code '+c+' '+codeName(c,-1)+(seen.has(c)?'':' (none here)'));o.value=c;return o;}));
@@ -1805,21 +1825,21 @@ function fillCodeFilter(){
 function updDl(){const n=$('lg-day').value;$('lg-dl').href=n?'/api/logs/file?f='+encodeURIComponent(n)+'&dl=1':'#';}
 async function loadDays(){
   const sel=$('lg-day'),cur=sel.value;
-  if(!_loaded)boxRow($('lg-body'),9,spinner('Listing the day files...'));
+  if(!_loaded&&!_tf)boxRow($('lg-body'),9,spinner('Listing the day files...'));
   try{
     const r=await fetch('/api/logs');if(!r.ok)throw 0;const d=await r.json();
     _days=d.files||[];_tail=+d.tail_bytes||_tail;
     sel.replaceChildren(..._days.map(f=>{const o=el('option','',String(f.name).replace('.jsonl','')+'  ('+kb(+f.size||0)+')');o.value=String(f.name);return o;}));
     if(cur&&_days.some(f=>f.name===cur))sel.value=cur;
     updDl();
-    if(!_days.length){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),9,'No lines');}
+    if(!_days.length){if(!_tf){note(d.mounted?'No log files yet.':'No microSD card mounted.');emptyRow($('lg-body'),9,'No lines');}}
     else if(!_loaded)loadDay();
-  }catch{note('');boxRow($('lg-body'),9,failBox('Could not list the log files',loadDays));}
+  }catch{if(!_tf){note('');boxRow($('lg-body'),9,failBox('Could not list the log files',loadDays));}}
 }
 async function loadDay(){
   const name=$('lg-day').value;if(!name)return;
   const full=$('lg-full').checked,f=_days.find(x=>x.name===name)||{};
-  note('');boxRow($('lg-body'),9,spinner('Loading '+name+'...'));
+  if(!_tf){note('');boxRow($('lg-body'),9,spinner('Loading '+name+'...'));}
   try{
     const r=await fetch('/api/logs/file?f='+encodeURIComponent(name)+(full?'':'&tail=1'));
     if(!r.ok)throw 0;
@@ -1832,7 +1852,7 @@ async function loadDay(){
     _loaded={name,cut:!full&&(+f.size||0)>_tail,bad};
     fillCodeFilter();
     renderDay();
-  }catch{boxRow($('lg-body'),9,failBox('Could not load '+name,loadDay));}
+  }catch{if(!_tf)boxRow($('lg-body'),9,failBox('Could not load '+name,loadDay));}
 }
 // Discovery is hidden unless "Show discovery" is ticked (kept in localStorage),
 // or the kind or type filter asks for it. Discovery lines are the kind
@@ -1842,19 +1862,36 @@ const isDisco=o=>o.kind==='discovery'||o.kind==='discovery_summary'||(o.kind==='
 try{$('lg-disco').checked=localStorage.getItem(LS_DISCO)==='1';}catch{}
 function setShowDisco(on){try{localStorage.setItem(LS_DISCO,on?'1':'0');}catch{}renderDay();}
 function renderDay(){
-  if(!_loaded)return;
-  const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=$('lg-type').value,cf=$('lg-code').value;
-  const disco=$('lg-disco').checked||k==='discovery'||k==='discovery_summary'||(t!==''&&+t===DISCO_T)||!!cf;
+  const f=_tf;
+  if(!_loaded&&!f)return;
+  if(f&&!f.lines.length){
+    if(f.err)boxRow($('lg-body'),9,failBox('Could not read the log: '+f.err,()=>{f.err='';f.stop=false;tfPage(200);}));
+    else if(f.busy)boxRow($('lg-body'),9,spinner('Reading every day file for '+f.label+'...'));
+    else emptyRow($('lg-body'),9,f.more?'Nothing found yet; Load older or Scan full history reads further back':'Nothing on the card for '+f.label);
+    note(f.busy||f.err?'':kb(f.scanned)+' of log read'+(f.more?', more to read':', the whole history on the card')+'.');return;
+  }
+  const src=f?f.lines:_lines;
+  // The type chip overrides the type filter and the hidden discovery lines.
+  const q=$('lg-q').value.trim().toLowerCase(),k=$('lg-kind').value,t=f?'':$('lg-type').value,cf=$('lg-code').value;
+  const disco=!!f||$('lg-disco').checked||k==='discovery'||k==='discovery_summary'||(t!==''&&+t===DISCO_T)||!!cf;
   let hid=0;
-  const rows=_lines.filter(o=>{
+  const rows=src.filter(o=>{
     if((k&&o.kind!==k)||(t!==''&&o.type!==+t)||(cf&&codeOf(o)!==cf)||(q&&!o._raw.includes(q)))return false;
     if(!disco&&isDisco(o)){hid++;return false;}
     return true;});
   const vs=groupViews(rows.map(logView)),shown=vs.slice(0,MAXROWS),tb=$('lg-body');
   // Username and Password only when a row on screen has one.
   $('lg-table').classList.toggle('no-cred',!shown.some(v=>v.user||v.pass));
-  if(!shown.length)emptyRow(tb,9,_lines.length?'No matching lines':'No lines');
+  if(!shown.length)emptyRow(tb,9,src.length?'No matching lines':'No lines');
   else{const fr=document.createDocumentFragment();shown.forEach(v=>fr.append(logRow(v)));tb.replaceChildren(fr);}
+  if(f){
+    const old=+src[src.length-1].ts;
+    note(f.label+': '+src.length+' line'+(src.length===1?'':'s')+' loaded'+(old?', back to '+fmt(old):'')+', '+kb(f.scanned)+' of log read'+
+      (f.more?(f.timed?'; stopped at the 3 s time box, Load older goes on from there':'; Load older or Scan full history for more'):'; that is the whole history on the card')+
+      (f.bad?', '+f.bad+' unreadable':'')+'. '+rows.length+' matching in '+vs.length+' rows'+(vs.length>MAXROWS?', the newest '+MAXROWS+' shown':'')+', newest first.'+
+      (f.err?' The last read failed: '+f.err+'.':''));
+    return;
+  }
   note(_loaded.name+': '+_lines.length+' lines'+(_loaded.cut?' (last '+kb(_tail)+' only; tick "whole file" for all)':'')+
     (_loaded.bad?', '+_loaded.bad+' unreadable':'')+'. '+rows.length+' matching in '+vs.length+' rows'+
     (vs.length>MAXROWS?', the newest '+MAXROWS+' shown':'')+', newest first'+
@@ -1910,9 +1947,104 @@ function logRow(v){
   if(v.hl)dc.append(el('div','td-raw',v.det));
   dc.title=v.det;
   const cc=td(v.code,'nw mono');if(v.code)cc.title=codeName(v.code,-1);
-  tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),cc,td(v.ip,'td-ip'),devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
+  const ic=td(v.ip,'td-ip'),du=devAtUrl(v);
+  if(du){const a=el('a','dev-link','device page');a.href=du;a.target='_blank';a.rel='noopener';
+    a.title='This device\'s page in a new window, scrolled to this message';ic.append(a);}
+  tr.append(tc,td(v.kind,'nw'),td(v.type,'nw'),cc,ic,devCell(v.vendor,v.mac),td(v.user,'td-cred c-cred'),td(v.pass,'td-cred c-cred'),dc);
   return tr;
 }
+// The device page for a log row's source, at the row's time (the newest of a
+// grouped row): by MAC and IP, by IP alone when there is no MAC. "" without either.
+function devAtUrl(v){
+  const q=new URLSearchParams(),mac=S(v.mac).toLowerCase();
+  if(/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac)&&isMac(mac))q.set('mac',mac);
+  if(/^\d{1,3}(\.\d{1,3}){3}$/.test(S(v.ip)))q.set('ip',S(v.ip));
+  if(![...q.keys()].length)return'';
+  if(+v.t1>0)q.set('at',String(Math.floor(+v.t1)));
+  return'/device?'+q.toString();
+}
+// A clickable row (By type, credentials): pointer, keyboard focus, Enter or Space.
+function goRow(r,title,fn){
+  r.tabIndex=0;r.setAttribute('role','button');r.title=title;r.onclick=fn;
+  r.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fn();}};
+}
+
+// ── All days, by type (GET /api/logs/type) ──
+// The By type and credential rows put the log in this mode: a chip names the
+// filter, pages come newest first across every day file (the device page's
+// cursor), and the one-day view comes back when the chip is cleared.
+let _tf=null;
+function openTypeLog(types,user,label){
+  if(_tf)_tf.stop=true;              // a scan in flight ends at its next page
+  _tf={types:types.slice(0,8),user,label,lines:[],cursor:'',more:true,busy:false,scanning:false,stop:false,scanned:0,total:0,bad:0,timed:false,err:''};
+  $('lg-tf').hidden=false;$('lg-daybox').hidden=$('lg-dl').hidden=true;$('lg-type').disabled=true;
+  $('lg-tf-text').textContent=label;
+  tfButtons();
+  $('lg-tf').scrollIntoView({block:'start',behavior:'smooth'});
+  tfPage(200);
+}
+function clearTypeLog(){
+  if(_tf)_tf.stop=true;
+  _tf=null;
+  $('lg-tf').hidden=true;$('lg-tf-prog').hidden=true;$('lg-daybox').hidden=$('lg-dl').hidden=false;$('lg-type').disabled=false;
+  fillCodeFilter();
+  if(_loaded)renderDay();else loadDays();
+}
+function tfButtons(){
+  const f=_tf;if(!f)return;
+  $('lg-tf-older').hidden=$('lg-tf-full').hidden=!f.more;
+  $('lg-tf-older').disabled=f.busy||f.scanning;
+  $('lg-tf-full').textContent=f.scanning?'Stop':'Scan full history';
+}
+async function tfPage(limit){
+  const f=_tf;if(!f||f.busy||!f.more)return;
+  f.busy=true;tfButtons();
+  if(!f.lines.length)renderDay();     // the spinner
+  // encodeURIComponent, not URLSearchParams: the board reads %20 as a space, not '+'.
+  const q='type='+f.types.join(',')+(f.user!=null?'&user='+encodeURIComponent(f.user):'')+
+    '&limit='+limit+(f.cursor?'&cursor='+encodeURIComponent(f.cursor):'');
+  try{
+    const r=await fetch('/api/logs/type?'+q,{cache:'no-store'});
+    if(r.status===404)throw new Error('this firmware has no all-days search');
+    if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(S(d&&d.error)||'HTTP '+r.status);}
+    const txt=await r.text();
+    if(f!==_tf)return;
+    let meta=null;
+    for(const ln of txt.split('\n')){
+      if(!ln.trim())continue;
+      try{const o=JSON.parse(ln);
+        if(!o||typeof o!=='object'||Array.isArray(o)){f.bad++;continue;}
+        if(o.kind==='meta'&&!meta){meta=o;continue;}
+        o._raw=ln.toLowerCase();f.lines.push(o);}catch{f.bad++;}
+    }
+    meta=meta||{};
+    f.cursor=S(meta.cursor);f.more=!!meta.more&&!!f.cursor;f.scanned+=+meta.scanned_bytes||0;f.timed=meta.timed_out===true;f.err='';
+  }catch(e){f.err=e.message;f.stop=true;}
+  finally{f.busy=false;}
+  if(f!==_tf)return;
+  tfButtons();fillCodeFilter();renderDay();
+}
+// Page to the end of the history; the bar is bytes read over the day files' sizes.
+async function tfFull(){
+  const f=_tf;if(!f)return;
+  if(f.scanning){f.stop=true;return;}
+  if(f.busy)return;
+  f.scanning=true;f.stop=false;tfButtons();
+  try{const r=await fetch('/api/logs');const d=await r.json();
+    const from=f.cursor?f.cursor.slice(0,16):'';
+    f.total=(d.files||[]).filter(x=>/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(x.name)&&(!from||x.name<=from)).reduce((a,x)=>a+(+x.size||0),0)+f.scanned;}
+  catch{f.total=0;}
+  const pg=$('lg-tf-prog');pg.hidden=false;pg.value=0;
+  while(f===_tf&&f.more&&!f.stop){
+    await tfPage(500);
+    pg.value=f.total?Math.min(100,Math.round(f.scanned/f.total*100)):0;
+  }
+  f.scanning=false;
+  if(f===_tf){pg.hidden=true;tfButtons();}
+}
+$('lg-tf-x').onclick=clearTypeLog;
+$('lg-tf-older').onclick=()=>{if(_tf){_tf.stop=false;tfPage(300);}};
+$('lg-tf-full').onclick=tfFull;
 
 // ── Settings ──
 const TZP=[['UTC','UTC0'],['US Eastern','EST5EDT,M3.2.0,M11.1.0'],['US Central','CST6CDT,M3.2.0,M11.1.0'],

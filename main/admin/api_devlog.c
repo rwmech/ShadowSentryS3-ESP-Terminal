@@ -2,6 +2,8 @@
 
 #include "api_devlog.h"
 #include "sd_log.h"
+#include "log_store.h"
+#include "json_esc.h"
 #include "lwip/sockets.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -22,7 +24,9 @@ static const char *TAG = "DEVLOG";
 #define DEVLOG_CHUNK        16384   // read piece, and the longest line kept
 #define DEVLOG_ARENA        (256 * 1024)    // the matching lines, sent as they are
 #define DEVLOG_ARENA_MIN    (32 * 1024)     // if PSRAM is short
-#define DEVLOG_QUERY_MAX    200
+#define DEVLOG_QUERY_MAX    400     // type list, a percent-encoded user name and a cursor
+#define TYPELOG_USER_MAX    64      // user= bytes after decoding
+#define TYPELOG_TYPES_MAX   8       // entries in type=
 #define DAY_NAME_LEN        16      // "YYYY-MM-DD.jsonl"
 #define CURSOR_MAX          (DAY_NAME_LEN + 1 + 10)
 _Static_assert(DEVLOG_CHUNK < DEVLOG_ARENA_MIN, "a kept line must always fit an empty arena");
@@ -77,8 +81,9 @@ static int hexval(char c)
 }
 
 // The value of key in the query string q (qn bytes), percent-decoded into out
-// (cap bytes, NUL-terminated). False if absent, empty, malformed or too long.
-static bool qparam(const char *q, size_t qn, const char *key, char *out, size_t cap)
+// (cap bytes, NUL-terminated): its length (0 for an empty value), -1 if
+// absent, malformed or too long.
+static int qparam_len(const char *q, size_t qn, const char *key, char *out, size_t cap)
 {
     size_t kn = strlen(key);
     for (size_t i = 0; i < qn; ) {
@@ -89,18 +94,37 @@ static bool qparam(const char *q, size_t qn, const char *key, char *out, size_t 
             for (size_t k = i + kn + 1; k < j; k++) {
                 char c = q[k];
                 if (c == '%') {
-                    if (k + 2 >= j) return false;           // needs two hex digits
+                    if (k + 2 >= j) return -1;              // needs two hex digits
                     int h = hexval(q[k + 1]), l = hexval(q[k + 2]);
-                    if (h < 0 || l < 0) return false;
+                    if (h < 0 || l < 0) return -1;
                     c = (char)(h * 16 + l);
                     k += 2;
                 }
-                if (o + 1 >= cap) return false;
+                if (o + 1 >= cap) return -1;
                 out[o++] = c;
             }
             out[o] = '\0';
-            return o > 0;
+            return (int)o;
         }
+        i = j + 1;
+    }
+    return -1;
+}
+
+// As qparam_len(): false when absent, empty, malformed or too long.
+static bool qparam(const char *q, size_t qn, const char *key, char *out, size_t cap)
+{
+    return qparam_len(q, qn, key, out, cap) > 0;
+}
+
+// Whether the query has key at all ("key=" at its start or after a '&').
+static bool qhas(const char *q, size_t qn, const char *key)
+{
+    size_t kn = strlen(key);
+    for (size_t i = 0; i < qn; ) {
+        size_t j = i;
+        while (j < qn && q[j] != '&') j++;
+        if (j - i > kn && q[i + kn] == '=' && memcmp(q + i, key, kn) == 0) return true;
         i = j + 1;
     }
     return false;
@@ -228,13 +252,19 @@ static bool parse_cursor(const char *c, char name[DAY_NAME_LEN + 1], uint32_t *o
 // after it has been handled, and the byte before it is a newline (or it is
 // the cursor the scan started from).
 
+typedef enum { MATCH_DEVICE, MATCH_TYPE } match_t;
+
 typedef struct {
+    match_t  mode;
     char    *buf;               // DEVLOG_CHUNK, the read buffer
     char    *arena;             // the matching lines, newline-terminated, newest first
     size_t   arena_cap, arena_used;
     int      limit, matched;
-    char     nip[32], nmac[32];
+    char     nip[32], nmac[32];             // MATCH_DEVICE: "ip":"a.b.c.d", "mac":"..."
     size_t   lip, lmac;
+    uint32_t types;                         // MATCH_TYPE: a bit per attack_type_t
+    char     nuser[10 + 6 * TYPELOG_USER_MAX + 2];  // MATCH_TYPE: "user":"<escaped>", if given
+    size_t   luser;
     int64_t  deadline;
     bool     timed_out, full;   // full: the limit or the arena stopped the scan
     uint32_t res;               // resume offset in the file being scanned
@@ -254,10 +284,49 @@ static bool has(const char *p, size_t n, const char *needle, size_t m)
     return false;
 }
 
+// Line kinds that belong to an attack type besides its own attack lines:
+// the full HTTP request, the discovery lines, the router's netdev and syslog
+// lines. Each line on the card starts {"kind":"<kind>",
+static const struct { uint8_t type; const char *prefix; } KIND_OF[] = {
+    { ATTACK_HTTP,       "{\"kind\":\"http\"," },
+    { ATTACK_DISCOVERY,  "{\"kind\":\"discovery\"," },
+    { ATTACK_DISCOVERY,  "{\"kind\":\"discovery_summary\"," },
+    { ATTACK_NEW_DEVICE, "{\"kind\":\"netdev\"," },
+    { ATTACK_ROUTER,     "{\"kind\":\"router_log\"," },
+};
+#define ATTACK_PREFIX "{\"kind\":\"attack\","
+
+static bool starts(const char *p, size_t n, const char *lit)
+{
+    size_t m = strlen(lit);
+    return n >= m && memcmp(p, lit, m) == 0;
+}
+
+// An attack line of one of the types (its "type":N, field), or a line of a
+// kind mapped to one; and then the user name, when one is given.
+static bool type_matches(const scan_t *s, const char *p, size_t n)
+{
+    bool hit = false;
+    if (starts(p, n, ATTACK_PREFIX)) {
+        for (unsigned t = 0; t < ATTACK_TYPE_COUNT && !hit; t++) {
+            if (!(s->types & (1u << t))) continue;
+            char nd[16];
+            int l = snprintf(nd, sizeof(nd), "\"type\":%u,", t);
+            hit = l > 0 && has(p, n, nd, (size_t)l);
+        }
+    } else {
+        for (size_t i = 0; i < sizeof(KIND_OF) / sizeof(KIND_OF[0]) && !hit; i++)
+            hit = (s->types & (1u << KIND_OF[i].type)) && starts(p, n, KIND_OF[i].prefix);
+    }
+    return hit && (!s->luser || has(p, n, s->nuser, s->luser));
+}
+
 // A key with its quotes cannot occur inside a JSON string value (the log
-// escapes '"'), so this only matches the line's own "ip" or "mac".
+// escapes '"'), so this only matches the line's own "ip", "mac", "type" or
+// "user".
 static bool line_matches(const scan_t *s, const char *p, size_t n)
 {
+    if (s->mode == MATCH_TYPE) return type_matches(s, p, n);
     return (s->lip && has(p, n, s->nip, s->lip)) || (s->lmac && has(p, n, s->nmac, s->lmac));
 }
 
@@ -339,22 +408,13 @@ static bool scan_file(scan_t *s, const char *name, uint32_t start)
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-static void serve_device_log(int sock, const char *q, size_t qn)
+// The scan both routes share: limit, cursor, buffers, the walk over the day
+// files, the meta line and the answer. s holds the match; the rest is set here.
+static void run_scan(int sock, scan_t *s, const char *q, size_t qn, const char *what)
 {
-    scan_t s;
-    memset(&s, 0, sizeof(s));
-    char v[CURSOR_MAX + 8], mac[18], ip[16];
+    char v[CURSOR_MAX + 8];
     bool bad = false;
-    if (qparam(q, qn, "mac", v, sizeof(v))) {
-        if (!valid_mac(v, mac)) { send_error(sock, "400 Bad Request", "mac must be aa:bb:cc:dd:ee:ff"); return; }
-        s.lmac = (size_t)snprintf(s.nmac, sizeof(s.nmac), "\"mac\":\"%s\"", mac);
-    }
-    if (qparam(q, qn, "ip", v, sizeof(v))) {
-        if (!valid_ip(v, ip)) { send_error(sock, "400 Bad Request", "ip must be a dotted IPv4 address"); return; }
-        s.lip = (size_t)snprintf(s.nip, sizeof(s.nip), "\"ip\":\"%s\"", ip);
-    }
-    if (!s.lmac && !s.lip) { send_error(sock, "400 Bad Request", "give a mac, an ip or both"); return; }
-    s.limit = num_param(q, qn, "limit", DEVLOG_LIMIT_DEF, DEVLOG_LIMIT_MAX, &bad);
+    s->limit = num_param(q, qn, "limit", DEVLOG_LIMIT_DEF, DEVLOG_LIMIT_MAX, &bad);
     if (bad) { send_error(sock, "400 Bad Request", "limit must be a number"); return; }
 
     sd_status_t st;
@@ -374,34 +434,34 @@ static void serve_device_log(int sock, const char *q, size_t qn)
         any = false;                        // no day files: an empty answer
     }
 
-    s.buf = heap_caps_malloc(DEVLOG_CHUNK, MALLOC_CAP_SPIRAM);
-    s.arena_cap = DEVLOG_ARENA;
-    s.arena = heap_caps_malloc(s.arena_cap, MALLOC_CAP_SPIRAM);
-    if (!s.arena) { s.arena_cap = DEVLOG_ARENA_MIN; s.arena = heap_caps_malloc(s.arena_cap, MALLOC_CAP_SPIRAM); }
-    if (!s.buf || !s.arena) {
-        free(s.buf); free(s.arena);
+    s->buf = heap_caps_malloc(DEVLOG_CHUNK, MALLOC_CAP_SPIRAM);
+    s->arena_cap = DEVLOG_ARENA;
+    s->arena = heap_caps_malloc(s->arena_cap, MALLOC_CAP_SPIRAM);
+    if (!s->arena) { s->arena_cap = DEVLOG_ARENA_MIN; s->arena = heap_caps_malloc(s->arena_cap, MALLOC_CAP_SPIRAM); }
+    if (!s->buf || !s->arena) {
+        free(s->buf); free(s->arena);
         send_error(sock, "503 Service Unavailable", "out of memory");
         return;
     }
 
     int64_t t0 = esp_timer_get_time();
-    s.deadline = t0 + DEVLOG_TIME_MS * 1000LL;
+    s->deadline = t0 + DEVLOG_TIME_MS * 1000LL;
     int files = 0;
     char next[CURSOR_MAX + 1] = "";         // "" when the oldest file has been read to its start
     char first[DAY_NAME_LEN + 1] = "";
     while (any) {
         if (!first[0]) memcpy(first, cur, sizeof(first));
-        bool done = scan_file(&s, cur, off);
+        bool done = scan_file(s, cur, off);
         files++;
         if (!done) {
-            snprintf(next, sizeof(next), "%s:%lu", cur, (unsigned long)s.res);
+            snprintf(next, sizeof(next), "%s:%lu", cur, (unsigned long)s->res);
             break;
         }
         char older[DAY_NAME_LEN + 1];
         if (!older_day(cur, older) || !day_size(older, &off)) break;      // the oldest is done
         memcpy(cur, older, sizeof(cur));
-        if (s.full || esp_timer_get_time() > s.deadline) {
-            if (!s.full) s.timed_out = true;
+        if (s->full || esp_timer_get_time() > s->deadline) {
+            if (!s->full) s->timed_out = true;
             snprintf(next, sizeof(next), "%s:%lu", cur, (unsigned long)off);
             break;
         }
@@ -411,18 +471,107 @@ static void serve_device_log(int sock, const char *q, size_t qn)
     int ml = snprintf(meta, sizeof(meta),
         "{\"kind\":\"meta\",\"matched\":%d,\"files\":%d,\"from\":\"%s\",\"limit\":%d,"
         "\"cursor\":\"%s\",\"more\":%s,\"timed_out\":%s,\"scanned_bytes\":%llu,\"ms\":%lld,\"long_skipped\":%lu}\n",
-        s.matched, files, first, s.limit, next, next[0] ? "true" : "false",
-        s.timed_out ? "true" : "false", (unsigned long long)s.scanned,
-        (long long)((esp_timer_get_time() - t0) / 1000), s.long_skipped);  // names validated above
+        s->matched, files, first, s->limit, next, next[0] ? "true" : "false",
+        s->timed_out ? "true" : "false", (unsigned long long)s->scanned,
+        (long long)((esp_timer_get_time() - t0) / 1000), s->long_skipped);  // names validated above
     if (ml <= 0 || ml >= (int)sizeof(meta)) ml = 0;
-    if (send_head(sock, "200 OK", "application/x-ndjson; charset=utf-8", (size_t)ml + s.arena_used) &&
+    if (send_head(sock, "200 OK", "application/x-ndjson; charset=utf-8", (size_t)ml + s->arena_used) &&
         send_all(sock, meta, (size_t)ml))
-        send_all(sock, s.arena, s.arena_used);
-    ESP_LOGI(TAG, "Device log: %d lines from %d files, %llu B read in %lld ms%s",
-             s.matched, files, (unsigned long long)s.scanned,
-             (long long)((esp_timer_get_time() - t0) / 1000), s.timed_out ? " (time box)" : "");
-    free(s.buf);
-    free(s.arena);
+        send_all(sock, s->arena, s->arena_used);
+    ESP_LOGI(TAG, "%s: %d lines from %d files, %llu B read in %lld ms%s",
+             what, s->matched, files, (unsigned long long)s->scanned,
+             (long long)((esp_timer_get_time() - t0) / 1000), s->timed_out ? " (time box)" : "");
+    free(s->buf);
+    free(s->arena);
+}
+
+static void serve_device_log(int sock, const char *q, size_t qn)
+{
+    scan_t s;
+    memset(&s, 0, sizeof(s));
+    s.mode = MATCH_DEVICE;
+    char v[CURSOR_MAX + 8], mac[18], ip[16];
+    if (qparam(q, qn, "mac", v, sizeof(v))) {
+        if (!valid_mac(v, mac)) { send_error(sock, "400 Bad Request", "mac must be aa:bb:cc:dd:ee:ff"); return; }
+        s.lmac = (size_t)snprintf(s.nmac, sizeof(s.nmac), "\"mac\":\"%s\"", mac);
+    }
+    if (qparam(q, qn, "ip", v, sizeof(v))) {
+        if (!valid_ip(v, ip)) { send_error(sock, "400 Bad Request", "ip must be a dotted IPv4 address"); return; }
+        s.lip = (size_t)snprintf(s.nip, sizeof(s.nip), "\"ip\":\"%s\"", ip);
+    }
+    if (!s.lmac && !s.lip) { send_error(sock, "400 Bad Request", "give a mac, an ip or both"); return; }
+    run_scan(sock, &s, q, qn, "Device log");
+}
+
+// type= keys, by attack_type_t (the dashboard's names, lower case, '_' for ' ').
+static const char *const TYPE_KEY[] = {
+    "rtsp", "http", "telnet", "ssh", "ftp", "arp", "wifi", "shell", "scan", "probe",
+    "arp_sweep", "adb", "tripwire", "discovery", "new_device", "router",
+};
+_Static_assert(sizeof(TYPE_KEY) / sizeof(TYPE_KEY[0]) == ATTACK_TYPE_COUNT, "TYPE_KEY: one per attack_type_t");
+_Static_assert(ATTACK_TYPE_COUNT <= 32, "scan_t.types is 32 bits");
+
+// "2", "telnet", or a comma list of up to TYPELOG_TYPES_MAX of them, into a
+// bitmap. False on anything else.
+static bool parse_types(const char *v, uint32_t *out)
+{
+    uint32_t bits = 0;
+    int count = 0;
+    const char *p = v;
+    for (;;) {
+        const char *e = strchr(p, ',');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        if (!n || n > 12 || ++count > TYPELOG_TYPES_MAX) return false;
+        int t = -1;
+        if (p[0] >= '0' && p[0] <= '9') {
+            if (n > 2) return false;
+            t = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (p[i] < '0' || p[i] > '9') return false;
+                t = t * 10 + (p[i] - '0');
+            }
+            if (t >= ATTACK_TYPE_COUNT) return false;
+        } else {
+            for (int i = 0; i < ATTACK_TYPE_COUNT; i++)
+                if (strlen(TYPE_KEY[i]) == n && strncmp(p, TYPE_KEY[i], n) == 0) { t = i; break; }
+            if (t < 0) return false;
+        }
+        bits |= 1u << t;
+        if (!e) break;
+        p = e + 1;
+    }
+    *out = bits;
+    return true;
+}
+
+static void serve_type_log(int sock, const char *q, size_t qn)
+{
+    scan_t s;
+    memset(&s, 0, sizeof(s));
+    s.mode = MATCH_TYPE;
+    char v[96];
+    if (!qparam(q, qn, "type", v, sizeof(v)) || !parse_types(v, &s.types)) {
+        send_error(sock, "400 Bad Request", "type must be attack type numbers or keys, comma separated");
+        return;
+    }
+    // user= is matched against the line's "user" field as the log writes it
+    // (json_esc()); an empty user= matches "user":"".
+    if (qhas(q, qn, "user")) {
+        char u[TYPELOG_USER_MAX + 1];
+        int ul = qparam_len(q, qn, "user", u, sizeof(u));
+        if (ul < 0 || (size_t)ul != strlen(u)) {        // too long, malformed, or a %00 in it
+            send_error(sock, "400 Bad Request", "user must be at most 64 bytes, percent-encoded");
+            return;
+        }
+        static const char KEY[] = "\"user\":\"";
+        size_t k = sizeof(KEY) - 1;
+        memcpy(s.nuser, KEY, k);
+        k += json_esc(u, (size_t)ul, s.nuser + k, sizeof(s.nuser) - k - 1);   // room for the closing quote
+        s.nuser[k++] = '"';
+        s.nuser[k] = '\0';
+        s.luser = k;
+    }
+    run_scan(sock, &s, q, qn, "Type log");
 }
 
 // "GET <path>" followed by ' ' or '?': the query (qn bytes) in *q, "" if none.
@@ -450,12 +599,15 @@ bool api_devlog_handle(int sock, const char *req, int req_len)
 {
     const char *q;
     size_t qn;
+    bool by_type = false;
     int m = match_get(req, req_len, "/api/logs/device", &q, &qn);
+    if (m < 0) { m = match_get(req, req_len, "/api/logs/type", &q, &qn); by_type = true; }
     if (m < 0) return false;
 
     struct timeval tv = { .tv_sec = SEND_TIMEOUT_S, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     if (m == 0) { send_error(sock, "400 Bad Request", "query too long"); return true; }
-    serve_device_log(sock, q, qn);
+    if (by_type) serve_type_log(sock, q, qn);
+    else serve_device_log(sock, q, qn);
     return true;
 }
