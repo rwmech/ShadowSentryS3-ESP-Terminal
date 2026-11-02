@@ -1073,6 +1073,35 @@ static const char *take_addr(const cJSON *root, uint32_t *ip, uint8_t mac[6])
     return NULL;
 }
 
+// POST /api/buzzer/test: no body (or no "sound") plays the klaxon, as before;
+// {"sound":"yellow"|"boot"|"tap"|"commit"|"cancel"|"ack"|"klaxon"} plays that
+// one at the current volumes. 204 at once, the sound plays after.
+static void post_buzzer_test(int sock, const char *req, int req_len)
+{
+    size_t blen = 0;
+    const char *why = NULL;
+    const char *status = read_body(sock, req, req_len, &blen, &why);
+    if (status && strcmp(status, "411 Length Required")) { send_error(sock, status, why); return; }
+    int k = BUZZER_SOUND_KLAXON;
+    if (!status && blen) {
+        cJSON *root = json_depth_ok(s_body, blen, 1) ? cJSON_ParseWithLength(s_body, blen) : NULL;
+        if (!root || !cJSON_IsObject(root)) {
+            cJSON_Delete(root);
+            send_error(sock, "400 Bad Request", "body must be a JSON object");
+            return;
+        }
+        const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, "sound");
+        if (it) k = cJSON_IsString(it) ? buzzer_sound_from_key(it->valuestring) : -1;
+        cJSON_Delete(root);
+        if (k < 0) {
+            send_error(sock, "400 Bad Request", "sound must be klaxon, yellow, boot, tap, commit, cancel or ack");
+            return;
+        }
+    }
+    buzzer_preview((buzzer_sound_t)k);
+    send_204(sock);
+}
+
 static void post_ignore(int sock, const char *req, int req_len)
 {
     size_t blen = 0;
@@ -1310,7 +1339,7 @@ bool api_ext_handle(int sock, const char *req, int req_len)
     case R_SET_GET:  get_settings(sock); break;
     case R_SET_POST: post_settings(sock, req, req_len); break;
     case R_REBOOT:   post_reboot(sock); break;
-    case R_BUZZ:     buzzer_test(); send_204(sock); break;
+    case R_BUZZ:     post_buzzer_test(sock, req, req_len); break;
     case R_SUMMARY:  get_summary(sock); break;
     case R_LOGS:     get_logs(sock); break;
     case R_FILE:     get_log_file(sock, query); break;

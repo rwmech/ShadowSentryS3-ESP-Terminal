@@ -932,6 +932,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <div class="ctl" style="margin-top:10px">
         <button class="btn" type="submit">Save</button>
         <button class="btn" type="button" onclick="testBuzzer()">Test buzzer</button>
+        <select id="st-snd-pick" aria-label="Sound to play"><option value="tap">Tap</option><option value="commit">Commit</option><option value="cancel">Cancel</option><option value="ack">Acknowledge</option><option value="boot">Boot beeps</option><option value="yellow">Yellow alert</option><option value="klaxon">Red alert klaxon</option></select>
+        <button class="btn" type="button" onclick="playSound()">Play</button>
         <button class="btn btn-red" type="button" onclick="rebootDev()">Reboot</button>
       </div>
     </form>
@@ -2407,6 +2409,7 @@ async function testPihole(){
   }catch{res.textContent='Failed: device unreachable.';b.disabled=false;}
 }
 async function testBuzzer(){try{await fetch('/api/buzzer/test',POSTH);}catch{showMsg('err','Buzzer test failed.');}}
+async function playSound(){try{const r=await fetch('/api/buzzer/test',{...POSTH,headers:{...(POSTH.headers||{}),'Content-Type':'application/json'},body:JSON.stringify({sound:$('st-snd-pick').value})});if(!r.ok)showMsg('err','Play failed: HTTP '+r.status+'.');}catch{showMsg('err','Play failed.');}}
 async function rebootDev(){
   if(!confirm('Reboot the device now?'))return;
   try{await fetch('/api/reboot',POSTH);}catch{}

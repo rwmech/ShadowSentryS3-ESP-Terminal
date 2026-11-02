@@ -9,6 +9,7 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include <string.h>
 
 static const char *TAG = "BUZZER";
 
@@ -72,13 +73,21 @@ static uint8_t alarm_level(void)
 // hz 0 is a silence.
 typedef struct { uint16_t hz, ms; } step_t;
 
-// Console sounds, after the LCARS panel taps: very short tones near the
-// resonance. Rising for a tap and a confirm, falling for a cancel, a held
-// two-tone for a completed hold.
+// Console sounds, TNG / LCARS style: short square-wave tones near the
+// resonance (2.4 to 3.4 kHz, where the piezo is loudest, so even the low UI
+// volume carries). Designed from descriptions of the TNG panel sounds (short,
+// bright, two or three quick pitches; a rising "commit" chirp for an accepted
+// entry, a falling pair for a refusal), not measured: the thelcars.com
+// beep1..5.mp3 samples could not be decoded here.
+// Tap, every press (Rob: "sound right"): a quick rising blip, 36 ms.
 static const step_t TAP[]     = { { 2600, 18 }, { 3200, 18 } };
-static const step_t CONFIRM[] = { { 2400, 20 }, { 2900, 20 }, { 3400, 25 } };
-static const step_t CANCEL[]  = { { 3200, 25 }, { 2400, 35 } };
-static const step_t ACKED[]   = { { 3000, 60 }, { 0, 30 }, { 3400, 120 } };
+// Commit (BUZZER_CHIRP_CONFIRM: a dialog confirmed): the TNG computer's
+// accepted-entry chirp, two quick rising pips and a held top, 165 ms.
+static const step_t CONFIRM[] = { { 2600, 30 }, { 0, 15 }, { 3000, 30 }, { 0, 15 }, { 3400, 75 } };
+// Cancel (cancelled or refused): a falling pair, the commit turned over, 90 ms.
+static const step_t CANCEL[]  = { { 3200, 35 }, { 0, 15 }, { 2400, 55 } };
+// Ack (a hold completed): the commit's held two-tone, longer, 190 ms.
+static const step_t ACKED[]   = { { 3000, 50 }, { 0, 30 }, { 3400, 110 } };
 
 // Boot (replaces the startup melody): three short rising computer beeps, TNG
 // style, 290 ms. Designed, not measured from a sample.
@@ -108,8 +117,23 @@ static const steps_t YELLOW_STEPS = STEPS(ATTENTION);
 #define BUZ_TASK_PRIO    3          // below the alarm task (4), above the UI (2)
 #define BUZ_QUEUE_DEPTH  8
 
-// CMD_CHIRP + a buzzer_chirp_t is that chirp.
-typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_YELLOW, CMD_BOOT, CMD_CHIRP } buz_cmd_t;
+// CMD_CHIRP + a buzzer_chirp_t is that chirp; CMD_PREVIEW + a buzzer_sound_t
+// is that sound for the Settings test player.
+typedef enum { CMD_SIREN, CMD_TEST, CMD_STOP, CMD_YELLOW, CMD_BOOT, CMD_CHIRP,
+               CMD_PREVIEW = CMD_CHIRP + BUZZER_CHIRP_COUNT } buz_cmd_t;
+_Static_assert(CMD_PREVIEW + BUZZER_SOUND_COUNT <= 255, "buzzer commands fit a byte");
+
+// Test player names (POST /api/buzzer/test {"sound":...}), one per buzzer_sound_t.
+static const char *const SOUND_KEY[] = {
+    [BUZZER_SOUND_KLAXON] = "klaxon",
+    [BUZZER_SOUND_YELLOW] = "yellow",
+    [BUZZER_SOUND_BOOT]   = "boot",
+    [BUZZER_SOUND_TAP]    = "tap",
+    [BUZZER_SOUND_COMMIT] = "commit",
+    [BUZZER_SOUND_CANCEL] = "cancel",
+    [BUZZER_SOUND_ACK]    = "ack",
+};
+_Static_assert(sizeof(SOUND_KEY) / sizeof(SOUND_KEY[0]) == BUZZER_SOUND_COUNT, "SOUND_KEY: one per buzzer_sound_t");
 
 static bool              s_ok = false;
 static SemaphoreHandle_t s_lock;    // the buzzer task and a caller without one share it
@@ -242,6 +266,27 @@ static void buzzer_task(void *arg)
             }
             continue;
         }
+        if (c > CMD_PREVIEW && c < CMD_PREVIEW + BUZZER_SOUND_COUNT) {
+            // Test player: plays whatever the on/off settings say, at the
+            // current volumes (a UI volume of off is silent). The klaxon
+            // preview is CMD_TEST.
+            buzzer_sound_t k = (buzzer_sound_t)(c - CMD_PREVIEW);
+            const steps_t *st = &YELLOW_STEPS;
+            uint16_t duty = ui_duty();
+            switch (k) {
+            case BUZZER_SOUND_YELLOW: duty = YELLOW_DUTY[alarm_level()]; break;
+            case BUZZER_SOUND_BOOT:   st = &BOOT_STEPS; break;
+            case BUZZER_SOUND_TAP:    st = &CHIRPS[BUZZER_CHIRP_TAP]; break;
+            case BUZZER_SOUND_COMMIT: st = &CHIRPS[BUZZER_CHIRP_CONFIRM]; break;
+            case BUZZER_SOUND_CANCEL: st = &CHIRPS[BUZZER_CHIRP_CANCEL]; break;
+            default:                  st = &CHIRPS[BUZZER_CHIRP_ACK]; break;
+            }
+            if (duty && xSemaphoreTake(s_lock, pdMS_TO_TICKS(300)) == pdTRUE) {
+                play_steps(st->s, st->n, duty);
+                xSemaphoreGive(s_lock);
+            }
+            continue;
+        }
         if (c == CMD_BOOT) {
             // The boot setting and the UI volume govern the boot beeps.
             uint16_t duty = ui_duty();
@@ -299,6 +344,20 @@ void buzzer_remind(void) { request(CMD_SIREN); }
 void buzzer_test(void)   { request(CMD_TEST); }
 void buzzer_yellow(void) { request(CMD_YELLOW); }
 void buzzer_boot(void)   { request(CMD_BOOT); }
+
+void buzzer_preview(buzzer_sound_t k)
+{
+    if (k == BUZZER_SOUND_KLAXON) request(CMD_TEST);
+    else if ((unsigned)k < BUZZER_SOUND_COUNT) request((buz_cmd_t)(CMD_PREVIEW + (int)k));
+}
+
+int buzzer_sound_from_key(const char *key)
+{
+    if (!key) return -1;
+    for (int i = 0; i < BUZZER_SOUND_COUNT; i++)
+        if (!strcmp(key, SOUND_KEY[i])) return i;
+    return -1;
+}
 void buzzer_chirp(buzzer_chirp_t k)
 {
     if ((unsigned)k < BUZZER_CHIRP_COUNT) request((buz_cmd_t)(CMD_CHIRP + (int)k));
