@@ -40,6 +40,7 @@ typedef struct {
     bool     boot_chirp;            // chirp at power-up / reboot
     bool     touch_click;           // click on every screen press
     bool     clock_24h;             // panel times: 24-hour "15:39:12", else 12-hour "3:39 PM"
+    uint8_t  panel_style;           // front panel: 0 dashboard, 1 LCARS (live, no reboot)
     char     discord_webhook[160];  // secret: "" = off, else https://discord.com/api/webhooks/...
     bool     discord_log_events;    // deduplicated event log to Discord (incidents post regardless)
     // Detection and alerting (applied immediately)

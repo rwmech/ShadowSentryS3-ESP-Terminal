@@ -363,6 +363,7 @@ static void get_settings(int sock)
     jb_bool(&j, "boot_chirp", s.boot_chirp);                JB_LIT(&j, ",");
     jb_bool(&j, "touch_click", s.touch_click);              JB_LIT(&j, ",");
     jb_bool(&j, "clock_24h", s.clock_24h);                  JB_LIT(&j, ",");
+    jb_printf(&j, "\"panel_style\":%u,", (unsigned)s.panel_style);
     jb_bool(&j, "admin_password_set", s.admin_password[0]); JB_LIT(&j, ",");
     jb_bool(&j, "wifi_password_set", s.wifi_password[0]);   JB_LIT(&j, ",");
     jb_bool(&j, "tg_token_set", secret_set(s.tg_token));    JB_LIT(&j, ",");
@@ -570,6 +571,7 @@ static void post_settings(int sock, const char *req, int req_len)
     settings_t s;
     settings_copy_saved(&s);
     uint32_t bright = s.brightness;
+    uint32_t pstyle = s.panel_style;
     const char *err = NULL;
     if (!err) err = take_str(root, "admin_password", s.admin_password, sizeof(s.admin_password), true);
     if (!err) err = take_str(root, "wifi_ssid", s.wifi_ssid, sizeof(s.wifi_ssid), false);
@@ -587,6 +589,7 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "boot_chirp", &s.boot_chirp);
     if (!err) err = take_bool(root, "touch_click", &s.touch_click);
     if (!err) err = take_bool(root, "clock_24h", &s.clock_24h);
+    if (!err) err = take_u32(root, "panel_style", &pstyle, 1);
     if (!err) err = take_str(root, "discord_webhook", s.discord_webhook, sizeof(s.discord_webhook), true);
     bool dc_clear = false;      // blank means "unchanged", so clearing needs saying
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
@@ -635,6 +638,7 @@ static void post_settings(int sock, const char *req, int req_len)
     }
     if (!err) err = take_bool(root, "mikrotik_enabled", &s.mikrotik_enabled);
     s.brightness = (uint8_t)bright;
+    s.panel_style = (uint8_t)pstyle;
     bool pw_changed = false;
     {
         const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, "admin_password");

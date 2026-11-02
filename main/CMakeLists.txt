@@ -89,6 +89,7 @@ idf_component_register(
         "alarm/describe.c"
         "ui/display.cpp"
         "ui/ui.c"
+        "ui/ui_lcars.c"
         "ui/lv_mem_psram.c"
         "camera/cam.c"
         "admin/api_cam.c"

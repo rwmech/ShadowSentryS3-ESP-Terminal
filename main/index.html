@@ -905,6 +905,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
       <label for="st-clk">Panel clock</label><select id="st-clk"><option value="12">12-hour (3:39 PM)</option><option value="24">24-hour (15:39)</option></select>
+      <label for="st-pstyle">Panel style</label><select id="st-pstyle"><option value="1">LCARS (pages)</option><option value="0">Dashboard</option></select>
       <h4>Alarm</h4>
       <label for="st-rem">Reminder interval (s)</label><input type="number" id="st-rem" min="60" max="3600" step="1">
       <label for="st-quiet">Quiet time (s)</label><input type="number" id="st-quiet" min="60" max="86400" step="1">
@@ -2145,7 +2146,7 @@ async function loadSettings(){
   const m=$('st-msg');m.className='msg ok';m.replaceChildren(spinner('Loading the settings...'));
   try{
     const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();_stLast=s;
-    $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';
+    $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';$('st-pstyle').value=String(s.panel_style===0?0:1);
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
     $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;
@@ -2191,7 +2192,7 @@ async function saveSettings(ev){
   }
   const body={wifi_ssid:$('st-ssid').value,tg_chat_id:$('st-chat').value.trim(),tz:$('st-tz').value.trim(),
     alarm_remind_s:Number($('st-rem').value),alarm_quiet_s:Number($('st-quiet').value),brightness:Number($('st-br').value),
-    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,clock_24h:$('st-clk').value==='24'};
+    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,clock_24h:$('st-clk').value==='24',panel_style:+$('st-pstyle').value};
   let am=0;TNAME.forEach((_,i)=>{if($('st-al-'+i).checked)am|=(1<<i);});
   body.alert_mask=am>>>0;
   body.scan_ports=Number($('st-sp').value);body.scan_window_s=Number($('st-sw').value);

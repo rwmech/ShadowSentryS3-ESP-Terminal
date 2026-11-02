@@ -26,6 +26,9 @@ static const char *TAG = "SETTINGS";
 #ifndef DISPLAY_CLOCK_24H
 #define DISPLAY_CLOCK_24H 0
 #endif
+#ifndef DISPLAY_PANEL_STYLE
+#define DISPLAY_PANEL_STYLE 1
+#endif
 #ifndef DISCORD_WEBHOOK_URL
 #define DISCORD_WEBHOOK_URL ""
 #endif
@@ -105,6 +108,7 @@ static void defaults(settings_t *s)
     s->boot_chirp     = true;
     s->touch_click    = true;
     s->clock_24h      = DISPLAY_CLOCK_24H != 0;
+    s->panel_style    = DISPLAY_PANEL_STYLE;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
     // Detection: every type alerts except discovery (ALERT_MASK_DEFAULT),
@@ -187,6 +191,7 @@ void settings_init(void)
         get_bool(h, "boot_chirp", &s_live.boot_chirp);
         get_bool(h, "click", &s_live.touch_click);
         get_bool(h, "clock24", &s_live.clock_24h);
+        get_u8(h, "panel", &s_live.panel_style);
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
         get_u32(h, "alert_mask", &s_live.alert_mask);
@@ -455,6 +460,7 @@ static const char *validate(const settings_t *s)
                                        return "quiet time must be 60-86400 s";
     if (s->brightness < 5 || s->brightness > 100)
                                        return "brightness must be 5-100 %";
+    if (s->panel_style > 1)            return "panel_style must be 0 (dashboard) or 1 (LCARS)";
     if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
         return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
     if (s->scan_ports < 3 || s->scan_ports > 32)
@@ -519,6 +525,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "boot_chirp", s->boot_chirp));
     SET(nvs_set_u8(h,  "click",      s->touch_click));
     SET(nvs_set_u8(h,  "clock24",    s->clock_24h));
+    SET(nvs_set_u8(h,  "panel",      s->panel_style));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
     SET(nvs_set_u32(h, "alert_mask", s->alert_mask));

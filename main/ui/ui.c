@@ -11,6 +11,7 @@
 #include "discovery.h"
 #include "tripwire.h"           // with http_engine.h and trap_listen.h: the port config
 #include "settings.h"
+#include "ui_lcars.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -185,6 +186,12 @@ static bool     s_fm_on;                // measuring the stripes, after a view c
 static uint32_t s_fm_start, s_fm_n, s_fm_px_max;
 static int64_t  s_fm_sum, s_fm_max;
 static bool     s_fm_full;              // the next refresh is a view's full repaint
+static const char *s_fm_what;           // what is measured: NULL the emblem's stripes
+
+// Panel style (settings panel_style): true LCARS (ui_lcars.c), false the dashboard
+static bool       s_style_lc;
+static lv_coord_t s_btn_y = 320;        // top of the shown button row (the face light stops above it)
+static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
 
 // ── Listeners (run on other tasks: copy and queue only) ───────────────────────
 
@@ -236,6 +243,10 @@ static void fmt_time(uint32_t ts, bool secs, char *buf, size_t len)
 }
 
 // How long the incident has been open, from its first event. Empty before SNTP.
+void ui_fmt_time(uint32_t ts, bool secs, char *buf, size_t len) { fmt_time(ts, secs, buf, len); }
+
+uint32_t ui_loop_max_us(void) { return s_loop_max_prev > s_loop_max_us ? s_loop_max_prev : s_loop_max_us; }
+
 static void fmt_age(uint32_t first, char *buf, size_t len)
 {
     time_t now = time(NULL);
@@ -455,7 +466,7 @@ static void seg_style(lv_obj_t *seg, lv_color_t track, lv_color_t head, int head
 static void runlight_cb(lv_timer_t *t)
 {
     (void)t;
-    if (s_emb) return;
+    if (s_emb || lv_obj_has_flag(s_rl_track, LV_OBJ_FLAG_HIDDEN)) return;
     const int32_t w = RUNLIGHT_HEAD_W + RUNLIGHT_TRAIL_W;
     uint32_t ph = lv_tick_get() % RUNLIGHT_SWEEP_MS;
     lv_obj_set_x(s_rl_seg, (lv_coord_t)(-w + (int32_t)((480 + w) * ph / RUNLIGHT_SWEEP_MS)));
@@ -673,8 +684,7 @@ static void lit_snap(const char *action)
 {
 #if CAM_FLASH_ENABLE
     if (cam_ready() && !s_lit) {
-        lv_coord_t h = s_emb == &s_emb_red ? RED_BTN_Y - LIT_BTN_CLEAR
-                     : s_emb == &s_emb_yel ? YEL_BTN_Y - LIT_BTN_CLEAR : 320;
+        lv_coord_t h = s_btn_y < 320 ? s_btn_y - LIT_BTN_CLEAR : 320;
         lv_obj_set_height(s_white, h);
         lv_obj_clear_flag(s_white, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_white);    // over a dialog too
@@ -788,9 +798,10 @@ static void refr_monitor_cb(lv_disp_drv_t *d, uint32_t ms, uint32_t px)
     int64_t us = s_fl_t0 ? s_fl_t1 - s_fl_t0 : 0;
     s_fl_t0 = 0;
     if (px == 0) return;
-    if (s_fm_full && px >= 480 * 160) {
+    if (s_fm_full && px >= 400 * 160) {
         s_fm_full = false;
-        ESP_LOGI(TAG, "View repaint: %lu px, flush start to done %lld us", (unsigned long)px, us);
+        ESP_LOGI(TAG, "%s repaint: %lu px, flush start to done %lld us", s_fm_what ? s_fm_what : "View",
+                 (unsigned long)px, us);
         return;
     }
     if (!s_fm_on || lv_tick_elaps(s_fm_start) < SWEEP_MEASURE_DELAY_MS) return;
@@ -800,12 +811,31 @@ static void refr_monitor_cb(lv_disp_drv_t *d, uint32_t ms, uint32_t px)
     if (px > s_fm_px_max) s_fm_px_max = px;
     if (lv_tick_elaps(s_fm_start) >= SWEEP_MEASURE_DELAY_MS + SWEEP_MEASURE_MS) {
         s_fm_on = false;
-        ESP_LOGI(TAG, "Stripes: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, "
-                 "up to %lu px (the two stripe areas are %d px)",
-                 (unsigned long)s_fm_n, SWEEP_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
-                 (unsigned long)s_fm_px_max, s_emb ? 2 * 2 * s_emb->hw_max * s_emb->area_h : 0);
+        if (s_fm_what)
+            ESP_LOGI(TAG, "%s: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, up to %lu px",
+                     s_fm_what, (unsigned long)s_fm_n, SWEEP_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
+                     (unsigned long)s_fm_px_max);
+        else
+            ESP_LOGI(TAG, "Stripes: %lu refreshes in %d ms, flush start to done avg %lld us, max %lld us, "
+                     "up to %lu px (the two stripe areas are %d px)",
+                     (unsigned long)s_fm_n, SWEEP_MEASURE_MS, s_fm_sum / s_fm_n, s_fm_max,
+                     (unsigned long)s_fm_px_max, s_emb ? 2 * 2 * s_emb->hw_max * s_emb->area_h : 0);
     }
 }
+
+static void measure_start(const char *what)
+{
+    s_fm_what = what;
+    s_fm_full = true;
+    s_fm_on = true;
+    s_fm_start = lv_tick_get();
+    s_fm_n = s_fm_px_max = 0;
+    s_fm_sum = s_fm_max = 0;
+}
+
+// A page change on the LCARS panel: log its repaint, then SWEEP_MEASURE_MS of
+// what moves on it.
+void ui_refr_measure(const char *what) { measure_start(what); }
 
 static void refr_timing_init(void)
 {
@@ -944,7 +974,8 @@ static void kpi_seed_once(void)
     if (!r) return;
     int n = log_store_get_recent(r, UI_SEED_ROWS);
     memset(&s_kpi, 0, sizeof(s_kpi));
-    for (int i = n - 1; i >= 0; i--) kpi_add(&r[i]);
+    lcars_reset();
+    for (int i = n - 1; i >= 0; i--) { kpi_add(&r[i]); lcars_event(&r[i]); }
     heap_caps_free(r);
     s_off_dirty = true;
 }
@@ -1131,6 +1162,8 @@ static void place(lv_obj_t *o, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coor
 static void view_incident(alarm_cond_t c)
 {
     bool red = c == ALARM_COND_RED;
+    lcars_view(c, false);
+    s_btn_y = red ? RED_BTN_Y : YEL_BTN_Y;
     show(s_idle, false);
     show(s_rl_track, false);                // the emblem's stripes are the only motion
     show(s_bar, !red);                      // RED has the whole screen
@@ -1161,6 +1194,8 @@ static void view_incident(alarm_cond_t c)
 
 static void view_armed(void)
 {
+    lcars_view(ALARM_COND_GREEN, false);
+    s_btn_y = 320;
     s_emb = NULL;
     show(s_inc, false);
     show(s_bar, true);
@@ -1169,11 +1204,27 @@ static void view_armed(void)
     dash_refresh(true);                     // not kept up while hidden
 }
 
+// The LCARS panel, GREEN: its frame, rail and pages over everything.
+static void view_lcars_green(void)
+{
+    s_emb = NULL;
+    s_btn_y = 320;
+    show(s_inc, false);
+    show(s_bar, false);
+    show(s_rl_track, false);
+    show(s_idle, false);
+    lcars_view(ALARM_COND_GREEN, true);
+}
+
 // Once per change of condition or incident: what the panel now renders, so
 // a console capture shows it.
 static void log_view(alarm_cond_t c)
 {
     lv_obj_update_layout(lv_scr_act());
+    if (c == ALARM_COND_GREEN && s_style_lc) {
+        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, LCARS panel", (unsigned long)s_alarm.id);
+        return;
+    }
     if (c == ALARM_COND_GREEN) {
         int off = 0, talk = 0;
         for (int i = 0; i < DASH_ROWS; i++) {
@@ -1198,7 +1249,9 @@ static void apply_alarm(const alarm_info_t *a)
     alarm_cond_t was = cond_of(&s_alarm), c = cond_of(a);
     // Count updates (up to 1/s during a scan) must not reset the button label
     // or the fill mid-press: those go back to their start only on a change.
-    bool changed = c != was || a->id != s_alarm.id;
+    bool lc = settings_get()->panel_style == 1;
+    bool changed = c != was || a->id != s_alarm.id || lc != s_style_lc;
+    s_style_lc = lc;
     s_alarm = *a;
     if (changed) hold_reset(&s_h_ack);
 
@@ -1224,7 +1277,8 @@ static void apply_alarm(const alarm_info_t *a)
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         set_text(s_pill_lbl, COND_NAME[c]);
         runlight_set(COL_GREEN);
-        view_armed();
+        if (lc) view_lcars_green();
+        else    view_armed();
     }
     refresh_age();
     s_bl_red = c == ALARM_COND_RED;
@@ -1235,13 +1289,8 @@ static void apply_alarm(const alarm_info_t *a)
     if (changed || !logged) {
         logged = true;
         lv_obj_invalidate(lv_scr_act());
-        s_fm_full = true;
-        if (c != ALARM_COND_GREEN) {              // then time the stripes
-            s_fm_on = true;
-            s_fm_start = lv_tick_get();
-            s_fm_n = s_fm_px_max = 0;
-            s_fm_sum = s_fm_max = 0;
-        }
+        if (c != ALARM_COND_GREEN) measure_start(NULL);   // then time the stripes
+        else if (!lc) s_fm_full = true;     // LCARS: its page change measures
         log_view(c);
     }
 }
@@ -1309,7 +1358,12 @@ static void clock_cb(lv_timer_t *t)
     if (a.state != s_alarm.state || a.id != s_alarm.id) {
         ESP_LOGW(TAG, "Alarm state ahead of the UI queue (message dropped or late), applying it now");
         apply_alarm(&a);
+    } else if ((settings_get()->panel_style == 1) != s_style_lc) {
+        ESP_LOGI(TAG, "Panel style now %s", s_style_lc ? "dashboard" : "LCARS");
+        apply_alarm(&a);                    // live: both panels are built
     }
+    s_loop_max_prev = s_loop_max_us;
+    s_loop_max_us = 0;
     refresh_age();
 }
 
@@ -1506,6 +1560,7 @@ static void build_ui(void)
     lv_obj_clear_flag(s_idle, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
     build_dash();
+    lcars_build(scr);                       // over the dashboard, hidden until chosen
 
     // Running light: a dark track the full width, and the moving segment on
     // it. On the top layer, so a dialog cannot stop it. Green only.
@@ -1581,6 +1636,7 @@ static void ui_task(void *arg)
             switch (m.kind) {
             case UMSG_EVENT:
                 kpi_add(&m.e);
+                lcars_event(&m.e);
                 break;
             case UMSG_ALARM:    apply_alarm(&m.a);              break;
             case UMSG_NET:      lv_label_set_text(s_net, m.net); break;
@@ -1600,7 +1656,9 @@ static void ui_task(void *arg)
         if (s_debug_paused) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
         int64_t t = esp_timer_get_time();
         lv_timer_handler();
-        loop_measure((uint32_t)(esp_timer_get_time() - t));
+        uint32_t us = (uint32_t)(esp_timer_get_time() - t);
+        if (us > s_loop_max_us) s_loop_max_us = us;
+        loop_measure(us);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

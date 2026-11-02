@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap" rel="stylesheet">
+<title>ShadowSentry S3: LCARS-style panel mockup v3, Cerritos (480 x 320)</title>
+<style>
+  :root{
+    /* Lower Decks palette, thelcars.com Color Guide (Cerritos) */
+    --c1:#ff7700; --c2:#ffcc99; --c3:#cc5500; --c4:#ffaa44; --c5:#ffeecc; --c6:#ff9911;
+    --txt:#ffeecc; --dim:#8a5a2b; --track:#24170a; --accent:#ff4400;
+    --red:#e00000; --ylw:#f0b000; --scan:#a52a2a; /* red-brown, the scan and selection colour */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0d0d0d;color:#ddd;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif;padding:24px}
+  h1{font-size:18px;margin:0 0 4px}
+  p.sub{margin:0 0 18px;color:#aaa;max-width:1000px}
+  .wrap{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .stage{width:960px;height:640px;border:2px solid #333;border-radius:10px;overflow:hidden;background:#000}
+  .controls{max-width:430px}
+  .controls button{display:block;width:100%;margin:0 0 7px;padding:8px 12px;border:0;border-radius:16px;
+    font:600 12px Montserrat,Segoe UI,Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;text-align:right;color:#000;background:#ffaa44}
+  .controls h2{font-size:14px;margin:16px 0 6px;color:#fff}
+  .controls ul{margin:0;padding-left:18px;color:#bbb}
+  .controls li{margin-bottom:6px}
+
+  /* 480 x 320 at 2x. Text sizes are the board's: Montserrat 12, 14, 20, 28 only. */
+  .screen{position:relative;width:480px;height:320px;background:#000;overflow:hidden;transform:scale(2);transform-origin:0 0;
+    font-family:Montserrat,"Segoe UI",Arial,sans-serif;font-size:12px;line-height:14px;text-transform:uppercase;color:var(--txt);user-select:none}
+  .abs{position:absolute}
+  .f12{font-size:12px;line-height:14px} .f14{font-size:14px;line-height:17px} .f20{font-size:20px;line-height:24px} .f28{font-size:28px;line-height:32px}
+  .el-t{left:0;top:0;width:70px;height:32px;background:var(--c1);border-top-left-radius:24px}
+  .el-t-in{left:52px;top:10px;width:18px;height:22px;background:#000;border-top-left-radius:8px}
+  .el-b{left:0;top:286px;width:70px;height:34px;background:var(--c3);border-bottom-left-radius:24px}
+  .el-b-in{left:52px;top:286px;width:18px;height:24px;background:#000;border-bottom-left-radius:8px}
+  .seg{position:absolute;height:10px}
+  .cap{border-radius:0 5px 5px 0}
+  .title{right:4px;top:-1px;color:var(--c1)}
+  .clock{right:4px;top:304px;color:var(--c4)}
+  .rail{left:0;top:36px;width:52px;display:flex;flex-direction:column;gap:3px}
+  .rail button{all:unset;box-sizing:border-box;width:52px;height:38px;background:var(--c2);color:#000;font-size:12px;line-height:13px;text-align:right;
+    padding:0 4px 3px 0;display:flex;align-items:flex-end;justify-content:flex-end;cursor:pointer}
+  .rail button:nth-child(2){background:var(--c6)} .rail button:nth-child(3){background:var(--c4)}
+  .rail button:nth-child(4){background:var(--c5)} .rail button:nth-child(5){background:var(--c3)}
+  /* selected: a dark red line along the bottom of the box, text stays black */
+  .rail button{position:relative}
+  .rail button.on{border-bottom:2px solid var(--scan);padding-bottom:1px}   /* selected: the box's own bottom edge is the red line */
+  .rail button:nth-child(6){background:var(--c6)}
+  .auto{left:184px;top:305px;height:14px;line-height:14px;color:#000;background:var(--c4);padding:0 6px;border-radius:7px;cursor:pointer}
+  .auto.off{background:var(--dim)}
+  .content{left:76px;top:20px;width:400px;height:282px}
+  .page{display:none;position:absolute;inset:0}
+  .page.on{display:block}
+  .k{color:var(--c4)}
+  .pill{display:inline-block;height:14px;line-height:14px;padding:0 6px;border-radius:7px;color:#000}
+
+  /* OPS */
+  .cond{left:0;top:0;width:400px;height:18px;border-radius:9px;background:var(--c4);color:#000;line-height:18px;padding:0 10px;text-align:right}
+  .tiles{left:0;top:24px;width:300px;display:grid;grid-template-columns:repeat(4,72px);gap:4px}
+  .tile .v{color:var(--c1)}
+  .tile:nth-child(2) .v{color:var(--c2)} .tile:nth-child(3) .v{color:var(--accent)} .tile:nth-child(4) .v{color:var(--c4)}
+  .tile .d{color:var(--dim)}
+  .ports{left:310px;top:24px;width:90px;height:258px}
+  .ports .grid{display:grid;grid-template-columns:45px 45px;row-gap:0;margin-top:2px}
+  /* each port in its page's rail colour: TRAPS, WIRES, NET; dim until hit today; the scan steps through in red-brown */
+  .ports span{height:13px;line-height:13px;font-family:Montserrat,"Segoe UI",Arial,sans-serif;opacity:.45}
+  .ports span.trap{color:var(--c6)} .ports span.wire{color:var(--c4)} .ports span.net{color:var(--c5)}
+  .ports span.hit{opacity:1}
+  .ports span.cur{color:var(--scan);opacity:1}
+  .chart{left:0;top:90px;width:300px;height:80px}
+  .bars{position:absolute;left:18px;top:16px;width:282px;height:48px;display:flex;align-items:flex-end;gap:2px}
+  .bars i{flex:1;background:var(--c2);display:block}
+  .bars i.now{background:var(--c1)}
+  .scale{position:absolute;left:0;top:14px;width:14px;height:52px;color:var(--dim);display:flex;flex-direction:column;justify-content:space-between;text-align:right;font-size:12px;line-height:12px}
+  .scan{position:absolute;top:16px;width:2px;height:48px;background:var(--accent)}
+  .ticks{position:absolute;left:18px;top:66px;width:282px;display:flex;justify-content:space-between;color:var(--dim)}
+  .focus{left:0;top:178px;width:300px;height:104px;border-left:4px solid var(--c1);padding:2px 0 0 8px}
+  .focus .h{color:var(--c1);margin-bottom:3px}
+  .focus .l{line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .focus .l b{color:var(--c4);font-weight:400}
+
+  /* TRAPS */
+  .row{height:22px;margin-bottom:3px;display:flex;align-items:center;gap:6px;cursor:pointer}
+  .row .tag{width:132px;height:22px;line-height:22px;border-radius:11px 0 0 11px;background:var(--c6);color:#000;text-align:right;padding-right:6px;flex:none}
+  .row .m{flex:1;height:8px;background:var(--track);position:relative}
+  .row .m i{position:absolute;left:0;top:0;bottom:0;background:var(--c1)}
+  .row .n{width:30px;text-align:right;color:var(--c2)}
+  .row .w{width:56px;text-align:right;color:var(--dim)}
+  .row .tag{position:relative}
+  .row.sel .tag{border-bottom:2px solid var(--scan);line-height:20px}
+  .tdet{left:0;top:228px;width:400px;height:54px;border-left:4px solid var(--accent);padding:2px 0 0 8px;line-height:16px}
+
+  /* TRIPWIRES */
+  .tw{display:grid;grid-template-columns:196px 196px;gap:3px 8px}
+  .tw .c{height:20px;display:flex;align-items:center;gap:6px;cursor:pointer;border-left:6px solid var(--dim);padding-left:6px}
+  .tw .c.hit{border-color:var(--accent)} .tw .c.armed{border-color:var(--c4)} .tw .c.off{border-color:#3a2a1a;color:var(--dim)}
+  .tw .c .nm{flex:1;white-space:nowrap;overflow:hidden}
+  .tw .c .n{width:28px;text-align:right;color:var(--c2)}
+  .tw .c{position:relative}
+  .tw .c.sel{border-bottom:2px solid var(--scan)}
+
+  /* NET */
+  .gauges{display:grid;grid-template-columns:repeat(5,76px);gap:5px}
+  .g .col{height:92px;background:var(--track);position:relative}
+  .g .col i{position:absolute;left:0;right:0;bottom:0;background:var(--c4)}
+  .g .col s{position:absolute;left:0;right:0;height:1px;background:#000}
+  .g .v{color:var(--c2);text-align:center;margin-top:2px}
+  .g .k{text-align:center}
+  .netl{position:absolute;left:0;top:150px;width:400px;display:grid;grid-template-columns:repeat(3,128px);gap:6px 8px}
+  .netl .v{color:var(--c2)}
+
+  /* DEVICES */
+  .dev{height:30px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--track);cursor:pointer}
+  .dev .nm{flex:1;color:var(--c2)}
+  .dev .nm small{display:block;font-size:12px;line-height:13px;color:var(--dim)}
+  .dev .q{width:96px;text-align:right;color:var(--c4)}
+  .lights{display:flex;gap:3px}
+  .lights i{width:8px;height:8px;background:var(--track);display:block}
+  .lights i.on{background:var(--c1)}
+  .dd .k{margin-top:4px} .dd .v{color:var(--c2)}
+  .btns{display:flex;gap:6px}
+  .btns button{all:unset;box-sizing:border-box;height:34px;border-radius:17px;padding:0 14px;display:flex;align-items:center;justify-content:center;
+    font-size:14px;color:#000;background:var(--c4);cursor:pointer;position:relative;overflow:hidden}
+  .btns button.danger{background:var(--accent)}
+  .btns button .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--c5);opacity:.55}
+  .btns button span{position:relative}
+
+  /* LOG */
+  .log .e{height:16px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border-bottom:1px solid var(--track)}
+  .log .e b{color:var(--c1);font-weight:400} .log .e i{font-style:normal;color:var(--c4)}
+
+  /* ALERT: the board's emblem, small, no side bars, only the stripes move */
+  .em{left:0;top:0;width:400px;height:112px}
+  .acode{left:0;top:114px;width:400px;text-align:center;color:var(--c5)}
+  .asrc{left:0;top:139px;width:400px;text-align:center;color:var(--c2)}
+  .ahead{left:0;top:158px;width:400px;text-align:center;color:var(--c2);text-transform:none}
+  .astats{left:0;top:178px;width:400px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .astats div{border-top:3px solid var(--c3);padding-top:2px}
+  .astats .v{color:var(--c2)}
+  .abtns{position:absolute;left:0;top:232px;width:400px}
+  .abtns button{flex:none;height:48px;border-radius:24px;padding:0 4px}
+  .abtns button:nth-child(1){width:132px} .abtns button:nth-child(2){width:126px} .abtns button:nth-child(3){width:130px}
+
+  .confirm{left:40px;top:60px;width:320px;height:150px;background:#000;border:3px solid var(--c4);border-radius:14px;padding:12px;display:none;z-index:5}
+  .confirm .q{color:var(--c2);line-height:17px;text-transform:none;font-size:14px;height:84px}
+</style>
+</head>
+<body>
+<h1>ShadowSentry S3: LCARS-style front panel, mockup v3 (Cerritos)</h1>
+<p class="sub">The board's 480 x 320 at 2x. Only the board's fonts and sizes: Montserrat 12, 14, 20 and 28. Every string was measured against the board's own LVGL font tables (C:\Users\rwmec\Documents\Development\Honeypot\mockups\fitcheck.py). The frame takes 52 px on the left and 20 px at top and bottom; content gets 400 x 282. The port table is the real list of ports the board listens on, highlighted in turn; a port hit today lights up. Hold is only for ACKNOWLEDGE; ignores and block ask to confirm. Your browser may not have Montserrat installed, so letter widths can differ slightly from the panel.</p>
+<div class="wrap">
+<div class="stage">
+<div class="screen" id="scr">
+  <div class="abs el-t"></div><div class="abs el-t-in"></div>
+  <div class="seg" style="left:74px;top:0;width:86px;background:var(--c1)"></div>
+  <div class="seg" style="left:163px;top:0;width:22px;background:var(--c2)"></div>
+  <div class="seg cap" style="left:188px;top:0;width:24px;background:var(--c4)"></div>
+  <div class="abs title f14" id="title">SHADOWSENTRY | 01 OPS</div>
+
+  <div class="abs rail" id="rail">
+    <button data-p="ops">01<br>OPS</button>
+    <button data-p="traps">02<br>TRAPS</button>
+    <button data-p="wires">03<br>WIRES</button>
+    <button data-p="net">04<br>NET</button>
+    <button data-p="dev">05<br>DEV</button>
+    <button id="autob" class="on">06<br>AUTO</button>
+  </div>
+
+  <div class="abs el-b"></div><div class="abs el-b-in"></div>
+  <div class="seg" style="left:74px;top:310px;width:70px;background:var(--c3)"></div>
+  <div class="seg cap" style="left:147px;top:310px;width:30px;background:var(--c6)"></div>
+  <div class="abs clock" id="clock">4:08 PM</div>
+
+  <div class="abs content" id="content">
+    <!-- 01 OPS -->
+    <div class="page on" id="p-ops">
+      <div class="abs cond" id="cond">CONDITION GREEN | 35 PORTS WATCHED</div>
+      <div class="abs tiles">
+        <div class="tile"><span class="pill" style="background:var(--c1)">ALERTS</span><div class="v f28">3</div><div class="d">41 TOTAL</div></div>
+        <div class="tile"><span class="pill" style="background:var(--c2)">PROBES</span><div class="v f28">12</div><div class="d">TODAY</div></div>
+        <div class="tile"><span class="pill" style="background:var(--accent)">SCANS</span><div class="v f28">1</div><div class="d">TODAY</div></div>
+        <div class="tile"><span class="pill" style="background:var(--c4)">DEVICES</span><div class="v f28">66</div><div class="d">0 NEW</div></div>
+      </div>
+      <div class="abs ports"><span class="k">PORTS</span><div class="grid" id="ports"></div></div>
+      <div class="abs chart"><span class="k">EVENTS PER HOUR, 24 H</span>
+        <div class="scale"><span>12</span><span>0</span></div>
+        <div class="bars" id="bars"></div><div class="scan" id="scan"></div>
+        <div class="ticks"><span>4 PM</span><span>10 PM</span><span>4 AM</span><span>10 AM</span><span>NOW</span></div>
+      </div>
+      <div class="abs focus" id="focus"></div>
+    </div>
+
+    <!-- 02 TRAPS -->
+    <div class="page" id="p-traps">
+      <div class="k" style="margin-bottom:2px">TRAPS | HITS TODAY | LAST</div>
+      <div id="traps"></div>
+      <div class="abs tdet" id="tdet">TAP A TRAP FOR ITS LAST HIT</div>
+    </div>
+
+    <!-- 03 TRIPWIRES -->
+    <div class="page" id="p-wires">
+      <div class="k" style="margin-bottom:3px">TRIPWIRES | ANY TOUCH ALERTS</div>
+      <div class="tw" id="tw"></div>
+      <div class="abs tdet" id="wdet">TAP A TRIPWIRE FOR ITS LAST HIT</div>
+    </div>
+
+    <!-- 04 NET -->
+    <div class="page" id="p-net">
+      <div class="gauges" id="gauges"></div>
+      <div class="netl">
+        <div><div class="k">ACCESS POINT</div><div class="v">B0:A7:B9:40:AC:A2</div></div>
+        <div><div class="k">CLOCK</div><div class="v">SYNCED 2 MIN AGO</div></div>
+        <div><div class="k">UPTIME</div><div class="v">2 D 04 H 11 M</div></div>
+        <div><div class="k">PI-HOLE</div><div class="v">OK | 31 % BLOCKED</div></div>
+        <div><div class="k">ROUTER</div><div class="v">OK | 84 HOSTS</div></div>
+        <div><div class="k">IPFIX</div><div class="v">412 FLOWS / MIN</div></div>
+        <div><div class="k">MICROSD</div><div class="v">7.2 GB FREE</div></div>
+        <div><div class="k">CAMERA</div><div class="v">READY</div></div>
+        <div><div class="k">DISCORD</div><div class="v">POSTED 14 MIN AGO</div></div>
+      </div>
+    </div>
+
+    <!-- 05 DEVICES -->
+    <div class="page" id="p-dev">
+      <div id="devlist"></div>
+      <div id="devdet" style="display:none"></div>
+    </div>
+
+
+    <!-- ALERT -->
+    <div class="page" id="p-alert">
+      <svg class="abs em" viewBox="0 0 400 112" id="emsvg"></svg>
+      <div class="abs acode f20" id="acode">CODE 40-02 RDP TRIPWIRE</div>
+      <div class="abs asrc f14" id="asrc">192.168.0.75 | DELL INC. | DELL LAPTOP</div>
+      <div class="abs ahead" id="ahead">RDP on 3389, 19 bytes, TLS client hello</div>
+      <div class="abs astats">
+        <div><div class="k">EVENTS</div><div class="v f14">3</div></div>
+        <div><div class="k">OPEN FOR</div><div class="v f14" id="aopen">0:42</div></div>
+        <div><div class="k">ALSO SEEN</div><div class="v f14">17-03 PROBE</div></div>
+      </div>
+      <div class="btns abtns">
+        <button class="danger" id="ack"><i class="fill"></i><span>ACKNOWLEDGE</span></button>
+        <button onclick="ask('Ignore code 40-02 RDP tripwire from 192.168.0.75 (Dell)? The dashboard can undo it.')"><span>IGNORE ERROR</span></button>
+        <button onclick="ask('Ignore all alerts from 192.168.0.75 (Dell)? The dashboard can undo it.')"><span>IGNORE DEVICE</span></button>
+      </div>
+    </div>
+
+    <div class="abs confirm" id="confirm">
+      <div class="q" id="cq"></div>
+      <div class="btns"><button style="flex:1" onclick="closeAsk()"><span>CANCEL</span></button><button class="danger" style="flex:1" onclick="closeAsk(true)"><span>CONFIRM</span></button></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="controls">
+  <button onclick="cond('green')">Condition green</button>
+  <button onclick="cond('ylw')">Simulate yellow alert</button>
+  <button onclick="cond('red')">Simulate red alert</button>
+  <button onclick="newEvent()">Simulate a new event (focus panel, ports)</button>
+  <h2>Pages</h2>
+  <ul><li>Rail: 01 to 05 pick a page and stop rotation at once. 06 AUTO (underlined while on). Selection: the selected box's bottom edge becomes a dark red line (the same red as the port scan) rotates the pages every 60 s; tap it to turn rotation on or off. No page dots.</li></ul>
+  <ul>
+    <li>01 OPS: today's counts, events per hour with the scan line, the focus panel (rotates every 5 s: last event, Pi-hole, router, top trap), and the port table: the 35 ports the board listens on, zero padded, each in its page's rail colour (TRAPS, WIRES, NET), dim until hit today; the scan steps through them in dark red.</li>
+    <li>02 TRAPS: the services that pretend to be something (Hikvision, camera stream, Telnet, SSH, FTP, ADB), hits today, last hit. Tap: who, what they sent.</li>
+    <li>03 TRIPWIRES: services nothing should touch (RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect, the MikroTik decoys) and the router tripwires. Bar colour: lit (hit today), armed, or off (router ones until syslog is on).</li>
+    <li>04 NET and 05 DEV as before. DEV: tap a device, BLOCK asks to confirm. No log page on the panel: the log stays on the dashboard.</li>
+    <li>RED / YELLOW: the board's own emblem, smaller, no side bars, only its stripes move (1 s a stripe on red, 2 s on yellow). No frame flashing, no pulsing text.</li>
+  </ul>
+  <h2>Will the display keep up?</h2>
+  <ul>
+    <li>Scan line: a 2 x 48 px object stepping every 50 ms. LVGL redraws the old and new spot, about 200 px a frame, well under a millisecond of SPI at 60 MHz.</li>
+    <li>Port highlight: two 45 x 13 px cells every 150 ms.</li>
+    <li>Emblem stripes: two areas of about 146 x 18 px, already running on the board (YELLOW size), logged at under 5300 px a frame.</li>
+    <li>A page change redraws the 400 x 282 content box once (about 225 KB of pixels, roughly 30 ms of SPI). The SD card shares that bus; the page change is rare, the rest is small.</li>
+  </ul>
+</div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const PAGES=['ops','traps','wires','net','dev'], NAMES={ops:'OPS',traps:'TRAPS',wires:'TRIPWIRES',net:'NET',dev:'DEVICES'};
+let page='ops', mode='green', auto=true, holdUntil=0;
+
+function show(p){
+  page=p;
+  $$('.page').forEach(e=>e.classList.toggle('on',e.id==='p-'+p));
+  // The title names the page, so the rail marks a page only after a person picked it (AUTO off); in AUTO only AUTO is marked.
+  $$('#rail button[data-p]').forEach(b=>b.classList.toggle('on',!auto && b.dataset.p===p));
+  $('#title').textContent = p==='alert' ? 'SHADOWSENTRY | '+(mode==='red'?'RED ALERT':'YELLOW ALERT')
+                                       : 'SHADOWSENTRY | '+String(PAGES.indexOf(p)+1).padStart(2,'0')+' '+NAMES[p];
+  if(p==='dev'){ $('#devdet').style.display='none'; $('#devlist').style.display=''; }
+}
+function touched(){ holdUntil=Date.now()+60000; }
+// Touching a page button stops AUTO at once; 06 AUTO turns rotation back on (and off).
+function setAuto(on){ auto=on; $('#autob').classList.toggle('on',on); show(page); }
+$$('#rail button[data-p]').forEach(b=>b.onclick=()=>{ if(mode==='green'){ setAuto(false); show(b.dataset.p); } });
+$('#autob').onclick=()=>{ if(mode==='green') setAuto(!auto); };
+$('#content').addEventListener('pointerdown',touched);
+setInterval(()=>{ if(mode==='green' && auto && Date.now()>holdUntil) show(PAGES[(PAGES.indexOf(page)+1)%PAGES.length]); },60000);   // 60 s a page (Rob)
+
+function ask(q){ $('#cq').textContent=q; $('#confirm').style.display='block'; }
+function closeAsk(ok){ $('#confirm').style.display='none'; if(ok && mode!=='green') cond('green'); }
+
+// ── Ports: the board's real listeners (TCP traps, tripwires and decoys; UDP discovery, MNDP, MAC-Telnet, syslog, IPFIX)
+const TRAPP=[21,22,23,80,554,2222,2323,5555,8000,8080,9000];                    // 02 TRAPS
+const WIREP=[445,1433,2000,3306,3389,5678,5900,6379,8291,8728,9100,20561];          // 03 WIRES (UDP 5678 MNDP, 20561 MAC-Telnet)
+const NETP=[67,137,514,987,1900,3702,4739,5355,9302,9999,20002,56700];             // 04 NET (discovery listeners, router syslog and IPFIX)
+const HIT=new Set([80,23,22,3389,6379,8291,5678,1900,9999]);
+const PORTS=[...TRAPP.map(p=>[p,'trap']),...WIREP.map(p=>[p,'wire']),...NETP.map(p=>[p,'net'])];
+$('#ports').innerHTML=PORTS.map(([p,c],i)=>`<span id="pt${i}" class="${c}${HIT.has(p)?' hit':''}">${String(p).padStart(5,'0')}</span>`).join('');
+let pc=0; setInterval(()=>{ $('#pt'+pc).classList.remove('cur'); pc=(pc+1)%PORTS.length; $('#pt'+pc).classList.add('cur'); },150);
+
+// ── OPS chart, scan line, focus
+const hrs=[2,1,0,0,1,3,0,0,0,1,0,2,4,6,3,2,5,9,4,2,7,12,6,3];
+$('#bars').innerHTML=hrs.map((v,i)=>`<i class="${i===23?'now':''}" style="height:${Math.max(2,v*4)}px"></i>`).join('');
+let sx=0; setInterval(()=>{ sx=(sx+3)%282; $('#scan').style.left=(18+sx)+'px'; },50);
+const FOCUS=[
+  ['LAST EVENTS',['17-03 PROBE | 192.168.0.75 | 2:02 PM','40-02 RDP TRIPWIRE | 192.168.0.75 | 12:58 PM','30-01 WEB LOGIN | HIKVISION 80 | 11:11 AM']],
+  ['PI-HOLE, 24 H',['48212 LOOKUPS | 31 % BLOCKED','MOST BLOCKED | SHIELD | CONVIVA.COM','ALLOWED | LG TV | LGTVSDP.COM']],
+  ['ROUTER, OUTBOUND',['BUSIEST | DELL LAPTOP | 1.2 GB DOWN','MOST HOSTS | LG WEBOS TV | 31','FLAGS | NONE']],
+  ['TRAPS TODAY',['TOP | HIKVISION 80 | 26 HITS','TRIPWIRES | RDP 3389 | 9','DECOYS | WINBOX 8291 | 2']],
+];
+let fi=0; function focus(){ const f=FOCUS[fi]; fi=(fi+1)%FOCUS.length;
+  $('#focus').innerHTML=`<div class="h">${f[0]}</div>`+f[1].map(l=>{const [k,...r]=l.split(' | ');return `<div class="l"><b>${k} |</b> ${r.join(' | ')}</div>`;}).join(''); }
+setInterval(focus,5000); focus();
+
+// ── TRAPS (code families 20 and 30)
+const traps=[
+  ['HIKVISION 80',26,'3:11 PM','192.168.0.78 | POST /DOC/PAGE/LOGIN.ASP | GG / GY'],
+  ['WEB 8080 +2',3,'1:02 PM','192.168.0.75 | GET /'],
+  ['CAMERA RTSP 554',0,'-','NO HITS TODAY'],
+  ['TELNET 23 2323',5,'1:39 PM','192.168.0.75 | ROOT / ROOT'],
+  ['SHELL SESSIONS',16,'1:40 PM','192.168.0.75 | CAT /PROC/CPUINFO'],
+  ['SSH 22 2222',1,'9:02 AM','192.168.0.75 | ADMIN / ADMIN'],
+  ['FTP 21',0,'-','NO HITS TODAY'],
+  ['ADB 5555',0,'-','NO HITS TODAY'],
+];
+const tmax=Math.max(...traps.map(t=>t[1]));
+$('#traps').innerHTML=traps.map((t,i)=>`<div class="row" data-i="${i}"><div class="tag">${t[0]}</div><div class="m"><i style="width:${t[1]/tmax*100}%"></i></div><div class="n f14">${t[1]}</div><div class="w">${t[2]}</div></div>`).join('');
+$$('#traps .row').forEach(r=>r.onclick=()=>{ $$('#traps .row').forEach(x=>x.classList.remove('sel')); r.classList.add('sel');
+  const t=traps[r.dataset.i]; $('#tdet').innerHTML=`<span style="color:var(--accent)">${t[0]} | LAST HIT ${t[2]}</span><br>${t[3]}`; });
+
+// ── TRIPWIRES (code families 40 and 55)
+const wires=[
+  ['RDP 3389',9,'hit','12:58 PM','192.168.0.75 | 19 BYTES, TLS CLIENT HELLO'],['VNC 5900',0,'armed','-','NOTHING YET'],
+  ['SMB 445',2,'hit','2:02 PM','192.168.0.75 | SMB NEGOTIATE'],['REDIS 6379',4,'hit','12:58 PM','192.168.0.75 | PING'],
+  ['MYSQL 3306',0,'armed','-','NOTHING YET'],['MSSQL 1433',0,'armed','-','NOTHING YET'],
+  ['JETDIRECT 9100',0,'armed','-','NOTHING YET'],['WINBOX 8291',2,'hit','12:59 PM','192.168.0.75 | FIRST FRAME 37 BYTES'],
+  ['ROUTEROS API 8728',0,'armed','-','NOTHING YET'],['BTEST 2000',0,'armed','-','NOTHING YET'],
+  ['MNDP 5678',1,'hit','10:20 AM','192.168.0.75 | SOLICITATION (WINBOX NEIGHBORS)'],['MAC-TELNET 20561',0,'armed','-','NOTHING YET'],
+  ['ROUTER LOGIN FAIL',0,'off','-','NEEDS THE ROUTER SYSLOG (TRIPWIRES.RSC)'],['ROUTER MGMT PORT',0,'off','-','NEEDS THE ROUTER SYSLOG'],
+  ['ROUTER PORT SCAN',0,'off','-','NEEDS THE ROUTER SYSLOG'],['DNS BYPASS',0,'off','-','NEEDS THE ROUTER SYSLOG'],
+  ['NEW DEVICE',0,'armed','-','ROUTER LEASES, POLLED'],['ROUTER CONFIG',0,'off','-','NOT ARMED: PRESS ARM IN SETTINGS'],
+];
+$('#tw').innerHTML=wires.map((w,i)=>`<div class="c ${w[2]}" data-i="${i}"><span class="nm">${w[0]}</span><span class="n">${w[2]==='off'?'OFF':w[1]}</span></div>`).join('');
+$$('#tw .c').forEach(c=>c.onclick=()=>{ $$('#tw .c').forEach(x=>x.classList.remove('sel')); c.classList.add('sel');
+  const w=wires[c.dataset.i]; $('#wdet').innerHTML=`<span style="color:var(--accent)">${w[0]} | LAST HIT ${w[3]}</span><br>${w[4]}`; });
+
+// ── NET gauges (values update every 2 s on the board)
+const G=[['WI-FI','-48 DBM',.82],['PING','14 MS',.14],['FREE RAM','56 KB',.56],['BLOCKED','31 %',.31],['SOCKETS','53/53',1]];
+function gauges(){ $('#gauges').innerHTML=G.map(([k,v,f])=>`<div class="g"><div class="col"><i style="height:${f*100}%;${f>=1?'background:var(--c1)':''}"></i>${[25,50,75].map(p=>`<s style="bottom:${p}%"></s>`).join('')}</div><div class="v f14">${v}</div><div class="k">${k}</div></div>`).join(''); }
+gauges();
+
+// ── DEVICES
+const devs=[
+  ['NVIDIA SHIELD','192.168.0.73 | NVIDIA',5,'70 % BLOCKED','1820 LOOKUPS, 1279 BLOCKED','ANDROID.GOOGLEAPIS.COM','CONVIVA.COM (VIDEO ANALYTICS)','23 HOSTS | 41 MB UP'],
+  ['LG WEBOS TV','192.168.0.98 | LG',5,'52 % BLOCKED','4410 LOOKUPS, 2290 BLOCKED','LGTVSDP.COM','LGSMARTAD.COM (ADS)','31 HOSTS | 12 MB UP'],
+  ['DELL LAPTOP','192.168.0.75 | DELL',4,'22 % BLOCKED','2900 LOOKUPS, 640 BLOCKED','MANY','DOUBLECLICK.NET (ADS)','120 HOSTS | ADMIN PC'],
+  ['GOOGLE NEST HUB','192.168.0.121 | GOOGLE',3,'12 % BLOCKED','960 LOOKUPS, 115 BLOCKED','CLIENTS4.GOOGLE.COM','-','9 HOSTS | 3 MB UP'],
+  ['SONY BDP','192.168.0.140 | SONY',2,'4 % BLOCKED','210 LOOKUPS, 8 BLOCKED','SONY.NET','-','4 HOSTS'],
+  ['HDHOMERUN','192.168.0.150 | SILICONDUST',1,'0 % BLOCKED','88 LOOKUPS','SILICONDUST.COM','-','2 HOSTS'],
+];
+$('#devlist').innerHTML=`<div class="k" style="margin-bottom:2px">BUSIEST FIRST | TAP FOR DETAIL</div>`+devs.map((d,i)=>`<div class="dev" data-i="${i}"><div class="nm f14">${d[0]}<small>${d[1]}</small></div><div class="q">${d[3]}</div><div class="lights">${[1,2,3,4,5].map(k=>`<i class="${k<=d[2]?'on':''}"></i>`).join('')}</div></div>`).join('');
+function openDev(i){ const d=devs[i]; show('dev'); $('#devlist').style.display='none'; const det=$('#devdet'); det.style.display='';
+  det.innerHTML=`<div class="f20" style="color:var(--c1)">${d[0]}</div><div class="k">${d[1]}</div>
+   <div class="dd"><div class="k">PI-HOLE, 24 H</div><div class="v">${d[4]}</div>
+   <div class="k">TOP ALLOWED (LEFT THE HOUSE)</div><div class="v">${d[5]}</div>
+   <div class="k">TOP BLOCKED</div><div class="v">${d[6]}</div>
+   <div class="k">ROUTER, OUTBOUND</div><div class="v">${d[7]}</div></div>
+   <div class="btns" style="margin-top:8px"><button onclick="show('dev')"><span>BACK</span></button><button class="danger" onclick="ask('Block ${d[0]} (${d[1].split(' | ')[0]}) from the internet? The router drops it within a minute. Undo on the dashboard.')"><span>BLOCK DEVICE</span></button></div>`; }
+$$('#devlist .dev').forEach(r=>r.onclick=()=>openDev(+r.dataset.i));
+
+// ── New event: lands in the focus panel's LAST EVENTS and lights its port (no log page on the panel)
+function newEvent(){ const d=new Date(); const h=d.getHours()%12||12, ap=d.getHours()<12?'AM':'PM';
+  FOCUS[0][1].unshift(`40-08 JETDIRECT | 192.168.0.75 | ${h}:${String(d.getMinutes()).padStart(2,'0')} ${ap}`); FOCUS[0][1].length=3;
+  const i=PORTS.findIndex(p=>p[0]===9100); $('#pt'+i).classList.add('hit'); fi=0; focus(); if(mode==='green'){ touched(); show('ops'); } }
+
+// ── ALERT emblem: the board's build_emblem(), YELLOW-size geometry (h 112, foot 112, shoulders 52, line 6), no side bars
+const SVGNS='http://www.w3.org/2000/svg';
+let emCol='#e00000', rollMs=1000, emStripes=[];
+function buildEmblem(){
+  const s=$('#emsvg'); s.innerHTML=''; emStripes=[];
+  const H=112, cy=56, lw=6, yt=lw/2+2, yb=cy-5-lw/2, foot=112, top=52;
+  const mk=(n,a)=>{const e=document.createElementNS(SVGNS,n); for(const k in a) e.setAttribute(k,a[k]); s.appendChild(e); return e;};
+  const defs=mk('defs',{});
+  [0,1].forEach(k=>{
+    const t=k?H-yt:yt, b=k?H-yb:yb;
+    mk('polyline',{points:`${200-foot},${b} ${200-top},${t} ${200+top},${t} ${200+foot},${b}`,fill:'none',stroke:emCol,'stroke-width':lw,'stroke-linejoin':'round','stroke-linecap':'round'});
+    const ay=k?H-(yt+lw/2+5)-18:yt+lw/2+5;
+    const cp=document.createElementNS(SVGNS,'clipPath'); cp.setAttribute('id','cp'+k);
+    const r=document.createElementNS(SVGNS,'rect'); r.setAttribute('x',200-73); r.setAttribute('y',ay); r.setAttribute('width',146); r.setAttribute('height',18);
+    cp.appendChild(r); defs.appendChild(cp);
+    const g=mk('g',{'clip-path':`url(#cp${k})`});
+    for(let i=0;i<=3;i++){ const p=document.createElementNS(SVGNS,'rect'); p.setAttribute('height',4); p.setAttribute('rx',2); p.setAttribute('fill',emCol); g.appendChild(p); emStripes.push({p,k,i,ay}); }
+  });
+  mk('text',{x:200,y:cy+4,'text-anchor':'middle','font-size':28,'font-family':'Montserrat,Segoe UI,Arial','letter-spacing':2,fill:emCol}).textContent='ALERT';
+  mk('text',{x:200,y:cy+26,'text-anchor':'middle','font-size':14,'font-family':'Montserrat,Segoe UI,Arial',fill:emCol}).textContent=mode==='red'?'CONDITION: RED':'CONDITION: YELLOW';
+}
+function roll(){
+  const pitch=7, n=3, off=(performance.now()%rollMs)/rollMs*pitch;
+  emStripes.forEach(({p,k,i,ay})=>{ const ly=(i-1)*pitch+off; const y=k? ay+18-ly-4 : ay+ly;
+    const hw=Math.max(4, 52+(112-52)*((k?112-y:y)-5)/(47-5)-12); p.setAttribute('x',200-hw); p.setAttribute('width',2*hw); p.setAttribute('y',y);
+    const edge=Math.min(ly+4,18-ly-4); p.setAttribute('opacity',Math.max(0,Math.min(1,edge/pitch))); });
+  requestAnimationFrame(roll);
+}
+requestAnimationFrame(roll);
+
+function cond(m){
+  mode=m; $('#confirm').style.display='none';
+  if(m==='green'){ $('#rail').style.visibility=''; show('ops'); return; }
+  $('#rail').style.visibility='hidden';
+  emCol = m==='red' ? '#e00000' : '#f0b000'; rollMs = m==='red' ? 1000 : 2000;
+  $('#acode').textContent = m==='red' ? 'CODE 40-02 RDP TRIPWIRE' : 'CODE 17-01 ARP SWEEP';
+  $('#asrc').textContent = m==='red' ? '192.168.0.75 | DELL INC. | DELL LAPTOP' : '192.168.0.73 | NVIDIA | NVIDIA SHIELD';
+  $('#ahead').textContent = m==='red' ? 'RDP on 3389, 19 bytes, TLS client hello' : '24 hosts in 10 s';
+  $('#ack').style.display = m==='red' ? '' : 'none';
+  buildEmblem(); show('alert');
+}
+
+// hold, ACKNOWLEDGE only (2 s)
+(function(){ const btn=$('#ack'), f=btn.querySelector('.fill'); let t0=0, raf=0;
+  const step=()=>{ const p=Math.min(1,(performance.now()-t0)/2000); f.style.width=(p*100)+'%'; if(p>=1){ raf=0; f.style.width='0'; cond('ylw'); return; } raf=requestAnimationFrame(step); };
+  btn.onpointerdown=()=>{ t0=performance.now(); raf=requestAnimationFrame(step); };
+  const stop=()=>{ if(raf){ cancelAnimationFrame(raf); raf=0; f.style.width='0'; } };
+  btn.onpointerup=stop; btn.onpointerleave=stop; })();
+
+// clock: the board's 12-hour status bar format (no seconds); incident age
+let open=42;
+function tick(){ const d=new Date(), h=d.getHours()%12||12, ap=d.getHours()<12?'AM':'PM';
+  $('#clock').textContent=`${h}:${String(d.getMinutes()).padStart(2,'0')} ${ap}`;
+  open++; $('#aopen').textContent=`${Math.floor(open/60)}:${String(open%60).padStart(2,'0')}`; }
+setInterval(tick,1000); tick();
+show('ops');
+</script>
+</body>
+</html>
