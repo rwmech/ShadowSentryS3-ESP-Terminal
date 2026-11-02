@@ -29,6 +29,9 @@ static const char *TAG = "SETTINGS";
 #ifndef DISCORD_WEBHOOK_URL
 #define DISCORD_WEBHOOK_URL ""
 #endif
+#ifndef DISCORD_MIN_TIER
+#define DISCORD_MIN_TIER 2
+#endif
 // Detection defaults (main\detect\detect.c reads them live).
 #define DET_SCAN_PORTS     5
 #define DET_SCAN_WINDOW_S  10
@@ -36,7 +39,8 @@ static const char *TAG = "SETTINGS";
 #define DET_ARP_WINDOW_S   10
 // Alert switches. Every type opens an incident by default, except LAN
 // discovery, which is background noise (logged, no incident), and a new
-// device on the network (SEV3, logged and posted, no incident). Bits past the
+// device on the network (SEV3, logged, no incident; on Discord only when
+// discord_min_tier is 3). Bits past the
 // known types stay set, so a type added later alerts unless listed here.
 #define ALERT_DEFAULT_OFF   ((1u << ATTACK_DISCOVERY) | (1u << ATTACK_NEW_DEVICE))
 #define ALERT_MASK_DEFAULT  (0xFFFFFFFFu & ~ALERT_DEFAULT_OFF)
@@ -107,6 +111,7 @@ static void defaults(settings_t *s)
     s->clock_24h      = DISPLAY_CLOCK_24H != 0;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
+    s->discord_min_tier   = DISCORD_MIN_TIER;
     // Detection: every type alerts except discovery (ALERT_MASK_DEFAULT),
     // thresholds, admin ports open.
     s->alert_mask     = ALERT_MASK_DEFAULT;
@@ -189,6 +194,8 @@ void settings_init(void)
         get_bool(h, "clock24", &s_live.clock_24h);
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
         get_bool(h, "dc_log", &s_live.discord_log_events);
+        get_u8(h, "dc_tier", &s_live.discord_min_tier);
+        if (s_live.discord_min_tier < 1 || s_live.discord_min_tier > 3) s_live.discord_min_tier = DISCORD_MIN_TIER;
         get_u32(h, "alert_mask", &s_live.alert_mask);
         uint8_t known = ALERT_KNOWN_LEGACY;
         get_u8(h, "alert_known", &known);
@@ -457,6 +464,8 @@ static const char *validate(const settings_t *s)
                                        return "brightness must be 5-100 %";
     if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
         return "Discord webhook must be https://discord.com/api/webhooks/..., no spaces";
+    if (s->discord_min_tier < 1 || s->discord_min_tier > 3)
+                                       return "Discord tiers must be 1 (SEV1), 2 (SEV1 and SEV2) or 3 (all)";
     if (s->scan_ports < 3 || s->scan_ports > 32)
                                        return "port scan threshold must be 3-32 ports";
     if (s->scan_window_s < 2 || s->scan_window_s > 300)
@@ -521,6 +530,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "clock24",    s->clock_24h));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
+    SET(nvs_set_u8(h,  "dc_tier",    s->discord_min_tier));
     SET(nvs_set_u32(h, "alert_mask", s->alert_mask));
     SET(nvs_set_u8(h,  "alert_known", ATTACK_TYPE_COUNT));
     SET(nvs_set_u32(h, "scan_ports", s->scan_ports));

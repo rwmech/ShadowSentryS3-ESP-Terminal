@@ -371,6 +371,7 @@ static void get_settings(int sock)
     jb_bool(&j, "discord_webhook_set", s.discord_webhook[0]);  JB_LIT(&j, ",");   // never the URL
     jb_bool(&j, "discord_enabled", settings_discord_enabled()); JB_LIT(&j, ",");
     jb_bool(&j, "discord_log_events", s.discord_log_events);   JB_LIT(&j, ",");
+    jb_printf(&j, "\"discord_min_tier\":%u,", (unsigned)s.discord_min_tier);
     JB_LIT(&j, "\"whatsapp_phone\":"); jb_str(&j, s.whatsapp_phone, sizeof(s.whatsapp_phone)); JB_LIT(&j, ",");
     jb_bool(&j, "whatsapp_apikey_set", s.whatsapp_apikey[0]);  JB_LIT(&j, ",");   // never the key
     jb_bool(&j, "whatsapp_enabled", settings_whatsapp_enabled()); JB_LIT(&j, ",");
@@ -570,6 +571,7 @@ static void post_settings(int sock, const char *req, int req_len)
     settings_t s;
     settings_copy_saved(&s);
     uint32_t bright = s.brightness;
+    uint32_t dc_tier = s.discord_min_tier;
     const char *err = NULL;
     if (!err) err = take_str(root, "admin_password", s.admin_password, sizeof(s.admin_password), true);
     if (!err) err = take_str(root, "wifi_ssid", s.wifi_ssid, sizeof(s.wifi_ssid), false);
@@ -592,6 +594,7 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_bool(root, "discord_webhook_clear", &dc_clear);
     if (dc_clear) s.discord_webhook[0] = '\0';
     if (!err) err = take_bool(root, "discord_log_events", &s.discord_log_events);
+    if (!err) err = take_u32(root, "discord_min_tier", &dc_tier, 3);    // 0 is refused by validate()
     if (!err) err = take_u32(root, "alert_mask", &s.alert_mask, 0xFFFFFFFFu);
     if (!err) err = take_u32(root, "scan_ports", &s.scan_ports, 86400);
     if (!err) err = take_u32(root, "scan_window_s", &s.scan_window_s, 86400);
@@ -635,6 +638,7 @@ static void post_settings(int sock, const char *req, int req_len)
     }
     if (!err) err = take_bool(root, "mikrotik_enabled", &s.mikrotik_enabled);
     s.brightness = (uint8_t)bright;
+    s.discord_min_tier = (uint8_t)dc_tier;
     bool pw_changed = false;
     {
         const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, "admin_password");
@@ -691,7 +695,7 @@ static void get_discord_status(int sock)
     jb_bool(&j, "enabled", settings_discord_enabled());
     JB_LIT(&j, ",");
     jb_bool(&j, "log_events", settings_get()->discord_log_events);
-    JB_LIT(&j, ",");
+    jb_printf(&j, ",\"min_tier\":%u,", (unsigned)settings_get()->discord_min_tier);
     jb_bool(&j, "test_ok", d.test_ok);
     jb_printf(&j, ",\"test_req\":%lu,\"test_done\":%lu,\"test_status\":%d,\"last_status\":%d,"
                   "\"posted\":%lu,\"failed\":%lu,\"dropped\":%lu}",

@@ -97,6 +97,7 @@ static discord_status_t  s_stat;                // guarded by s_mux
 static bool              s_running;
 static alarm_info_t      s_prev;                // alarm listener only
 static alarm_info_t      s_carry;               // ACTIVE incident found at init
+static uint32_t          s_posted_id;           // incident whose embeds post, 0 none (init, then the task)
 
 // Task-only state.
 static char         *s_body, *s_content, *s_url, *s_resp;
@@ -137,6 +138,17 @@ _Static_assert(sizeof(TYPE_LONG) / sizeof(TYPE_LONG[0]) == ATTACK_TYPE_COUNT, "T
 static const char *type_short(uint8_t t) { return t < ATTACK_TYPE_COUNT ? TYPE_SHORT[t] : "?"; }
 static const char *type_long(uint8_t t)  { return t < ATTACK_TYPE_COUNT ? TYPE_LONG[t] : "unknown"; }
 
+// Rob, 2026-11-02: Discord gets SEV1 and SEV2 only, the logs keep everything
+// (Settings: discord_min_tier). 3 posts every tier, as before; below that a
+// code outside the table (00-00) posts nothing.
+static bool tier_ok(const char *code)
+{
+    int m = settings_get()->discord_min_tier;
+    if (m >= TIER_SEV3) return true;
+    int t = describe_code_tier(code);
+    return t >= TIER_SEV1 && t <= m;
+}
+
 static void count_drop(void)
 {
     portENTER_CRITICAL(&s_mux);
@@ -174,7 +186,9 @@ void discord_log_event(const attack_log_t *e)
 bool discord_post_digest(char *lines)
 {
     if (!lines) return false;
+    // The digest is SEV3 material: it posts only while every tier does.
     if (!s_dgq || !(settings_get()->discord_log_events && settings_discord_enabled()) ||
+        settings_get()->discord_min_tier < TIER_SEV3 ||
         xQueueSend(s_dgq, &lines, 0) != pdTRUE) {
         free(lines);
         return false;
@@ -206,6 +220,7 @@ void discord_init(void)
     }
     alarm_get(&s_prev);
     if (s_prev.state == ALARM_ACTIVE) s_carry = s_prev;   // survived a reboot
+    if (s_prev.state != ALARM_IDLE && tier_ok(s_prev.code)) s_posted_id = s_prev.id;
     alarm_add_listener(on_alarm);
     log_store_add_listener(on_event);
     s_dgq = xQueueCreate(DC_DIGEST_QUEUE, sizeof(char *));
@@ -644,6 +659,9 @@ static void post_test(void)
                 "The webhook works. Incident alerts and the event log post here.");
     field(&j, &first, "Device", dev, false, false);
     field(&j, &first, "Event log", settings_get()->discord_log_events ? "on" : "off", true, false);
+    int m = settings_get()->discord_min_tier;
+    field(&j, &first, "Posts", m <= TIER_SEV1 ? "SEV1 only" : m == TIER_SEV2 ? "SEV1 and SEV2" : "every tier",
+          true, false);
     embed_end(&j, 0);
     int st = dc_send(&j);
     portENTER_CRITICAL(&s_mux);
@@ -676,6 +694,11 @@ static void track_open(const alarm_info_t *a, int64_t now)
     s_next_remind = now + remind_s();
 }
 
+// Whether an incident's embeds post is decided by its code's tier when it
+// opens, or when it escalates to a SEV1 code, and then holds for the rest of
+// its life: an incident that posted its opening also posts its close.
+static bool inc_posted(const alarm_info_t *a) { return a->id && a->id == s_posted_id; }
+
 static void handle_alarm(const dc_alarm_msg_t *m, int64_t now)
 {
     const alarm_info_t *a = &m->cur, *p = &m->prev;
@@ -683,22 +706,27 @@ static void handle_alarm(const dc_alarm_msg_t *m, int64_t now)
 
     if (a->state != ALARM_IDLE && p->id != a->id) {
         // A YELLOW incident is closed implicitly when a new one opens.
-        if (on && p->state != ALARM_IDLE && p->id) {
-            char why[64];
-            snprintf(why, sizeof(why), "Closed: incident #%lu opened.", (unsigned long)a->id);
+        if (on && p->state != ALARM_IDLE && inc_posted(p)) {
+            char why[80];
+            snprintf(why, sizeof(why), tier_ok(a->code) ? "Closed: incident #%lu opened."
+                                                         : "Closed: incident #%lu opened (below the Discord tiers).",
+                     (unsigned long)a->id);
             post_closed(p, "closed, GREEN", why);
         }
         if (a->state == ALARM_ACTIVE) track_open(a, now);
         else s_inc_active = false;
-        if (on) post_opened(a, false);
+        s_posted_id = tier_ok(a->code) ? a->id : 0;
+        if (on && inc_posted(a)) post_opened(a, false);
     } else if (a->state == ALARM_ACTIVE && p->state == ALARM_ACKED) {
         track_open(a, now);
-        if (on) post_opened(a, true);
+        if (tier_ok(a->code)) s_posted_id = a->id;      // the SEV1 code that escalated it
+        if (on && inc_posted(a)) post_opened(a, true);
     } else if (a->state == ALARM_ACKED && p->state == ALARM_ACTIVE) {
         s_inc_active = false;
-        if (on) post_acked(a);
+        if (on && inc_posted(a)) post_acked(a);
     } else if (a->state == ALARM_IDLE && p->state != ALARM_IDLE) {
         s_inc_active = false;
+        if (!inc_posted(a)) return;
         if (on && a->resolved_by) {
             post_closed(a, "resolved, GREEN", a->resolved_by == ALARM_BY_DASHBOARD
                         ? "Resolved from the dashboard." : "Resolved on the front panel.");
@@ -721,7 +749,7 @@ static void check_reminder(int64_t now)
         return;
     }
     s_next_remind = now + remind_s();
-    if (settings_discord_enabled()) post_reminder(&a);
+    if (settings_discord_enabled() && inc_posted(&a)) post_reminder(&a);
 }
 
 // ── Deduplicated event log ────────────────────────────────────────────────────
@@ -804,8 +832,9 @@ static void handle_event(const attack_log_t *e, int64_t now)
     strlcpy(r->payload, e->payload, sizeof(r->payload));
 
     // Discovery is kept for an incident's opening embed (above) but posts as
-    // the 30-minute digest (discord_post_digest), not line by line.
-    if (!s_log_was_on || e->type == ATTACK_DISCOVERY) return;
+    // the 30-minute digest (discord_post_digest), not line by line. Events
+    // above discord_min_tier stay in the logs only.
+    if (!s_log_was_on || e->type == ATTACK_DISCOVERY || !tier_ok(describe_code(e))) return;
 
     char sum[DC_SUMMARY_LEN];
     summarise(e, sum, sizeof(sum));

@@ -12,6 +12,15 @@
  *   - a deduplicated event log (Settings: discord_log_events): events are
  *     folded by (source IP, attack type, short summary) and posted as plain
  *     code-block lines every DISCORD_BATCH_S, one line per key with a count
+ *   - notify.c's boot and block list notices (device health and the
+ *     operator's own actions, posted whatever the tier setting)
+ *
+ * Tier gate (Settings: discord_min_tier, default DISCORD_MIN_TIER 2): only
+ * events whose code is SEV1..discord_min_tier go to the event log, and only
+ * incidents whose code is in that range (when they open or escalate) post
+ * embeds. 3 posts every tier and the discovery digest, as before; below 3 a
+ * code outside the table (00-00) posts nothing. The SD log, the flash ring,
+ * the dashboard and the panel are not affected.
  *
  * The alarm and log_store listeners only copy and enqueue. One task does all
  * the HTTPS work, paced for Discord's webhook limit (about 5 posts per 2 s),
@@ -41,7 +50,8 @@ void discord_log_event(const attack_log_t *e);
 // Post the LAN discovery digest: "LAN devices seen (last 30 min)" and lines
 // (newline-separated, PSRAM heap buffer) in a code block. Ownership of lines
 // passes here in every case: freed after the post, or at once (false) when the
-// event log or Discord is off or a digest is already waiting. The caller keeps
+// event log or Discord is off, discord_min_tier is below 3, or a digest is
+// already waiting. The caller keeps
 // it under about 1800 characters. Never blocks.
 bool discord_post_digest(char *lines);
 
