@@ -58,7 +58,7 @@ const lcars_palette_t LCARS_CERRITOS = {
 #define RAIL_W      52
 #define MARK_H      2                   // the selection mark: the box's own bottom 2 px
 #define PAGES       5
-#define SCAN_MS     50                  // the chart's scan line: one step
+#define SCAN_MS     33                  // the chart's scan line: one step
 #define SCAN_STEP   3
 #define PORT_MS     150                 // the port highlight: one step
 #define FOCUS_MS    5000
@@ -1407,7 +1407,7 @@ static void slow_cb(lv_timer_t *t)
         set_text(s_clock, b);
     }
     if (!s_green) return;
-    if (s_auto && lv_tick_elaps(s_page_at) >= LCARS_AUTO_MS) { page_show((s_cur + 1) % PAGES); return; }
+    if (s_auto && lv_tick_elaps(s_page_at) >= (uint32_t)settings_get()->panel_rotate_s * 1000u) { page_show((s_cur + 1) % PAGES); return; }
     if (lv_tick_elaps(s_data_at) >= DATA_MS) { s_data_at = lv_tick_get(); page_refresh(false); }
     if (s_cur == PG_OPS && lv_tick_elaps(s_focus_at) >= FOCUS_MS) {
         s_focus_at = lv_tick_get();
@@ -1440,7 +1440,7 @@ void lcars_build(lv_obj_t *scr)
     lv_timer_create(fast_cb, SCAN_MS, NULL);
     lv_timer_create(port_cb, PORT_MS, NULL);
     lv_timer_create(slow_cb, 1000, NULL);
-    ESP_LOGI(TAG, "Built: %d ports (%d pages), AUTO every %d s", s_nports, PAGES, LCARS_AUTO_MS / 1000);
+    ESP_LOGI(TAG, "Built: %d ports (%d pages), AUTO every %u s", s_nports, PAGES, (unsigned)settings_get()->panel_rotate_s);
 }
 
 lv_obj_t *lcars_alert_box(void) { return s_alert; }
