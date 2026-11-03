@@ -19,6 +19,7 @@
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "blocklist.h"
 #include "lwip/ip4_addr.h"
 #include <string.h>
@@ -31,11 +32,14 @@ static const char *TAG = "LCARS";
 //
 // Cerritos, after thelcars.com's Lower Decks colour guide. No white and no
 // reverse video: text is black on the frame colours, else c5 or c2 on black.
+// Lifted 2026-11-03 for legibility (Rob: "the dark ones are too hard to
+// read"): every text tone is at least 6:1 on black (dim #cc9966 8.3:1, was
+// #8a5a2b at 3.6:1), black on c3 6:1 (was 4.9:1).
 
 const lcars_palette_t LCARS_CERRITOS = {
-    .c1 = 0xff7700, .c2 = 0xffcc99, .c3 = 0xcc5500, .c4 = 0xffaa44, .c5 = 0xffeecc, .c6 = 0xff9911,
-    .txt = 0xffeecc, .dim = 0x8a5a2b, .track = 0x24170a, .accent = 0xff4400,
-    .scan = 0xa52a2a, .red = 0xe00000, .yellow = 0xf0b000,
+    .c1 = 0xff7700, .c2 = 0xffcc99, .c3 = 0xdd6622, .c4 = 0xffaa44, .c5 = 0xffeecc, .c6 = 0xff9911,
+    .txt = 0xffeecc, .dim = 0xcc9966, .track = 0x553719, .accent = 0xff5522,
+    .hi = 0xfff3dd, .red = 0xe00000, .yellow = 0xf0b000,
 };
 
 #define F12 (&lv_font_montserrat_12)
@@ -43,7 +47,7 @@ const lcars_palette_t LCARS_CERRITOS = {
 #define F20 (&lv_font_montserrat_20)
 #define F28 (&lv_font_montserrat_28)
 #define COL_BLACK lv_color_black()
-#define DIM_OPA   115                   // 45 %: a port not hit today
+#define DIM_OPA   185                   // 73 %: a port not hit today (was 45 %)
 
 // Layout (screen coordinates; the pages use content coordinates)
 //   frame       top elbow 70 x 32 (radius 24, inner black 18 x 22, radius 8)
@@ -60,7 +64,6 @@ const lcars_palette_t LCARS_CERRITOS = {
 #define PAGES       5
 #define SCAN_MS     33                  // the chart's scan line: one step
 #define SCAN_STEP   3
-#define PORT_MS     150                 // the port highlight: one step
 #define FOCUS_MS    5000
 #define DATA_MS     2000                // the shown page's figures
 #define STATS_MS    60000               // sd_log_stats() for the chart and total
@@ -102,6 +105,7 @@ EXT_RAM_BSS_ATTR static lc_port_t s_ports[LC_PORTS_MAX];
 EXT_RAM_BSS_ATTR static int s_nports;
 
 static bool s_chart_dirty = true;
+static bool fx_busy(lv_obj_t *o);      // Motion: o is being flashed
 
 static lv_color_t grp_col(uint8_t g)
 {
@@ -227,7 +231,7 @@ static void seg(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_
 // The selection mark: the bottom MARK_H px of a box of width w, height h.
 static lv_obj_t *mark(lv_obj_t *box, lv_coord_t w, lv_coord_t h)
 {
-    lv_obj_t *m = fill(box, 0, h - MARK_H, w, MARK_H, LCARS_COL(scan));
+    lv_obj_t *m = fill(box, 0, h - MARK_H, w, MARK_H, LCARS_COL(hi));
     show(m, false);
     return m;
 }
@@ -554,7 +558,8 @@ static void build_frame(void)
     lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -4, 304);
 
     // Rail
-    const uint32_t col[6] = { LCARS_PAL->c2, LCARS_PAL->c6, LCARS_PAL->c4, LCARS_PAL->c5, LCARS_PAL->c3, LCARS_PAL->c6 };
+    // 04 is c1, not butter c5 (the mockup): the near-white mark would not show on c5.
+    const uint32_t col[6] = { LCARS_PAL->c2, LCARS_PAL->c6, LCARS_PAL->c4, LCARS_PAL->c1, LCARS_PAL->c3, LCARS_PAL->c6 };
     s_rail = area(s_root, 0, RAIL_Y, RAIL_W, 6 * RAIL_PITCH);
     for (int i = 0; i < 6; i++) {
         lv_obj_t *b = fill(s_rail, 0, i * RAIL_PITCH, RAIL_W, RAIL_H, lv_color_hex(col[i]));
@@ -586,7 +591,7 @@ static void build_frame(void)
 EXT_RAM_BSS_ATTR static lv_obj_t *s_cond, *s_tile_v[4], *s_tile_d[4];
 EXT_RAM_BSS_ATTR static lv_obj_t *s_bar[24], *s_scan, *s_scale_top, *s_tick[5];
 EXT_RAM_BSS_ATTR static lv_obj_t *s_foc_h, *s_foc_k[3], *s_foc_v[3];
-static int       s_scan_x, s_port_cur = -1, s_focus;
+static int       s_scan_x, s_focus;
 EXT_RAM_BSS_ATTR static uint32_t  s_focus_at, s_stats_at, s_data_at, s_tick_hour;
 EXT_RAM_BSS_ATTR static sd_stats_t *s_stats;             // PSRAM, about 10 KB
 
@@ -796,7 +801,7 @@ static void ops_refresh(bool force)
     set_text(s_tile_d[3], b);
     for (int i = 0; i < s_nports; i++) {
         lc_port_t *p = &s_ports[i];
-        if (i == s_port_cur || p->lit == p->hit) continue;
+        if (p->lit == p->hit || fx_busy(p->l)) continue;
         p->lit = p->hit;
         lv_obj_set_style_text_opa(p->l, p->hit ? LV_OPA_COVER : DIM_OPA, 0);
     }
@@ -858,6 +863,7 @@ EXT_RAM_BSS_ATTR static int s_ntalk;
 #define TR_BAR_W  164
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_tr_fill[LC_TRAPS], *s_tr_n[LC_TRAPS], *s_tr_w[LC_TRAPS], *s_tr_mark[LC_TRAPS];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_tr_dot[LC_TRAPS], *s_tr_tag[LC_TRAPS], *s_tr_track[LC_TRAPS];
 EXT_RAM_BSS_ATTR static detail_t  s_tr_det;
 static int       s_tr_sel = -1;
 
@@ -894,13 +900,13 @@ static void build_traps(lv_obj_t *pg)
         lv_obj_t *r = area(pg, 0, (lv_coord_t)(16 + i * 25), 400, 22);
         lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(r, trap_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
-        lv_obj_t *d = fill(r, 0, 0, 22, 22, LCARS_COL(c6));
+        lv_obj_t *d = s_tr_dot[i] = fill(r, 0, 0, 22, 22, LCARS_COL(c6));
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-        lv_obj_t *tag = fill(r, 11, 0, TR_TAG_W - 11, 22, LCARS_COL(c6));
+        lv_obj_t *tag = s_tr_tag[i] = fill(r, 11, 0, TR_TAG_W - 11, 22, LCARS_COL(c6));
         lv_obj_t *l = text(tag, F12, COL_BLACK, 0, 0, 0, s_t.trap[i].name);
         lv_obj_align(l, LV_ALIGN_RIGHT_MID, -6, 0);
         s_tr_mark[i] = mark(tag, TR_TAG_W - 11, 22);
-        lv_obj_t *tr = fill(r, TR_BAR_X, 7, TR_BAR_W, 8, LCARS_COL(track));
+        lv_obj_t *tr = s_tr_track[i] = fill(r, TR_BAR_X, 7, TR_BAR_W, 8, LCARS_COL(track));
         s_tr_fill[i] = fill(tr, 0, 0, 0, 8, LCARS_COL(c1));
         s_tr_n[i] = text(r, F14, LCARS_COL(c2), 308, 2, 30, "0");
         lv_obj_set_style_text_align(s_tr_n[i], LV_TEXT_ALIGN_RIGHT, 0);
@@ -939,6 +945,15 @@ static const char *wire_off(int i)
     return mikrotik_watch_armed() ? NULL : "NOT ARMED: ARM THE BASELINE IN SETTINGS";
 }
 
+// The cell's colours for its state (also what a flash returns to).
+static void wire_style(int i)
+{
+    uint8_t st = s_wi_st[i];
+    lv_obj_set_style_bg_color(s_wi_bar[i], st == WS_HIT ? LCARS_COL(accent)
+                              : st == WS_OFF ? LCARS_COL(track) : LCARS_COL(c4), 0);
+    lv_obj_set_style_text_color(s_wi_nm[i], st == WS_OFF ? LCARS_COL(dim) : LCARS_COL(txt), 0);
+}
+
 static void wires_refresh(bool force)
 {
     (void)force;
@@ -949,9 +964,7 @@ static void wires_refresh(bool force)
         char b[12];
         if (st != s_wi_st[i]) {
             s_wi_st[i] = st;
-            lv_obj_set_style_bg_color(s_wi_bar[i], st == WS_HIT ? LCARS_COL(accent)
-                                      : st == WS_OFF ? lv_color_hex(0x3a2a1a) : LCARS_COL(c4), 0);
-            lv_obj_set_style_text_color(s_wi_nm[i], st == WS_OFF ? LCARS_COL(dim) : LCARS_COL(txt), 0);
+            wire_style(i);
         }
         if (st == WS_OFF) strlcpy(b, "OFF", sizeof(b));
         else snprintf(b, sizeof(b), "%lu", (unsigned long)h->n);
@@ -1001,7 +1014,8 @@ static void build_wires(lv_obj_t *pg)
 #define G_H 92
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_g_fill[G_N], *s_g_v[G_N];
-EXT_RAM_BSS_ATTR static lv_obj_t *s_nl_v[9];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_nl_v[9], *s_nl_k[9];
+EXT_RAM_BSS_ATTR static lv_coord_t s_g_tgt[G_N];         // the gauge's height to ease to
 EXT_RAM_BSS_ATTR static uint32_t  s_ipfix_rec, s_ipfix_at, s_ipfix_rate;
 EXT_RAM_BSS_ATTR static bool      s_ipfix_have;
 
@@ -1010,9 +1024,8 @@ static void gauge_set(int i, const char *v, int32_t pct)
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     lv_coord_t h = (lv_coord_t)(G_H * pct / 100);
-    if (lv_obj_get_height(s_g_fill[i]) != h) {
-        lv_obj_set_height(s_g_fill[i], h);
-        lv_obj_set_y(s_g_fill[i], G_H - h);
+    if (s_g_tgt[i] != h) {                                  // anim_cb eases the fill there
+        s_g_tgt[i] = h;
         lv_obj_set_style_bg_color(s_g_fill[i], pct >= 100 ? LCARS_COL(c1) : LCARS_COL(c4), 0);
     }
     set_text(s_g_v[i], v);
@@ -1127,7 +1140,7 @@ static void build_net(lv_obj_t *pg)
                                        "MICROSD", "CAMERA", "DISCORD" };
     for (int i = 0; i < 9; i++) {
         lv_coord_t x = (lv_coord_t)((i % 3) * 136), y = (lv_coord_t)(150 + (i / 3) * 34);
-        text(pg, F12, LCARS_COL(c4), x, y, 128, NK[i]);
+        s_nl_k[i] = text(pg, F12, LCARS_COL(c4), x, y, 128, NK[i]);
         s_nl_v[i] = text(pg, F12, LCARS_COL(c2), x, y + 14, 128, "-");
     }
 }
@@ -1147,6 +1160,8 @@ EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_list, *s_dv_det;
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_row[LC_DEVS], *s_dv_nm[LC_DEVS], *s_dv_sub[LC_DEVS], *s_dv_q[LC_DEVS];
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_dot[LC_DEVS][5];
 EXT_RAM_BSS_ATTR static uint8_t   s_dv_lit[LC_DEVS];
+EXT_RAM_BSS_ATTR static int8_t    s_dv_blink[LC_DEVS], s_dv_blink_n[LC_DEVS];  // the bright light, ticks left
+EXT_RAM_BSS_ATTR static uint32_t  s_dv_rate[LC_DEVS];                        // per hour, for the flicker
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dd_nm, *s_dd_sub, *s_dd_v[4], *s_dd_block;
 EXT_RAM_BSS_ATTR static discovery_talker_t s_dv_sel;     // the device shown in the detail (a copy)
 EXT_RAM_BSS_ATTR static bool      s_dv_open;
@@ -1229,7 +1244,7 @@ static void dev_refresh(bool force)
         if (pihole_share(t->ip, t->mac, &tot, &blk)) snprintf(b, sizeof(b), "%lu %% BLOCKED", (unsigned long)(blk * 100 / tot));
         else snprintf(b, sizeof(b), "%lu / H", (unsigned long)t->per_hour);
         set_text(s_dv_q[i], b);
-        uint32_t ph = t->per_hour;
+        uint32_t ph = s_dv_rate[i] = t->per_hour;
         uint8_t n = ph < 30 ? 1 : ph < 100 ? 2 : ph < 300 ? 3 : ph < 600 ? 4 : 5;
         if (n != s_dv_lit[i]) {
             s_dv_lit[i] = n;
@@ -1348,6 +1363,303 @@ static void build_dev(lv_obj_t *pg)
     show(s_dv_det, false);
 }
 
+// ── Motion ────────────────────────────────────────────────────────────────────
+//
+// Rob, 2026-11-03: "make it feel like the HAL screens where numbers and codes
+// flash out. Nothing in order", and something moving on every page. Colours
+// only: nothing moves or resizes, except a NET gauge easing to a new value.
+// A flash recolours up to FX_OBJS objects to a tone and back, 1 to 3 times,
+// on its own lv_timer whose period is the phase (60 ms at the least). One
+// spawn timer, its period drawn again on each run, starts flashes for the
+// shown page; anim_cb (ANIM_MS) eases the NET gauges and flickers the DEV
+// lights. All of it stops, colours restored, on a page change and while an
+// alert view is up or the LCARS panel is hidden (the alert stripes are ui.c's).
+
+#define FX_SLOTS 3                      // flashes at once
+#define FX_OBJS  5
+#define ANIM_MS  50
+enum { FX_TEXT, FX_BG };
+
+typedef void (*fx_rest_t)(int item);    // the item's normal colours
+
+typedef struct {
+    lv_timer_t *tm;
+    lv_obj_t   *o[FX_OBJS];
+    int16_t     item[FX_OBJS];
+    uint8_t     n;                      // objects; 0 = the slot is free
+    uint8_t     part, phases, ph;       // phases: on, off, on ...; ph the current one
+    uint16_t    on_ms, off_ms;
+    uint32_t    tone;
+    fx_rest_t   rest;
+} fx_t;
+
+EXT_RAM_BSS_ATTR static fx_t s_fx[FX_SLOTS];
+
+static uint32_t rnd(uint32_t lo, uint32_t hi) { return lo + esp_random() % (hi - lo + 1); }
+
+static bool fx_busy(lv_obj_t *o)
+{
+    for (int s = 0; s < FX_SLOTS; s++)
+        for (int k = 0; k < s_fx[s].n; k++) if (s_fx[s].o[k] == o) return true;
+    return false;
+}
+
+static fx_t *fx_free(void)
+{
+    for (int s = 0; s < FX_SLOTS; s++) if (!s_fx[s].n) return &s_fx[s];
+    return NULL;
+}
+
+static void fx_add(fx_t *f, lv_obj_t *o, int item)
+{
+    if (f->n >= FX_OBJS || !o) return;
+    f->o[f->n] = o;
+    f->item[f->n] = (int16_t)item;
+    f->n++;
+}
+
+static void fx_paint(fx_t *f, bool on)
+{
+    for (int k = 0; k < f->n; k++) {
+        if (!on)                   f->rest(f->item[k]);
+        else if (f->part == FX_BG) lv_obj_set_style_bg_color(f->o[k], lv_color_hex(f->tone), 0);
+        else {
+            lv_obj_set_style_text_color(f->o[k], lv_color_hex(f->tone), 0);
+            lv_obj_set_style_text_opa(f->o[k], LV_OPA_COVER, 0);
+        }
+    }
+}
+
+static void fx_end(fx_t *f)
+{
+    int n = f->n;
+    f->n = 0;                           // free before the restore: ops_refresh's port test
+    for (int k = 0; k < n; k++) f->rest(f->item[k]);
+    lv_timer_pause(f->tm);
+}
+
+// After the caller's fx_add()s: paint the first on phase and run the timer.
+static void fx_start(fx_t *f, uint8_t part, uint32_t tone, uint32_t flashes, uint32_t on_ms, uint32_t off_ms,
+                     fx_rest_t rest)
+{
+    if (!f->n) return;
+    f->part = part;
+    f->tone = tone;
+    f->phases = (uint8_t)(2 * flashes - 1);
+    f->ph = 0;
+    f->on_ms = (uint16_t)on_ms;
+    f->off_ms = (uint16_t)off_ms;
+    f->rest = rest;
+    fx_paint(f, true);
+    lv_timer_set_period(f->tm, on_ms);
+    lv_timer_reset(f->tm);
+    lv_timer_resume(f->tm);
+}
+
+static void fx_cb(lv_timer_t *t)
+{
+    fx_t *f = t->user_data;
+    if (!f->n) { lv_timer_pause(t); return; }
+    if (!s_green || ++f->ph >= f->phases) { fx_end(f); return; }
+    bool on = !(f->ph & 1);
+    fx_paint(f, on);
+    lv_timer_set_period(t, on ? f->on_ms : f->off_ms);
+}
+
+static void dev_blink_clear(void);
+
+static void fx_stop_all(void)
+{
+    for (int s = 0; s < FX_SLOTS; s++) if (s_fx[s].n) fx_end(&s_fx[s]);
+    dev_blink_clear();
+}
+
+// OPS: a cluster of 2 to 5 neighbouring port cells (the table is 2 columns:
+// i ^ 1 beside, i +/- 2 above and below) flashes 2 or 3 times in hi.
+static void port_rest(int i)
+{
+    lc_port_t *p = &s_ports[i];
+    p->lit = p->hit;
+    lv_obj_set_style_text_color(p->l, grp_col(p->grp), 0);
+    lv_obj_set_style_text_opa(p->l, p->hit ? LV_OPA_COVER : DIM_OPA, 0);
+}
+
+static void spawn_ports(void)
+{
+    fx_t *f = fx_free();
+    if (!f || s_nports < 2) return;
+    int seed = (int)rnd(0, (uint32_t)s_nports - 1);
+    if (fx_busy(s_ports[seed].l)) return;
+    uint32_t want = rnd(2, 5);
+    fx_add(f, s_ports[seed].l, seed);
+    for (int tries = 0; f->n < want && tries < 16; tries++) {
+        int from = f->item[rnd(0, f->n - 1u)], c;
+        switch (rnd(0, 3)) {
+        case 0:  c = from - 2; break;
+        case 1:  c = from + 2; break;
+        default: c = from ^ 1; break;
+        }
+        if (c < 0 || c >= s_nports || fx_busy(s_ports[c].l)) continue;
+        fx_add(f, s_ports[c].l, c);
+    }
+    fx_start(f, FX_TEXT, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), port_rest);
+}
+
+// TRAPS: a row is polled: its tag (honey or butter) or its bar (butter, or
+// the empty track in c3) flashes 2 or 3 times.
+static void trap_rest(int i)
+{
+    lv_obj_set_style_bg_color(s_tr_dot[i], LCARS_COL(c6), 0);
+    lv_obj_set_style_bg_color(s_tr_tag[i], LCARS_COL(c6), 0);
+    lv_obj_set_style_bg_color(s_tr_fill[i], LCARS_COL(c1), 0);
+    lv_obj_set_style_bg_color(s_tr_track[i], LCARS_COL(track), 0);
+}
+
+static void spawn_trap(void)
+{
+    fx_t *f = fx_free();
+    if (!f) return;
+    int i = (int)rnd(0, LC_TRAPS - 1);
+    if (fx_busy(s_tr_tag[i]) || fx_busy(s_tr_fill[i]) || fx_busy(s_tr_track[i])) return;
+    uint32_t tone;
+    if (rnd(0, 1)) {
+        fx_add(f, s_tr_dot[i], i);
+        fx_add(f, s_tr_tag[i], i);
+        tone = rnd(0, 1) ? LCARS_PAL->c2 : LCARS_PAL->c5;
+    } else if (lv_obj_get_width(s_tr_fill[i]) > 0) {
+        fx_add(f, s_tr_fill[i], i);
+        tone = LCARS_PAL->c5;
+    } else {
+        fx_add(f, s_tr_track[i], i);
+        tone = LCARS_PAL->c3;
+    }
+    fx_start(f, FX_BG, tone, rnd(2, 3), rnd(70, 110), rnd(60, 90), trap_rest);
+}
+
+// WIRES: a live cell's state bar (hi) or name (gold) flashes 2 or 3 times;
+// one armed cell in four pulses its bar once instead, 250 to 400 ms.
+static void wire_rest(int i) { wire_style(i); }
+
+static void spawn_wire(void)
+{
+    fx_t *f = fx_free();
+    if (!f) return;
+    int i = (int)rnd(0, LC_WIRES - 1);
+    if (s_wi_st[i] == WS_OFF || fx_busy(s_wi_bar[i]) || fx_busy(s_wi_nm[i])) return;
+    if (s_wi_st[i] == WS_ARMED && !rnd(0, 3)) {
+        fx_add(f, s_wi_bar[i], i);
+        fx_start(f, FX_BG, LCARS_PAL->hi, 1, rnd(250, 400), 60, wire_rest);
+    } else if (rnd(0, 1)) {
+        fx_add(f, s_wi_bar[i], i);
+        fx_start(f, FX_BG, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), wire_rest);
+    } else {
+        fx_add(f, s_wi_nm[i], i);
+        fx_start(f, FX_TEXT, LCARS_PAL->c4, rnd(2, 3), rnd(60, 90), rnd(60, 90), wire_rest);
+    }
+}
+
+// NET: a grid value, its name, or both flash 2 or 3 times in hi. Items 0..8
+// are the values (c2), 9..17 the names (c4).
+static void net_rest(int i)
+{
+    if (i < 9) lv_obj_set_style_text_color(s_nl_v[i], LCARS_COL(c2), 0);
+    else       lv_obj_set_style_text_color(s_nl_k[i - 9], LCARS_COL(c4), 0);
+}
+
+static void spawn_net(void)
+{
+    fx_t *f = fx_free();
+    if (!f) return;
+    int i = (int)rnd(0, 8);
+    if (fx_busy(s_nl_v[i]) || fx_busy(s_nl_k[i])) return;
+    uint32_t w = rnd(0, 2);
+    if (w != 1) fx_add(f, s_nl_v[i], i);
+    if (w != 0) fx_add(f, s_nl_k[i], i + 9);
+    fx_start(f, FX_TEXT, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), net_rest);
+}
+
+// DEV: a row's name brightens once, 200 to 300 ms.
+static void dev_rest(int i) { lv_obj_set_style_text_color(s_dv_nm[i], LCARS_COL(c2), 0); }
+
+static void spawn_dev(void)
+{
+    fx_t *f = fx_free();
+    if (!f || s_dv_open || s_ntalk <= 0) return;
+    int i = (int)rnd(0, (uint32_t)s_ntalk - 1);
+    if (fx_busy(s_dv_nm[i])) return;
+    fx_add(f, s_dv_nm[i], i);
+    fx_start(f, FX_TEXT, LCARS_PAL->hi, 1, rnd(200, 300), 60, dev_rest);
+}
+
+static void fx_spawn_cb(lv_timer_t *t)
+{
+    uint32_t next = 500;
+    if (s_green) switch (s_cur) {
+    case PG_OPS:   spawn_ports(); next = rnd(150, 700);  break;
+    case PG_TRAPS: spawn_trap();  next = rnd(250, 900);  break;
+    case PG_WIRES: spawn_wire();  next = rnd(250, 900);  break;
+    case PG_NET:   spawn_net();   next = rnd(300, 1000); break;
+    case PG_DEV:   spawn_dev();   next = rnd(600, 1500); break;
+    default: break;
+    }
+    lv_timer_set_period(t, next);
+}
+
+// DEV lights: each tick a row lights one of its lit dots in hi for 2 ticks,
+// with a chance per tick that grows with the device's rate (2 % plus 0.05 %
+// per packet an hour, at most 40 %).
+static void dev_dot_rest(int i, int k)
+{
+    lv_obj_set_style_bg_color(s_dv_dot[i][k], k < s_dv_lit[i] ? LCARS_COL(c1) : LCARS_COL(track), 0);
+}
+
+static void dev_blink_clear(void)
+{
+    for (int i = 0; i < LC_DEVS; i++) {
+        if (s_dv_blink_n[i] > 0) dev_dot_rest(i, s_dv_blink[i]);
+        s_dv_blink_n[i] = 0;
+    }
+}
+
+static void dev_flicker(void)
+{
+    for (int i = 0; i < LC_DEVS && i < s_ntalk; i++) {
+        if (s_dv_blink_n[i] > 0) {
+            if (--s_dv_blink_n[i] == 0) dev_dot_rest(i, s_dv_blink[i]);
+            continue;
+        }
+        uint32_t pm = 20 + s_dv_rate[i] / 2;
+        if (pm > 400) pm = 400;
+        if (!s_dv_lit[i] || rnd(0, 999) >= pm) continue;
+        s_dv_blink[i] = (int8_t)rnd(0, s_dv_lit[i] - 1u);
+        s_dv_blink_n[i] = 2;
+        lv_obj_set_style_bg_color(s_dv_dot[i][s_dv_blink[i]], LCARS_COL(hi), 0);
+    }
+}
+
+// NET gauges: a third of the way to the target each tick (at least 1 px),
+// so empty to full takes about 12 ticks (0.6 s).
+static void gauges_ease(void)
+{
+    for (int i = 0; i < G_N; i++) {
+        lv_coord_t h = lv_obj_get_height(s_g_fill[i]), d = s_g_tgt[i] - h;
+        if (!d) continue;
+        lv_coord_t step = d / 3;
+        if (!step) step = d > 0 ? 1 : -1;
+        h += step;
+        lv_obj_set_height(s_g_fill[i], h);
+        lv_obj_set_y(s_g_fill[i], G_H - h);
+    }
+}
+
+static void anim_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_green) return;
+    if (s_cur == PG_NET) gauges_ease();
+    else if (s_cur == PG_DEV && !s_dv_open) dev_flicker();
+}
+
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
 static void page_refresh(bool force)
@@ -1365,6 +1677,7 @@ static void page_refresh(bool force)
 static void page_show(int p)
 {
     if (p < 0 || p >= PAGES) p = PG_OPS;
+    fx_stop_all();
     if (p == PG_DEV && s_cur != PG_DEV) { s_dv_open = false; show(s_dv_list, true); show(s_dv_det, false); }
     s_cur = p;
     s_page_at = lv_tick_get();
@@ -1373,9 +1686,13 @@ static void page_show(int p)
     title_set(ALARM_COND_GREEN);
     page_refresh(true);
     EXT_RAM_BSS_ATTR static bool measured[PAGES];            // the first show of each page after boot
+    static const char *const WHAT[PAGES] = {
+        "LCARS OPS, scan line and port clusters", "LCARS TRAPS, row polling", "LCARS TRIPWIRES, cell flashes",
+        "LCARS NET, gauges and label flashes", "LCARS DEVICES, activity lights",
+    };
     if (!measured[p]) {
         measured[p] = true;
-        ui_refr_measure(p == PG_OPS ? "LCARS OPS, scan line and port highlight" : PAGE_TITLE[p]);
+        ui_refr_measure(WHAT[p]);
     }
 }
 
@@ -1385,21 +1702,6 @@ static void fast_cb(lv_timer_t *t)
     if (!s_green || s_cur != PG_OPS) return;
     s_scan_x = (s_scan_x + SCAN_STEP) % CH_W;
     lv_obj_set_x(s_scan, (lv_coord_t)(CH_X + s_scan_x));
-}
-
-static void port_cb(lv_timer_t *t)
-{
-    (void)t;
-    if (!s_green || s_cur != PG_OPS || !s_nports) return;
-    if (s_port_cur >= 0) {
-        lc_port_t *p = &s_ports[s_port_cur];
-        p->lit = p->hit;
-        lv_obj_set_style_text_color(p->l, grp_col(p->grp), 0);
-        lv_obj_set_style_text_opa(p->l, p->hit ? LV_OPA_COVER : DIM_OPA, 0);
-    }
-    s_port_cur = (s_port_cur + 1) % s_nports;
-    lv_obj_set_style_text_color(s_ports[s_port_cur].l, LCARS_COL(scan), 0);
-    lv_obj_set_style_text_opa(s_ports[s_port_cur].l, LV_OPA_COVER, 0);
 }
 
 static void slow_cb(lv_timer_t *t)
@@ -1442,7 +1744,12 @@ void lcars_build(lv_obj_t *scr)
     show(s_alert, false);
     show(s_root, false);
     lv_timer_create(fast_cb, SCAN_MS, NULL);
-    lv_timer_create(port_cb, PORT_MS, NULL);
+    for (int i = 0; i < FX_SLOTS; i++) {
+        s_fx[i].tm = lv_timer_create(fx_cb, 60, &s_fx[i]);
+        lv_timer_pause(s_fx[i].tm);
+    }
+    lv_timer_create(fx_spawn_cb, 500, NULL);
+    lv_timer_create(anim_cb, ANIM_MS, NULL);
     lv_timer_create(slow_cb, 1000, NULL);
     ESP_LOGI(TAG, "Built: %d ports (%d pages), AUTO every %u s", s_nports, PAGES, (unsigned)settings_get()->panel_rotate_s);
 }
@@ -1452,6 +1759,7 @@ lv_obj_t *lcars_alert_box(void) { return s_alert; }
 void lcars_view(alarm_cond_t c, bool on)
 {
     bool green = on && c == ALARM_COND_GREEN;
+    if (!green) fx_stop_all();                  // the motion pauses under an alert view
     show(s_root, on);
     if (!on) { s_green = false; return; }
     show(s_rail, green);
