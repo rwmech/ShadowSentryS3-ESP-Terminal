@@ -232,19 +232,37 @@ const char *describe_tier_key(describe_tier_t t)
 
 // ── Bounded text ──────────────────────────────────────────────────────────────
 
-typedef struct { char *b; size_t cap, n; } sb_t;
+typedef struct { char *b; size_t cap, n; int cut; } sb_t;
 
 static void sb_fmt(sb_t *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static void sb_fmt(sb_t *s, const char *fmt, ...)
 {
-    if (s->n + 1 >= s->cap) return;
+    if (s->n + 1 >= s->cap) { s->cut = 1; return; }
     va_list ap;
     va_start(ap, fmt);
     int w = vsnprintf(s->b + s->n, s->cap - s->n, fmt, ap);
     va_end(ap);
     if (w < 0) { s->b[s->n] = '\0'; return; }
     s->n += (size_t)w;
-    if (s->n >= s->cap) s->n = s->cap - 1;
+    if (s->n >= s->cap) { s->n = s->cap - 1; s->cut = 1; }
+}
+
+// A headline that overflowed: cut at the last space after `head` (the
+// "Code CC-NN <name> | <source>: " part) that leaves room for "...", drop
+// trailing spaces and separators, and end in "...". A single word longer
+// than the room is cut where it must be.
+static void sb_ellipsis(sb_t *s, size_t head)
+{
+    if (!s->cut || s->cap < 5) return;
+    size_t lim = s->cap - 4;                            // room for "..." and the NUL
+    size_t n = s->n < lim ? s->n : lim;
+    size_t i = n;
+    while (i > head && s->b[i] != ' ') i--;
+    if (i > head) n = i;
+    while (n > head && (s->b[n - 1] == ' ' || s->b[n - 1] == ',' || s->b[n - 1] == ';' ||
+                        s->b[n - 1] == ':' || s->b[n - 1] == '(' || s->b[n - 1] == '-')) n--;
+    memcpy(s->b + n, "...", 4);
+    s->n = n + 3;
 }
 
 // Attacker text: printable ASCII only; backticks and double quotes become
@@ -502,6 +520,7 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
 
     const code_row_t *c = code_row(e);
     sb_fmt(&s, "Code %s %s | %s: ", c->code, c->name, src);
+    size_t head = s.n;
 
     switch (e->type) {
     case ATTACK_SCAN:
@@ -594,5 +613,6 @@ size_t describe_event(const attack_log_t *e, char *out, size_t len)
         sb_fmt(&s, "type %d", (int)e->type);
         break;
     }
+    sb_ellipsis(&s, head);
     return s.n;
 }
