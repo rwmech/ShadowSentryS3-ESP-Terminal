@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 static const char *TAG = "LCARS";
 
@@ -107,10 +108,12 @@ EXT_RAM_BSS_ATTR static bool s_port_ev[LC_PORTS_MAX];    // an event named the p
 
 static bool s_chart_dirty = true;
 static bool fx_busy(lv_obj_t *o);      // Motion: o is being flashed
+static uint32_t rnd(uint32_t lo, uint32_t hi);
 
 static lv_color_t grp_col(uint8_t g)
 {
-    return lv_color_hex(g == GRP_TRAP ? LCARS_PAL->c6 : g == GRP_WIRE ? LCARS_PAL->c4 : LCARS_PAL->c5);
+    // NET in honey c2, not butter c5: dimmed to 73 % butter read as grey (Rob, 2026-11-03).
+    return lv_color_hex(g == GRP_TRAP ? LCARS_PAL->c6 : g == GRP_WIRE ? LCARS_PAL->c4 : LCARS_PAL->c2);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -559,8 +562,10 @@ static void build_frame(void)
     lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -4, 304);
 
     // Rail
-    // 04 is c1, not butter c5 (the mockup): the near-white mark would not show on c5.
-    const uint32_t col[6] = { LCARS_PAL->c2, LCARS_PAL->c6, LCARS_PAL->c4, LCARS_PAL->c1, LCARS_PAL->c3, LCARS_PAL->c6 };
+    // 02 TRAPS, 03 WIRES and 04 NET in their ports' colours on OPS. 04 is honey
+    // c2 (the mockup had butter c5, on which the near-white mark would not
+    // show), so 01 OPS took c1, the frame's colour.
+    const uint32_t col[6] = { LCARS_PAL->c1, LCARS_PAL->c6, LCARS_PAL->c4, LCARS_PAL->c2, LCARS_PAL->c3, LCARS_PAL->c6 };
     s_rail = area(s_root, 0, RAIL_Y, RAIL_W, 6 * RAIL_PITCH);
     for (int i = 0; i < 6; i++) {
         lv_obj_t *b = fill(s_rail, 0, i * RAIL_PITCH, RAIL_W, RAIL_H, lv_color_hex(col[i]));
@@ -1153,8 +1158,10 @@ static void build_net(lv_obj_t *pg)
 //
 // List (busiest first, discovery_top_talkers()): header, then 6 rows of 30 px
 // from y 16: name (14 px, c2) and "IP | VENDOR" (12 px, dim) x 0..235,
-// Pi-hole's blocked share (12 px, c4, right) x 244..339, five activity
-// lights x 348..399, a track line under each row. A tap opens the detail:
+// Pi-hole's blocked share (12 px, c4, right) x 244..399 at y 3, under it an
+// activity bar (DV_BAR_*: the fill eases to the device's packet rate on a log
+// scale, a short hi segment travels along it at a speed that grows with the
+// rate; anim_cb moves it), a track line under each row. A tap opens the detail:
 // name (20 px), Pi-hole's lookups and blocked count, the last allowed and
 // blocked names, the router's flow summary, BACK and BLOCK DEVICE (asks
 // first; blocklist_add() on confirm: the router drops the device's forward
@@ -1162,10 +1169,21 @@ static void build_net(lv_obj_t *pg)
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_list, *s_dv_det;
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_row[LC_DEVS], *s_dv_nm[LC_DEVS], *s_dv_sub[LC_DEVS], *s_dv_q[LC_DEVS];
-EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_dot[LC_DEVS][5];
-EXT_RAM_BSS_ATTR static uint8_t   s_dv_lit[LC_DEVS];
-EXT_RAM_BSS_ATTR static int8_t    s_dv_blink[LC_DEVS], s_dv_blink_n[LC_DEVS];  // the bright light, ticks left
-EXT_RAM_BSS_ATTR static uint32_t  s_dv_rate[LC_DEVS];                        // per hour, for the flicker
+#define DV_BAR_X        244         // the activity bar, in the row
+#define DV_BAR_Y        22
+#define DV_BAR_W        156
+#define DV_BAR_H        4
+#define DV_RATE_FULL    3600        // packets an hour for a full bar (log scale: 1 an hour 8 %, 60 an hour 50 %)
+#define DV_SEG_W        12          // the travelling segment
+#define DV_SEG_MS       80          // how often it moves
+#define DV_SEG_MIN_PXS  10          // its speed, px a second: a quiet device (DV_BAR_W in 16 s) ...
+#define DV_SEG_MAX_PXS  70          // ... to a full bar (in 2.4 s); between, in step with the fill
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_fill[LC_DEVS], *s_dv_seg[LC_DEVS];
+EXT_RAM_BSS_ATTR static lv_coord_t s_dv_tgt[LC_DEVS];                        // the fill's width to ease to
+EXT_RAM_BSS_ATTR static uint8_t   s_dv_pct[LC_DEVS];                         // the rate on the log scale, %
+EXT_RAM_BSS_ATTR static int32_t   s_dv_pos[LC_DEVS];                         // the segment's x, 1/16 px
+EXT_RAM_BSS_ATTR static uint32_t  s_dv_seg_at;
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dd_nm, *s_dd_sub, *s_dd_v[4], *s_dd_block;
 EXT_RAM_BSS_ATTR static discovery_talker_t s_dv_sel;     // the device shown in the detail (a copy)
 EXT_RAM_BSS_ATTR static bool      s_dv_open;
@@ -1248,13 +1266,10 @@ static void dev_refresh(bool force)
         if (pihole_share(t->ip, t->mac, &tot, &blk)) snprintf(b, sizeof(b), "%lu %% BLOCKED", (unsigned long)(blk * 100 / tot));
         else snprintf(b, sizeof(b), "%lu / H", (unsigned long)t->per_hour);
         set_text(s_dv_q[i], b);
-        uint32_t ph = s_dv_rate[i] = t->per_hour;
-        uint8_t n = ph < 30 ? 1 : ph < 100 ? 2 : ph < 300 ? 3 : ph < 600 ? 4 : 5;
-        if (n != s_dv_lit[i]) {
-            s_dv_lit[i] = n;
-            for (int k = 0; k < 5; k++)
-                lv_obj_set_style_bg_color(s_dv_dot[i][k], k < n ? LCARS_COL(c1) : LCARS_COL(track), 0);
-        }
+        uint32_t ph = t->per_hour > DV_RATE_FULL ? DV_RATE_FULL : t->per_hour;
+        s_dv_pct[i] = (uint8_t)(100.0f * logf(1.0f + (float)ph) / logf(1.0f + DV_RATE_FULL) + 0.5f);
+        s_dv_tgt[i] = (lv_coord_t)(DV_BAR_W * s_dv_pct[i] / 100);   // anim_cb eases the fill there
+        show(s_dv_seg[i], ph != 0);                                 // no packets, no motion
         show(s_dv_row[i], true);
     }
 }
@@ -1348,9 +1363,13 @@ static void build_dev(lv_obj_t *pg)
         lv_obj_add_event_cb(r, dev_row_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
         s_dv_nm[i] = text(r, F14, LCARS_COL(c2), 0, 0, 236, "");
         s_dv_sub[i] = text(r, F12, LCARS_COL(dim), 0, 16, 236, "");
-        s_dv_q[i] = text(r, F12, LCARS_COL(c4), 244, 8, 96, "");
+        s_dv_q[i] = text(r, F12, LCARS_COL(c4), DV_BAR_X, 3, DV_BAR_W, "");
         lv_obj_set_style_text_align(s_dv_q[i], LV_TEXT_ALIGN_RIGHT, 0);
-        for (int k = 0; k < 5; k++) s_dv_dot[i][k] = fill(r, (lv_coord_t)(348 + k * 11), 11, 8, 8, LCARS_COL(track));
+        lv_obj_t *tr = fill(r, DV_BAR_X, DV_BAR_Y, DV_BAR_W, DV_BAR_H, LCARS_COL(track));   // clips the segment
+        s_dv_fill[i] = fill(tr, 0, 0, 0, DV_BAR_H, LCARS_COL(c1));
+        s_dv_seg[i] = fill(tr, -DV_SEG_W, 0, DV_SEG_W, DV_BAR_H, LCARS_COL(hi));
+        s_dv_pos[i] = (int32_t)rnd(0, DV_BAR_W) * 16;               // the rows do not travel in step
+        show(s_dv_seg[i], false);
         fill(r, 0, 29, 400, 1, LCARS_COL(track));
         show(r, false);
     }
@@ -1379,22 +1398,34 @@ static void build_dev(lv_obj_t *pg)
 // Every effect comes from real activity. fx_sense() runs every FX_SENSE_MS,
 // compares the counters the shown page can read with the last run, and
 // queues an effect for each element whose counter moved (one entry per
-// element: a burst coalesces). The queue plays one effect at a time, with a
-// random FX_GAP_MIN_MS..FX_GAP_MAX_MS between one ending and the next. With
-// nothing happening, nothing moves. Each kind of activity has its own
-// effect and tone, every step's length is drawn again each time (a range,
-// or the base value +/- FX_JITTER_PCT), and the same effect never plays
-// twice running at the same timing:
+// element: a burst coalesces). FX_LANES lanes play the queue, so two effects
+// can run at once on different elements; each lane waits its own random
+// FX_GAP_MIN_MS..FX_GAP_MAX_MS after its effect ends, and takes the oldest
+// entry whose elements the other lane is not playing. On OPS lane
+// FX_WATCH_LANE walks the watch pass only and the other lane plays the
+// queue. With nothing happening, nothing moves, except the watch pass.
+// Each kind of activity has its own effect and tone, every step's length is
+// drawn again each time (a range, or the base value +/- FX_JITTER_PCT), and
+// the same effect never plays twice running at the same timing:
 //   EF_DECAY   solid, then flashes each dimmer (FX_FLASH_PCT), back to normal: hi
-//   EF_GLOW    a slow fade up and back, no blink: c2
+//   EF_GLOW    a slow fade up and back, no blink: c2 (slower on NET and DEV)
 //   EF_RIPPLE  the first cell, then the next ones in turn, fading behind: c5
-//   EF_TICK    one short brighten: c4
+//   EF_TICK    one brighten, held: c4
 //   EF_PULSE   two soft swells: hi at FX_PULSE_PEAK %
 //   EF_SWEEP   a TRAPS row brightens left to right (dot, tag, bar, track): c5
+//   EF_WATCH   a soft glow to FX_WATCH_PEAK %: hi
+//   EF_SCAN    a soft ripple, FX_WATCH_PEAK % and fading behind: hi
+// The watch pass shows the panel re-reading each listener's counter: every
+// FX_WATCH_MIN_MS..FX_WATCH_MAX_MS the next TRAPS row's tag, or the next
+// armed WIRES cell's bar (off cells never), in a shuffled order, gets an
+// EF_WATCH on a free lane; real hits are taken from the queue first. On OPS
+// every FX_OPS_WATCH_MIN_MS..FX_OPS_WATCH_MAX_MS the next cluster of 2 to 5
+// neighbouring ports, TRAP and WIRE ones weighted up (ops_watch_plan()),
+// gets an EF_WATCH or an EF_SCAN on the watch lane.
 // A cell whose normal colour is the effect's tone uses hi instead. The tone
 // is reached FX_FLASH_PCT (or the effect's own) % of the way from the cell's
-// normal colour (lv_color_mix). The DEV activity lights (anim_cb, ANIM_MS)
-// stay rate-driven. All of it stops, colours restored and the queue
+// normal colour (lv_color_mix). The DEV activity bars (anim_cb, ANIM_MS)
+// follow the devices' rates. All of it stops, colours restored and the queue
 // emptied, on a page change and while an alert view is up or the LCARS panel
 // is hidden (the alert stripes are ui.c's); the first sense after that only
 // records the counters.
@@ -1408,28 +1439,43 @@ static void build_dev(lv_obj_t *pg)
 #define FX_FLASH_ON_MS      140
 #define FX_FLASH_OFF_MS     140
 static const uint8_t FX_FLASH_PCT[FX_FLASHES] = { 100, 65, 35 };   // of the way from normal to the tone
-#define FX_GLOW_MIN_MS      600         // EF_GLOW: up and back in all
+#define FX_GLOW_MIN_MS      600         // EF_GLOW: up and back in all (OPS, WIRES)
 #define FX_GLOW_MAX_MS      900
+#define FX_GLOW_SLOW_MIN_MS 900         //   on NET and DEV, where a name or value has to be noticed
+#define FX_GLOW_SLOW_MAX_MS 1200
 #define FX_GLOW_STEPS       12
 #define FX_RIPPLE_MIN_MS    80          // EF_RIPPLE: one cell to the next
 #define FX_RIPPLE_MAX_MS    120
-#define FX_TICK_MS          150         // EF_TICK
-#define FX_PULSE_MIN_MS     60          // EF_PULSE: each of its 7 steps
-#define FX_PULSE_MAX_MS     100
+#define FX_TICK_MS          500         // EF_TICK (NET only)
+#define FX_PULSE_MIN_MS     150         // EF_PULSE (NET only): each of its 7 steps, about 1.2 s in all
+#define FX_PULSE_MAX_MS     190
 #define FX_PULSE_PEAK       80          //   % at the top of a swell
 #define FX_SWEEP_MIN_MS     70          // EF_SWEEP: one part of the row to the next
 #define FX_SWEEP_MAX_MS     110
+#define FX_WATCH_MIN_MS     2500        // the watch pass: from one listener to the next
+#define FX_WATCH_MAX_MS     4000
+#define FX_WATCH_MS         900         // EF_WATCH: up and back in all (+/- FX_JITTER_PCT)
+#define FX_WATCH_PEAK       60          //   % at the top
+#define FX_SCAN_MIN_MS      120         // EF_SCAN: one cell to the next
+#define FX_SCAN_MAX_MS      180
+#define FX_OPS_WATCH_MIN_MS 1500        // OPS watch pass: from one cluster to the next
+#define FX_OPS_WATCH_MAX_MS 3500
+#define FX_OPS_WATCH_WEIGHT 2           //   a TRAP or WIRE cluster comes up this many times per NET one
+#define FX_OPS_SECTIONS     2           // OPS: several ports in one sense light up to this many sections
 #define FX_RSSI_DB          3           // NET: an RSSI change this big ticks the access point
 
+#define FX_LANES      2
+#define FX_WATCH_LANE 1                 // on OPS this lane walks the watch pass only
 #define FX_OBJS     5
 #define FX_STEP_MAX 16
 #define FX_Q        12
 #define ANIM_MS     50
 enum { FX_TEXT, FX_BG };
-enum { EF_DECAY, EF_GLOW, EF_RIPPLE, EF_TICK, EF_PULSE, EF_SWEEP, EF_N };
+enum { EF_DECAY, EF_GLOW, EF_RIPPLE, EF_TICK, EF_PULSE, EF_SWEEP, EF_WATCH, EF_SCAN, EF_N };
 
 typedef struct {
     lv_timer_t *tm;
+    uint32_t    idle_at, gap;                   // the lane's rest after its effect
     lv_obj_t   *o[FX_OBJS];
     int16_t     item[FX_OBJS];
     lv_color_t  base[FX_OBJS], tone[FX_OBJS];   // normal colour (read at the start) and target
@@ -1443,10 +1489,14 @@ typedef struct {
 
 typedef struct { uint8_t kind, n; int16_t item[FX_OBJS]; } fxq_t;
 
-EXT_RAM_BSS_ATTR static fx_t     s_fx;
+EXT_RAM_BSS_ATTR static fx_t     s_fx[FX_LANES];
 EXT_RAM_BSS_ATTR static fxq_t    s_q[FX_Q];
 EXT_RAM_BSS_ATTR static uint8_t  s_q_head, s_q_n;
-EXT_RAM_BSS_ATTR static uint32_t s_fx_idle_at, s_fx_gap, s_sense_at, s_fx_sig[EF_N];
+EXT_RAM_BSS_ATTR static uint32_t s_sense_at, s_fx_sig[EF_N];
+EXT_RAM_BSS_ATTR static uint32_t s_watch_at, s_watch_gap;
+EXT_RAM_BSS_ATTR static uint8_t  s_wo[LC_WIRES > LC_TRAPS ? LC_WIRES : LC_TRAPS], s_wo_n, s_wo_i, s_wo_last;
+#define OW_MAX (LC_PORTS_MAX * FX_OPS_WATCH_WEIGHT)
+EXT_RAM_BSS_ATTR static uint8_t  s_ow_st[OW_MAX], s_ow_len[OW_MAX], s_ow_n, s_ow_i, s_ow_last;   // OPS clusters
 static bool s_sn_prime = true;                  // the next sense only records
 
 static uint32_t rnd(uint32_t lo, uint32_t hi) { return lo + esp_random() % (hi - lo + 1); }
@@ -1454,7 +1504,8 @@ static uint16_t jit(uint32_t ms) { return (uint16_t)(ms * rnd(100 - FX_JITTER_PC
 
 static bool fx_busy(lv_obj_t *o)
 {
-    for (int k = 0; k < s_fx.n; k++) if (s_fx.o[k] == o) return true;
+    for (int l = 0; l < FX_LANES; l++)
+        for (int k = 0; k < s_fx[l].n; k++) if (s_fx[l].o[k] == o) return true;
     return false;
 }
 
@@ -1526,21 +1577,32 @@ static void fx_paint(fx_t *f)
     }
 }
 
-static void fx_end(void)
+static void fx_end(fx_t *f)
 {
-    fx_t *f = &s_fx;
     int n = f->n;
     f->n = 0;                           // idle before the restore: ops_refresh's port test
     for (int k = 0; k < n; k++) if (f->lvl[k]) fx_rest(f->item[k]);
     lv_timer_pause(f->tm);
-    s_fx_idle_at = lv_tick_get();
-    s_fx_gap = rnd(FX_GAP_MIN_MS, FX_GAP_MAX_MS);
+    f->idle_at = lv_tick_get();
+    f->gap = rnd(FX_GAP_MIN_MS, FX_GAP_MAX_MS);
+}
+
+// Up and back over `steps` steps of `step` ms, to `peak` %.
+static void fx_hill(fx_t *f, uint32_t steps, uint32_t step, uint32_t peak)
+{
+    uint32_t half = steps / 2;
+    f->plen = (uint8_t)steps;
+    for (uint32_t s = 0; s < steps; s++) {
+        f->pct[s] = (uint8_t)(s < half ? (s + 1) * peak / half : (steps - s - 1) * peak / half);
+        f->ms[s] = (uint16_t)step;
+    }
 }
 
 // The effect's shape: its tone, the per-object profile and each step's length.
 static uint32_t fx_shape(fx_t *f, uint8_t kind)
 {
-    static const uint8_t RIPPLE[] = { 100, 60, 25 }, SWEEP[] = { 100, 55, 20 };
+    static const uint8_t RIPPLE[] = { 100, 60, 25 }, SWEEP[] = { 100, 55, 20 }, SCAN[] = { FX_WATCH_PEAK, 35, 15 };
+    _Static_assert(sizeof(SCAN) == sizeof(RIPPLE), "SCAN: as long as RIPPLE (FX_STEP_MAX check)");
     static const uint8_t PULSE[] = { FX_PULSE_PEAK / 2, FX_PULSE_PEAK, FX_PULSE_PEAK / 2, 0,
                                      FX_PULSE_PEAK / 2, FX_PULSE_PEAK, FX_PULSE_PEAK / 2 };
     _Static_assert(1 + 2 * FX_FLASHES <= FX_STEP_MAX && FX_GLOW_STEPS <= FX_STEP_MAX
@@ -1559,14 +1621,20 @@ static uint32_t fx_shape(fx_t *f, uint8_t kind)
         }
         return LCARS_PAL->hi;
     case EF_GLOW: {
-        uint32_t step = rnd(FX_GLOW_MIN_MS, FX_GLOW_MAX_MS) / FX_GLOW_STEPS, half = FX_GLOW_STEPS / 2;
-        f->plen = FX_GLOW_STEPS;
-        for (uint32_t s = 0; s < FX_GLOW_STEPS; s++) {
-            f->pct[s] = (uint8_t)(s < half ? (s + 1) * 100u / half : (FX_GLOW_STEPS - s - 1) * 100u / half);
-            f->ms[s] = (uint16_t)step;
-        }
+        bool slow = s_cur == PG_NET || s_cur == PG_DEV;
+        fx_hill(f, FX_GLOW_STEPS, (slow ? rnd(FX_GLOW_SLOW_MIN_MS, FX_GLOW_SLOW_MAX_MS)
+                                        : rnd(FX_GLOW_MIN_MS, FX_GLOW_MAX_MS)) / FX_GLOW_STEPS, 100);
         return LCARS_PAL->c2;
     }
+    case EF_WATCH:
+        fx_hill(f, FX_GLOW_STEPS, jit(FX_WATCH_MS) / FX_GLOW_STEPS, FX_WATCH_PEAK);
+        return LCARS_PAL->hi;
+    case EF_SCAN:
+        f->plen = sizeof(SCAN);
+        memcpy(f->pct, SCAN, sizeof(SCAN));
+        f->lag = 1;
+        for (int s = 0; s < FX_STEP_MAX; s++) f->ms[s] = (uint16_t)rnd(FX_SCAN_MIN_MS, FX_SCAN_MAX_MS);
+        return LCARS_PAL->hi;
     case EF_RIPPLE:
     case EF_SWEEP:
         f->plen = sizeof(RIPPLE);
@@ -1589,14 +1657,13 @@ static uint32_t fx_shape(fx_t *f, uint8_t kind)
     }
 }
 
-static void fx_play(const fxq_t *q)
+static void fx_play(fx_t *f, const fxq_t *q)
 {
-    fx_t *f = &s_fx;
     uint8_t n = 0;
     for (int k = 0; k < q->n && n < FX_OBJS; k++) {
         uint8_t part;
         lv_obj_t *o = fx_obj(q->item[k], &part);
-        if (!o) continue;
+        if (!o || fx_busy(o)) continue;                 // the other lane has it
         f->o[n] = o;
         f->item[n] = q->item[k];
         f->part[n] = part;
@@ -1624,21 +1691,22 @@ static void fx_play(const fxq_t *q)
 
 static void fx_cb(lv_timer_t *t)
 {
-    fx_t *f = &s_fx;
+    fx_t *f = t->user_data;
     if (!f->n) { lv_timer_pause(t); return; }
-    if (!s_green || ++f->st >= f->steps) { fx_end(); return; }
+    if (!s_green || ++f->st >= f->steps) { fx_end(f); return; }
     fx_paint(f);
     lv_timer_set_period(t, f->ms[f->st]);
 }
 
-static void dev_blink_clear(void);
-
 static void fx_stop_all(void)
 {
-    if (s_fx.n) fx_end();
+    for (int l = 0; l < FX_LANES; l++) if (s_fx[l].n) fx_end(&s_fx[l]);
     s_q_n = 0;
     s_sn_prime = true;
-    dev_blink_clear();
+    s_wo_n = 0;                                 // a fresh watch order, the first one a full wait away
+    s_wo_last = 0xff;
+    s_watch_at = lv_tick_get();
+    s_watch_gap = rnd(FX_OPS_WATCH_MIN_MS, FX_OPS_WATCH_MAX_MS);   // the first wait, on any page
 }
 
 // Queue an effect on the shown page; an element already waiting is not
@@ -1715,18 +1783,33 @@ static void sense_ops(void)
     i = port_idx(ROUTER_IPFIX_PORT);
     if (moved(rec, &s_sn.flow) && i >= 0 && !why[i]) why[i] = 1;
 
-    int16_t v[FX_OBJS];
+    int16_t mv[LC_PORTS_MAX];
     int m = 0, ev = 0;
-    for (i = 0; i < s_nports; i++) if (why[i]) { if (m < FX_OBJS) v[m++] = (int16_t)i; ev |= why[i]; }
-    if (m == 1) { fxq_push(ev & 2 ? EF_DECAY : EF_GLOW, v, 1); return; }
+    for (i = 0; i < s_nports; i++) if (why[i]) { mv[m++] = (int16_t)i; ev |= why[i]; }
     if (!m) return;
-    const int nb[3] = { v[0] ^ 1, v[0] - 2, v[0] + 2 };
-    for (int k = 0; k < 3 && m < FX_OBJS; k++) {
-        bool dup = nb[k] < 0 || nb[k] >= s_nports;
-        for (int j = 0; j < m && !dup; j++) dup = v[j] == nb[k];
-        if (!dup) v[m++] = (int16_t)nb[k];
+    if (m == 1) { fxq_push(ev & 2 ? EF_DECAY : EF_GLOW, mv, 1); return; }
+    // Several: up to FX_OPS_SECTIONS ripples, so the two lanes can play them
+    // at once. A section is a moved port, the other moved ports in its row or
+    // the rows next to it, then its neighbours; the next section starts at
+    // the first moved port no section has taken.
+    bool used[LC_PORTS_MAX] = { 0 };
+    for (int sct = 0; sct < FX_OPS_SECTIONS; sct++) {
+        int seed = -1;
+        for (int k = 0; k < m && seed < 0; k++) if (!used[mv[k]]) seed = mv[k];
+        if (seed < 0) break;
+        int16_t v[FX_OBJS];
+        int n = 0;
+        v[n++] = (int16_t)seed;
+        used[seed] = true;
+        for (int k = 0; k < m && n < FX_OBJS; k++) {
+            int p = mv[k], d = p / 2 - seed / 2;
+            if (!used[p] && d >= -1 && d <= 1) { v[n++] = (int16_t)p; used[p] = true; }
+        }
+        const int nb[3] = { seed ^ 1, seed - 2, seed + 2 };
+        for (int k = 0; k < 3 && n < FX_OBJS; k++)
+            if (nb[k] >= 0 && nb[k] < s_nports && !used[nb[k]]) { v[n++] = (int16_t)nb[k]; used[nb[k]] = true; }
+        fxq_push(EF_RIPPLE, v, n);
     }
-    fxq_push(EF_RIPPLE, v, m);
 }
 
 // TRAPS: a row's hits today (s_t.trap[].n, from lcars_event()) went up: an
@@ -1822,46 +1905,169 @@ static void fx_sense(void)
     s_sn_prime = !s_green;                      // under an alert view: keep recording only
 }
 
+// True if a lane is playing one of the entry's elements.
+static bool fxq_taken(const fxq_t *q)
+{
+    for (int k = 0; k < q->n; k++) {
+        uint8_t part;
+        lv_obj_t *o = fx_obj(q->item[k], &part);
+        if (o && fx_busy(o)) return true;
+    }
+    return false;
+}
+
+// The watch pass: the next listener in a shuffled order (a new order once
+// all have had their turn, never starting with the one just watched), as
+// an item: a TRAPS row's tag, an armed WIRES cell's bar. -1: none free.
+static void watch_shuffle(int n)
+{
+    for (int i = 0; i < n; i++) s_wo[i] = (uint8_t)i;
+    for (int i = n - 1; i > 0; i--) {
+        int j = (int)rnd(0, (uint32_t)i);
+        uint8_t x = s_wo[i]; s_wo[i] = s_wo[j]; s_wo[j] = x;
+    }
+    if (n > 1 && s_wo[0] == s_wo_last) { uint8_t x = s_wo[0]; s_wo[0] = s_wo[1]; s_wo[1] = x; }
+    s_wo_n = (uint8_t)n;
+    s_wo_i = 0;
+}
+
+static int watch_next(void)
+{
+    int n = s_cur == PG_TRAPS ? LC_TRAPS : s_cur == PG_WIRES ? LC_WIRES : 0;
+    for (int tries = 0; tries < n; tries++) {
+        if (s_wo_n != n || s_wo_i >= s_wo_n) watch_shuffle(n);
+        int i = s_wo[s_wo_i++];
+        s_wo_last = (uint8_t)i;
+        if (s_cur == PG_WIRES && s_wi_st[i] == WS_OFF) continue;    // off cells never glow
+        int it = s_cur == PG_TRAPS ? i * 4 + 1 : i * 2;
+        uint8_t part;
+        lv_obj_t *o = fx_obj(it, &part);
+        if (o && !fx_busy(o)) return it;
+    }
+    return -1;
+}
+
+// OPS watch pass. The table is cut into clusters of 2 to 5 neighbouring
+// cells (consecutive in the 2-column table, inside one group; a group of
+// one port is a cluster of one), each TRAP and WIRE cluster listed
+// FX_OPS_WATCH_WEIGHT times and each NET one once, then shuffled, no
+// cluster twice running. A new cut and order once the list is used up.
+static void ops_watch_plan(void)
+{
+    uint8_t st[LC_PORTS_MAX], ln[LC_PORTS_MAX];
+    int nc = 0;
+    for (int i = 0; i < s_nports;) {
+        int end = i;
+        while (end < s_nports && s_ports[end].grp == s_ports[i].grp) end++;
+        while (i < end) {
+            int rem = end - i, len = (int)rnd(2, FX_OBJS);
+            if (len > rem) len = rem;
+            if (rem - len == 1) len = len < FX_OBJS ? len + 1 : len - 1;   // never leave one behind
+            st[nc] = (uint8_t)i;
+            ln[nc++] = (uint8_t)len;
+            i += len;
+        }
+    }
+    s_ow_n = 0;
+    for (int c = 0; c < nc; c++)
+        for (int w = s_ports[st[c]].grp == GRP_NET ? 1 : FX_OPS_WATCH_WEIGHT; w > 0 && s_ow_n < OW_MAX; w--) {
+            s_ow_st[s_ow_n] = st[c];
+            s_ow_len[s_ow_n++] = ln[c];
+        }
+    for (int i = s_ow_n - 1; i > 0; i--) {
+        int j = (int)rnd(0, (uint32_t)i);
+        uint8_t a = s_ow_st[i], b = s_ow_len[i];
+        s_ow_st[i] = s_ow_st[j]; s_ow_len[i] = s_ow_len[j];
+        s_ow_st[j] = a; s_ow_len[j] = b;
+    }
+    for (int i = 0; i < s_ow_n; i++) {                  // a repeat: swap in a later one
+        uint8_t prev = i ? s_ow_st[i - 1] : s_ow_last;
+        for (int j = i + 1; j < s_ow_n && s_ow_st[i] == prev; j++) {
+            if (s_ow_st[j] == prev) continue;
+            uint8_t a = s_ow_st[i], b = s_ow_len[i];
+            s_ow_st[i] = s_ow_st[j]; s_ow_len[i] = s_ow_len[j];
+            s_ow_st[j] = a; s_ow_len[j] = b;
+        }
+    }
+    s_ow_i = 0;
+}
+
+// The next cluster: all its cells glow together (EF_WATCH) or a soft
+// ripple runs through them (EF_SCAN), one or the other at random.
+static void ops_watch(fx_t *f)
+{
+    if (s_nports <= 0) return;
+    if (s_ow_i >= s_ow_n) ops_watch_plan();
+    if (!s_ow_n) return;
+    fxq_t q = { .kind = rnd(0, 1) ? EF_WATCH : EF_SCAN, .n = s_ow_len[s_ow_i] };
+    s_ow_last = s_ow_st[s_ow_i];
+    for (int k = 0; k < q.n; k++) q.item[k] = (int16_t)(s_ow_st[s_ow_i] + k);
+    s_ow_i++;
+    fx_play(f, &q);
+}
+
 static void fx_spawn_cb(lv_timer_t *t)
 {
     (void)t;
     if (lv_tick_elaps(s_sense_at) >= FX_SENSE_MS) { s_sense_at = lv_tick_get(); fx_sense(); }
-    if (!s_green || s_fx.n || !s_q_n || lv_tick_elaps(s_fx_idle_at) < s_fx_gap) return;
-    fxq_t q = s_q[s_q_head];
-    s_q_head = (uint8_t)((s_q_head + 1) % FX_Q);
-    s_q_n--;
-    fx_play(&q);
-}
-
-// DEV lights: each tick a row lights one of its lit dots in hi for 2 ticks,
-// with a chance per tick that grows with the device's rate (2 % plus 0.05 %
-// per packet an hour, at most 40 %).
-static void dev_dot_rest(int i, int k)
-{
-    lv_obj_set_style_bg_color(s_dv_dot[i][k], k < s_dv_lit[i] ? LCARS_COL(c1) : LCARS_COL(track), 0);
-}
-
-static void dev_blink_clear(void)
-{
-    for (int i = 0; i < LC_DEVS; i++) {
-        if (s_dv_blink_n[i] > 0) dev_dot_rest(i, s_dv_blink[i]);
-        s_dv_blink_n[i] = 0;
+    if (!s_green) return;
+    bool ops = s_cur == PG_OPS;
+    for (int l = 0; l < FX_LANES; l++) {                // real activity first
+        fx_t *f = &s_fx[l];
+        if ((ops && l == FX_WATCH_LANE) || f->n || lv_tick_elaps(f->idle_at) < f->gap) continue;
+        for (int j = 0; j < s_q_n; j++) {
+            fxq_t q = s_q[(s_q_head + j) % FX_Q];
+            if (fxq_taken(&q)) continue;
+            for (int k = j; k + 1 < s_q_n; k++) s_q[(s_q_head + k) % FX_Q] = s_q[(s_q_head + k + 1) % FX_Q];
+            s_q_n--;
+            fx_play(f, &q);
+            break;
+        }
+    }
+    if (lv_tick_elaps(s_watch_at) < s_watch_gap) return;
+    if (ops) {                                          // OPS: the watch lane, its own cadence
+        if (s_fx[FX_WATCH_LANE].n) return;
+        s_watch_at = lv_tick_get();
+        s_watch_gap = rnd(FX_OPS_WATCH_MIN_MS, FX_OPS_WATCH_MAX_MS);
+        ops_watch(&s_fx[FX_WATCH_LANE]);
+        return;
+    }
+    if (s_cur != PG_TRAPS && s_cur != PG_WIRES) return;
+    for (int l = 0; l < FX_LANES; l++) {                // then the watch, on a free lane
+        if (s_fx[l].n) continue;
+        s_watch_at = lv_tick_get();
+        s_watch_gap = rnd(FX_WATCH_MIN_MS, FX_WATCH_MAX_MS);
+        int it = watch_next();
+        if (it >= 0) {
+            fxq_t q = { .kind = EF_WATCH, .n = 1, .item = { (int16_t)it } };
+            fx_play(&s_fx[l], &q);
+        }
+        return;
     }
 }
 
-static void dev_flicker(void)
+// DEV activity bars: each tick the fill moves a third of the way to its
+// target (at least 1 px); every DV_SEG_MS the segment moves by the time
+// passed at its row's speed, and re-enters from the left after the end.
+static void dev_bars(void)
 {
+    uint32_t dt = lv_tick_elaps(s_dv_seg_at);
+    bool move = dt >= DV_SEG_MS;
+    if (move) s_dv_seg_at = lv_tick_get();
+    if (dt > 4 * DV_SEG_MS) dt = DV_SEG_MS;                 // back from another page: no jump
     for (int i = 0; i < LC_DEVS && i < s_ntalk; i++) {
-        if (s_dv_blink_n[i] > 0) {
-            if (--s_dv_blink_n[i] == 0) dev_dot_rest(i, s_dv_blink[i]);
-            continue;
+        lv_coord_t w = lv_obj_get_width(s_dv_fill[i]), d = s_dv_tgt[i] - w;
+        if (d) {
+            lv_coord_t step = d / 3;
+            if (!step) step = d > 0 ? 1 : -1;
+            lv_obj_set_width(s_dv_fill[i], w + step);
         }
-        uint32_t pm = 20 + s_dv_rate[i] / 2;
-        if (pm > 400) pm = 400;
-        if (!s_dv_lit[i] || rnd(0, 999) >= pm) continue;
-        s_dv_blink[i] = (int8_t)rnd(0, s_dv_lit[i] - 1u);
-        s_dv_blink_n[i] = 2;
-        lv_obj_set_style_bg_color(s_dv_dot[i][s_dv_blink[i]], LCARS_COL(hi), 0);
+        if (!move || lv_obj_has_flag(s_dv_seg[i], LV_OBJ_FLAG_HIDDEN)) continue;
+        uint32_t pxs = DV_SEG_MIN_PXS + (DV_SEG_MAX_PXS - DV_SEG_MIN_PXS) * s_dv_pct[i] / 100u;
+        s_dv_pos[i] += (int32_t)(pxs * 16u * dt / 1000u);
+        if (s_dv_pos[i] >= DV_BAR_W * 16) s_dv_pos[i] -= (DV_BAR_W + DV_SEG_W) * 16;
+        lv_coord_t x = (lv_coord_t)(s_dv_pos[i] / 16);
+        if (x != lv_obj_get_style_x(s_dv_seg[i], LV_PART_MAIN)) lv_obj_set_x(s_dv_seg[i], x);
     }
 }
 
@@ -1885,7 +2091,7 @@ static void anim_cb(lv_timer_t *t)
     (void)t;
     if (!s_green) return;
     if (s_cur == PG_NET) gauges_ease();
-    else if (s_cur == PG_DEV && !s_dv_open) dev_flicker();
+    else if (s_cur == PG_DEV && !s_dv_open) dev_bars();
 }
 
 // ── Pages ─────────────────────────────────────────────────────────────────────
@@ -1915,8 +2121,9 @@ static void page_show(int p)
     page_refresh(true);
     EXT_RAM_BSS_ATTR static bool measured[PAGES];            // the first show of each page after boot
     static const char *const WHAT[PAGES] = {
-        "LCARS OPS, scan line and port clusters", "LCARS TRAPS, row polling", "LCARS TRIPWIRES, cell flashes",
-        "LCARS NET, gauges and label flashes", "LCARS DEVICES, activity lights",
+        "LCARS OPS, scan line and port clusters", "LCARS TRAPS, watch pass and row sweeps",
+        "LCARS TRIPWIRES, watch pass and cell flashes", "LCARS NET, gauges and label flashes",
+        "LCARS DEVICES, activity bars",
     };
     if (!measured[p]) {
         measured[p] = true;
@@ -1972,8 +2179,10 @@ void lcars_build(lv_obj_t *scr)
     show(s_alert, false);
     show(s_root, false);
     lv_timer_create(fast_cb, SCAN_MS, NULL);
-    s_fx.tm = lv_timer_create(fx_cb, 60, NULL);
-    lv_timer_pause(s_fx.tm);
+    for (int l = 0; l < FX_LANES; l++) {
+        s_fx[l].tm = lv_timer_create(fx_cb, 60, &s_fx[l]);
+        lv_timer_pause(s_fx[l].tm);
+    }
     lv_timer_create(fx_spawn_cb, 100, NULL);
     lv_timer_create(anim_cb, ANIM_MS, NULL);
     lv_timer_create(slow_cb, 1000, NULL);
