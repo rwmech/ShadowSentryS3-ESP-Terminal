@@ -166,6 +166,20 @@ static void get_status(int sock, char *out)
         jw(&j, ",\"test_req\":%lu,\"test_done\":%lu,\"test_ok\":%s,\"test_status\":%d",
            (unsigned long)s->test_req, (unsigned long)s->test_done, s->test_ok ? "true" : "false", s->test_status);
         jw_kstr(&j, "test_msg", s->test_msg, sizeof(s->test_msg));
+        // The dnsmasq log: what the outbound matching rests on.
+        jw(&j, ",\"dns_log\":{");
+        jw_kstr(&j, "state", s->log_state, sizeof(s->log_state));
+        jw_kstr(&j, "why", s->log_why, sizeof(s->log_why));
+        uint32_t cover = s->log_since > s->map_evict_newest ? s->log_since : s->map_evict_newest;
+        jw(&j, ",\"since\":%lu,\"cover_from\":%lu,\"query_logging\":%s,\"polls\":%lu,\"lines\":%lu,"
+               "\"queries\":%lu,\"answers\":%lu,\"missed\":%lu,\"gaps\":%lu,\"addresses\":%lu,\"evicted\":%lu,"
+               "\"geo_blocked_ts\":%lu,\"poll_s\":%d,\"cover_s\":%d,\"map_max\":%d}",
+           (unsigned long)s->log_since, (unsigned long)(s->log_since ? cover : 0),
+           s->query_logging < 0 ? "null" : s->query_logging ? "true" : "false",
+           (unsigned long)s->log_polls, (unsigned long)s->log_lines, (unsigned long)s->log_queries,
+           (unsigned long)s->log_answers, (unsigned long)s->log_missed, (unsigned long)s->log_gaps,
+           (unsigned long)s->map_entries, (unsigned long)s->map_evicted, (unsigned long)s->geo_blocked_ts,
+           PIHOLE_LOG_POLL_S, PIHOLE_LOG_COVER_S, PIHOLE_MAP_MAX);
         jw(&j, "}");
     }
     free(s);
@@ -224,7 +238,7 @@ static void get_device(int sock, const char *query, char *out)
     static const char head[] = "{\"enabled\":true,\"found\":true";
     memcpy(out, head, sizeof(head) - 1);
     size_t o = sizeof(head) - 1;
-    size_t n = pihole_device_json(ip, has_mac ? mac : NULL, out + o, OUT_MAX - o - 2, true);
+    size_t n = pihole_device_json(ip, has_mac ? mac : NULL, out + o, OUT_MAX - o - 2, true, true);
     if (n == 0) { send_lit(sock, "200 OK", "{\"enabled\":true,\"found\":false}"); return; }
     if (n >= OUT_MAX - o - 2) { send_lit(sock, "500 Internal Server Error", "{\"error\":\"device too long\"}"); return; }
     o += n;

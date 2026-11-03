@@ -85,6 +85,51 @@ typedef struct {
 
 typedef struct { uint32_t ip; uint8_t mac[6]; bool mac_known; } known_t;
 
+// ── DNS answers (PSRAM) ───────────────────────────────────────────────────────
+//
+// The map: IPv4 address to the name it answered, written by the task only,
+// read by the admin, Discord and WebSocket tasks under s_map_mux. Chained by
+// address in PIHOLE_MAP_MAX buckets; when full, the least recently answered
+// entry goes (its time is remembered: coverage starts after it).
+
+#define MAP_NIL 0xFFFFu
+_Static_assert(PIHOLE_MAP_MAX < MAP_NIL, "map indexes are 16 bit");
+
+typedef struct { uint32_t ip, ts, nh; } ph_asker_t;     // client, when, hash of the name it asked
+
+typedef struct {
+    uint32_t   ip;                      // network order, 0 = free
+    uint32_t   last;                    // epoch of the newest answer
+    uint32_t   nh;                      // hash of name (of the whole name, before the cut)
+    uint16_t   next;                    // bucket chain
+    uint8_t    n_by;
+    char       name[PIHOLE_MAP_NAME];   // the newest name this address answered
+    ph_asker_t by[PIHOLE_MAP_ASKERS];   // newest first
+} ph_ans_t;
+
+typedef struct {
+    uint16_t head[PIHOLE_MAP_MAX];
+    uint32_t n;
+    ph_ans_t e[PIHOLE_MAP_MAX];
+} ph_map_t;
+
+// The log reader's own state (task only).
+enum { LG_NONE = 0, LG_CNAME, LG_ANSWER };
+typedef struct {
+    bool     have;                      // next is a position in the current log
+    uint32_t next, pid;                 // nextID to ask for, FTL's pid
+    uint32_t due_up, qlog_up;           // uptime of the next read and queryLogging check
+    uint32_t lines, queries;            // since the reader started, for "no_queries"
+    uint32_t self_ip;                   // this board's address, for the ip-api.com check
+    struct { uint32_t nh, client, ts; } q[PIHOLE_QRING];   // recent query lines, a ring
+    uint16_t qh;                        // next slot
+    uint8_t  prev;                      // LG_*: what the line before was
+    uint32_t prev_nh;
+    uint32_t head_nh, head_client;      // the question a chain of reply lines answers
+    char     head[PIHOLE_MAP_NAME];
+    char     line[PIHOLE_LOG_LINE];
+} ph_log_t;
+
 // The task's work state. Only the task touches it, except tab[], which is
 // published through s_cur under s_mux.
 typedef struct {
@@ -100,9 +145,12 @@ typedef struct {
     known_t            known[PIHOLE_KNOWN_MAX];
     struct { const char *d; uint32_t n; uint16_t allowed, blocked; uint8_t how; } cnt[PIHOLE_TOP_SAMPLE];
     ph_table_t         tab[2];
+    ph_log_t           lg;
 } work_t;
 
 static work_t           *W;
+static ph_map_t         *s_map;         // PSRAM, allocated with W
+static SemaphoreHandle_t s_map_mux;     // s_map
 static ph_table_t       *s_cur;         // published table, NULL before the first sync
 static SemaphoreHandle_t s_mux;         // s_cur, s_st, the request fields
 static TaskHandle_t      s_task;
@@ -819,6 +867,356 @@ static bool sync_all(const conn_t *c)
     return ok;
 }
 
+// ── DNS log: the answers ──────────────────────────────────────────────────────
+
+// FNV-1a over a name, lower case, a trailing dot dropped; never 0.
+static uint32_t name_hash(const char *s)
+{
+    size_t n = strnlen(s, 255);
+    if (n && s[n - 1] == '.') n--;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+        h = (h ^ c) * 16777619u;
+    }
+    return h ? h : 1;
+}
+
+// A strict dotted quad (no leading zeros past one digit, no other forms), to
+// network order. The prefix form "a.b.c.d/port" is read up to the '/'.
+static bool ipv4_tok(const char *s, uint32_t *out)
+{
+    uint8_t b[4];
+    for (int k = 0; k < 4; k++) {
+        if (*s < '0' || *s > '9') return false;
+        unsigned v = 0, d = 0;
+        for (; *s >= '0' && *s <= '9' && d < 4; s++, d++) v = v * 10 + (unsigned)(*s - '0');
+        if (d > 3 || v > 255 || (d > 1 && s[-(int)d] == '0')) return false;
+        b[k] = (uint8_t)v;
+        if (k < 3) { if (*s != '.') return false; s++; }
+    }
+    if (*s && *s != '/') return false;
+    memcpy(out, b, 4);
+    return true;
+}
+
+static uint16_t map_bucket(uint32_t ip) { return (uint16_t)((ip * 2654435761u) % PIHOLE_MAP_MAX); }
+
+// The entry for ip, or MAP_NIL. Caller holds s_map_mux.
+static uint16_t map_find(uint32_t ip)
+{
+    for (uint16_t i = s_map->head[map_bucket(ip)]; i != MAP_NIL; i = s_map->e[i].next)
+        if (s_map->e[i].ip == ip) return i;
+    return MAP_NIL;
+}
+
+// One answer: ip was the answer to name (hash nh), asked by client (0 unknown).
+static void map_put(uint32_t ip, const char *name, uint32_t nh, uint32_t client, uint32_t ts)
+{
+    uint32_t evicted = 0;                           // the evicted entry's time, 0 none
+    xSemaphoreTake(s_map_mux, portMAX_DELAY);
+    uint16_t i = map_find(ip);
+    if (i == MAP_NIL) {
+        if (s_map->n < PIHOLE_MAP_MAX) {
+            i = (uint16_t)s_map->n++;
+        } else {                                    // the least recently answered goes
+            uint32_t old = UINT32_MAX;
+            for (uint16_t k = 0; k < PIHOLE_MAP_MAX; k++)
+                if (s_map->e[k].last < old) { old = s_map->e[k].last; i = k; }
+            uint16_t *p = &s_map->head[map_bucket(s_map->e[i].ip)];
+            while (*p != MAP_NIL && *p != i) p = &s_map->e[*p].next;
+            if (*p == i) *p = s_map->e[i].next;
+            evicted = old ? old : 1;
+        }
+        ph_ans_t *e = &s_map->e[i];
+        memset(e, 0, sizeof(*e));
+        e->ip = ip;
+        uint16_t b = map_bucket(ip);
+        e->next = s_map->head[b];
+        s_map->head[b] = i;
+    }
+    ph_ans_t *e = &s_map->e[i];
+    e->last = ts;
+    e->nh = nh;
+    strlcpy(e->name, name, sizeof(e->name));
+    if (client) {
+        int k = 0;
+        while (k < e->n_by && e->by[k].ip != client) k++;
+        if (k == e->n_by && e->n_by < PIHOLE_MAP_ASKERS) e->n_by++;
+        if (k >= PIHOLE_MAP_ASKERS) k = PIHOLE_MAP_ASKERS - 1;      // the oldest asker goes
+        memmove(&e->by[1], &e->by[0], (size_t)k * sizeof(e->by[0]));
+        e->by[0] = (ph_asker_t){ .ip = client, .ts = ts, .nh = nh };
+    }
+    xSemaphoreGive(s_map_mux);
+    if (evicted) {                                  // s_mux after the map lock is let go (lock order: s_mux, then the map)
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        s_st->map_evicted++;
+        if (evicted > s_st->map_evict_newest) s_st->map_evict_newest = evicted;
+        xSemaphoreGive(s_mux);
+    }
+}
+
+// The newest query line for this name: its client, 0 if none in the ring.
+static uint32_t asker_of(uint32_t nh)
+{
+    ph_log_t *L = &W->lg;
+    for (int k = 1; k <= PIHOLE_QRING; k++) {
+        uint16_t s = (uint16_t)((L->qh + PIHOLE_QRING - k) % PIHOLE_QRING);
+        if (!L->q[s].nh) break;
+        if (L->q[s].nh == nh) return L->q[s].client;
+    }
+    return 0;
+}
+
+// One log line (untrusted text, already NUL-terminated by cJSON). Cut at
+// PIHOLE_LOG_LINE and split into at most 8 words; anything else is ignored.
+static void log_line(const char *msg, uint32_t ts, uint32_t *answers)
+{
+    ph_log_t *L = &W->lg;
+    strlcpy(L->line, msg, sizeof(L->line));
+    char *t[8];
+    int nt = 0;
+    for (char *p = L->line; *p && nt < 8;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        t[nt++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) *p++ = '\0';
+    }
+    L->lines++;
+    uint8_t prev = L->prev;
+    L->prev = LG_NONE;
+    uint32_t pre = 0;                               // log-queries=proto: "<serial> <client>/<port> "
+    if (nt >= 3 && strspn(t[0], "0123456789") == strlen(t[0]) && strchr(t[1], '/')) {
+        if (!ipv4_tok(t[1], &pre)) pre = 0;
+        memmove(&t[0], &t[2], (size_t)(nt - 2) * sizeof(t[0]));
+        nt -= 2;
+    }
+    if (nt >= 4 && !strncmp(t[0], "query[", 6) && !strcmp(t[2], "from")) {
+        uint32_t cl = 0;
+        if (!ipv4_tok(t[3], &cl)) cl = pre;
+        L->queries++;
+        L->q[L->qh].nh = name_hash(t[1]);
+        L->q[L->qh].client = cl;
+        L->q[L->qh].ts = ts;
+        L->qh = (uint16_t)((L->qh + 1) % PIHOLE_QRING);
+        return;
+    }
+    if (nt >= 4 && !strcmp(t[2], "is") &&
+        (!strcmp(t[0], "reply") || !strcmp(t[0], "cached") || !strcmp(t[0], "cached-stale"))) {
+        uint32_t nh = name_hash(t[1]);
+        bool cname = !strcmp(t[3], "<CNAME>");
+        // dnsmasq logs one answer's records in a row: the CNAMEs, then the
+        // addresses of the last name. So a line continues the question when
+        // the line before was a CNAME, or an address of the same name.
+        if (!(prev == LG_CNAME || (prev == LG_ANSWER && nh == L->prev_nh))) {
+            strlcpy(L->head, t[1], sizeof(L->head));
+            size_t hl = strlen(L->head);
+            if (hl && L->head[hl - 1] == '.') L->head[hl - 1] = '\0';
+            for (char *p = L->head; *p; p++) if (*p >= 'A' && *p <= 'Z') *p = (char)(*p + 32);
+            L->head_nh = nh;
+            L->head_client = pre ? pre : asker_of(nh);
+        }
+        L->prev = cname ? LG_CNAME : LG_ANSWER;
+        L->prev_nh = nh;
+        uint32_t a;
+        if (!cname && ipv4_tok(t[3], &a) && a && a != 0xFFFFFFFFu) {
+            map_put(a, L->head, L->head_nh, L->head_client, ts);
+            (*answers)++;
+        }
+        return;
+    }
+    // "gravity blocked ip-api.com is 0.0.0.0" (also regex, exactly, ...):
+    // only this board's GeoIP lookups are of interest.
+    if (nt >= 4 && (!strcmp(t[1], "blocked") || !strcmp(t[1], "denied")) && !strcasecmp(t[2], "ip-api.com")) {
+        uint32_t cl = pre ? pre : asker_of(name_hash(t[2]));
+        if (cl && cl == L->self_ip) {
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            s_st->geo_blocked_ts = ts;
+            xSemaphoreGive(s_mux);
+        }
+    }
+}
+
+static void log_state(const char *state, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void log_state(const char *state, const char *fmt, ...)
+{
+    char why[PIHOLE_ERR_LEN] = "";
+    if (fmt) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(why, sizeof(why), fmt, ap);
+        va_end(ap);
+    }
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    bool changed = strcmp(s_st->log_state, state) != 0;
+    strlcpy(s_st->log_state, state, sizeof(s_st->log_state));
+    strlcpy(s_st->log_why, why, sizeof(s_st->log_why));
+    if (strcmp(state, "ok")) s_st->log_since = 0;       // a gap: coverage starts again
+    xSemaphoreGive(s_mux);
+    if (changed) ESP_LOGI(TAG, "DNS log: %s%s%s", state, why[0] ? ", " : "", why);
+}
+
+// Seconds to the next try after a failed read: long when Pi-hole said the
+// log is not there or not ours, short for an error.
+static uint32_t log_retry_s(void)
+{
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    bool err = !strcmp(s_st->log_state, "error");
+    xSemaphoreGive(s_mux);
+    return err ? PIHOLE_LOG_RETRY_S : PIHOLE_LOG_RECHECK_S;
+}
+
+// GET /api/logs/dnsmasq?nextID=id. 1 parsed into *r, 0 failed (state set),
+// -2 over PIHOLE_RESP_MAX.
+static int log_get(const conn_t *c, uint32_t id, cJSON **r)
+{
+    char path[48];
+    snprintf(path, sizeof(path), "/api/logs/dnsmasq?nextID=%lu", (unsigned long)id);
+    uint32_t over;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    over = s_st->oversized;
+    xSemaphoreGive(s_mux);
+    size_t len;
+    *r = NULL;
+    if (api_get(c, path, &len)) {
+        *r = cJSON_ParseWithLength(W->resp, len);
+        if (*r && cJSON_IsArray(jget(*r, "log")) && cJSON_IsNumber(jget(*r, "nextID"))) return 1;
+        cJSON_Delete(*r);
+        *r = NULL;
+        log_state("error", "Pi-hole's DNS log answer was not the expected JSON");
+        return 0;
+    }
+    int st;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    st = s_st->last_http;
+    bool big = s_st->oversized != over;
+    xSemaphoreGive(s_mux);
+    if (big) return -2;
+    if (st == 404) log_state("no_endpoint", "Pi-hole has no /api/logs/dnsmasq (HTTP 404): its DNS log cannot be read, so outbound addresses are not matched to lookups");
+    else if (st == 403) log_state("denied", "Pi-hole refused its DNS log to the app password (HTTP 403)");
+    else log_state("error", "reading Pi-hole's DNS log failed: %s", W->err);
+    return 0;
+}
+
+// dns.queryLogging: 1 on, 0 off, -1 unknown (an older FTL, or not allowed).
+static int query_logging(const conn_t *c)
+{
+    size_t len;
+    if (!api_get(c, "/api/config/dns/queryLogging", &len)) return -1;
+    cJSON *r = cJSON_ParseWithLength(W->resp, len);
+    const cJSON *d = r ? jget(jget(r, "config"), "dns") : NULL;
+    const cJSON *q = d ? jget(d, "queryLogging") : NULL;
+    int v = cJSON_IsBool(q) ? cJSON_IsTrue(q) : -1;
+    cJSON_Delete(r);
+    return v;
+}
+
+// One read of the new log lines, on the task.
+static void log_poll(const conn_t *c)
+{
+    ph_log_t *L = &W->lg;
+    uint32_t now = up_s();
+    L->due_up = now + PIHOLE_LOG_POLL_S;
+    char me[20] = "";
+    wifi_manager_get_ip_str(me, sizeof(me));
+    if (!ipv4_tok(me, &L->self_ip)) L->self_ip = 0;
+
+    if ((int32_t)(now - L->qlog_up) >= 0) {
+        int q = query_logging(c);
+        L->qlog_up = now + PIHOLE_LOG_RECHECK_S;
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        s_st->query_logging = (int8_t)q;
+        xSemaphoreGive(s_mux);
+    }
+    int8_t ql;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    ql = s_st->query_logging;
+    xSemaphoreGive(s_mux);
+    if (ql == 0) {
+        log_state("logging_off", "query logging is off in Pi-hole (Settings, DNS, Log DNS queries), so its DNS log holds no answers to match");
+        L->have = false;
+        L->due_up = now + PIHOLE_LOG_RECHECK_S;
+        L->qlog_up = L->due_up;
+        return;
+    }
+
+    cJSON *r = NULL;
+    bool gap = false;
+    for (int round = 0; round < 3; round++) {
+        if (!L->have) {
+            // nextID past the newest line: no lines, just where the log is.
+            int g = log_get(c, 2147483647u, &r);
+            if (g <= 0) {
+                if (g == -2) log_state("error", "Pi-hole's DNS log answer is over %u KB", (unsigned)(PIHOLE_RESP_MAX / 1024));
+                L->due_up = now + log_retry_s();
+                return;
+            }
+            uint32_t nid = ju32(r, "nextID");
+            L->pid = ju32(r, "pid");
+            cJSON_Delete(r);
+            r = NULL;
+            L->next = nid > PIHOLE_LOG_BACK ? nid - PIHOLE_LOG_BACK : 0;
+            L->have = true;
+            L->prev = LG_NONE;
+            gap = true;
+        }
+        int g = log_get(c, L->next, &r);
+        if (g == 1) break;
+        if (g == 0) {
+            L->due_up = now + log_retry_s();
+            return;
+        }
+        L->have = false;                            // fell behind: skip to the newest lines
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        s_st->log_missed += PIHOLE_LOG_BACK;        // at least; the exact count is not known
+        xSemaphoreGive(s_mux);
+    }
+    if (!r) {
+        log_state("error", "Pi-hole's DNS log could not be read in pieces under %u KB", (unsigned)(PIHOLE_RESP_MAX / 1024));
+        L->due_up = now + PIHOLE_LOG_RETRY_S;
+        return;
+    }
+
+    uint32_t nid = ju32(r, "nextID"), pid = ju32(r, "pid");
+    const cJSON *lines = jget(r, "log");
+    uint32_t cnt = (uint32_t)cJSON_GetArraySize(lines), missed = 0;
+    if (L->pid && pid != L->pid) gap = true;        // FTL restarted: its IDs start again
+    else if (nid < L->next) gap = true;
+    else if (nid - L->next > cnt) { missed = nid - L->next - cnt; gap = true; }   // the 512-line ring overran
+    uint32_t answers = 0, q0 = L->queries;
+    const cJSON *it;
+    cJSON_ArrayForEach(it, lines) {
+        const char *m = jstr(it, "message");
+        if (!m) continue;
+        double t = jnum(it, "timestamp", 0);
+        uint32_t ts = t >= CLOCK_VALID && t < 4294967295.0 ? (uint32_t)t : epoch();
+        log_line(m, ts, &answers);
+    }
+    cJSON_Delete(r);
+    L->next = nid;
+    L->pid = pid;
+
+    uint32_t n_map;
+    xSemaphoreTake(s_map_mux, portMAX_DELAY);
+    n_map = s_map->n;
+    xSemaphoreGive(s_map_mux);
+    bool no_q = L->lines >= 200 && L->queries == 0;
+    if (no_q) log_state("no_queries", "Pi-hole's DNS log has no query lines, so query logging looks off; outbound addresses are not matched");
+    else log_state("ok", "%s", "");
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    s_st->log_polls++;
+    s_st->log_lines += cnt;
+    s_st->log_queries += L->queries - q0;
+    s_st->log_answers += answers;
+    s_st->log_missed += missed;
+    if (gap) s_st->log_gaps++;
+    s_st->map_entries = n_map;
+    if (!no_q && (gap || !s_st->log_since)) s_st->log_since = epoch();
+    xSemaphoreGive(s_mux);
+}
+
 // ── Task ──────────────────────────────────────────────────────────────────────
 
 // The connection the settings describe, into out. False if they are incomplete.
@@ -897,7 +1295,9 @@ static void pihole_task(void *arg)
         uint32_t now = up_s();
         bool on = settings_pihole_enabled();
         TickType_t wait = portMAX_DELAY;
-        if (on) wait = (int32_t)(next - now) > 0 ? pdMS_TO_TICKS((next - now) * 1000u) : 0;
+        uint32_t due = next;                        // the next sync or log read, whichever is first
+        if (s_ip && !s_fails && (int32_t)(W->lg.due_up - due) < 0) due = W->lg.due_up;
+        if (on) wait = (int32_t)(due - now) > 0 ? pdMS_TO_TICKS((due - now) * 1000u) : 0;
         xSemaphoreTake(s_mux, portMAX_DELAY);
         s_next_up = on ? next : 0;
         xSemaphoreGive(s_mux);
@@ -918,8 +1318,13 @@ static void pihole_task(void *arg)
             strlcpy(s_st->host, W->c.host, sizeof(s_st->host));
             strlcpy(s_st->state, on ? "starting" : "off", sizeof(s_st->state));
             s_st->error[0] = '\0';
+            strlcpy(s_st->log_state, on ? "starting" : "off", sizeof(s_st->log_state));
+            s_st->log_why[0] = '\0';
+            s_st->log_since = 0;
+            s_st->query_logging = -1;
             xSemaphoreGive(s_mux);
             W->logged_err[0] = '\0';
+            memset(&W->lg, 0, sizeof(W->lg));      // another Pi-hole: its log from the start (the map stays)
         }
         memset(&W->want, 0, sizeof(W->want));
 
@@ -944,14 +1349,27 @@ static void pihole_task(void *arg)
         if (!on) {
             if (s_session) logout(&W->c);
             set_state(false, false);
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            strlcpy(s_st->log_state, "off", sizeof(s_st->log_state));
+            s_st->log_why[0] = '\0';
+            s_st->log_since = 0;
+            xSemaphoreGive(s_mux);
+            W->lg.have = false;
             continue;
         }
+        // The log is read between syncs while the last sync worked (a failing
+        // Pi-hole is left to the sync's back-off).
+        if (s_ip && !s_fails && (int32_t)(W->lg.due_up - up_s()) <= 0) log_poll(&W->c);
         now = up_s();
         if (!refresh && (int32_t)(next - now) > 0) continue;
 
         bool ok = sync_all(&W->c);
         if (ok) s_fails = 0; else s_fails++;
         set_state(ok, true);
+        if (!ok) {                                  // the log waits for the sync to work again: a gap
+            log_state("error", "Pi-hole is not answering (%s)", W->err);
+            W->lg.have = false;
+        }
         uint32_t backoff;
         xSemaphoreTake(s_mux, portMAX_DELAY);
         backoff = s_st->backoff_s;
@@ -987,7 +1405,10 @@ void pihole_init(void)
     s_st = heap_caps_calloc(1, sizeof(*s_st), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_st) { ESP_LOGE(TAG, "No PSRAM for the status: Pi-hole off"); return; }
     strlcpy(s_st->state, "off", sizeof(s_st->state));
-    s_mux = xSemaphoreCreateMutex();            // NULL leaves every entry point a no-op
+    strlcpy(s_st->log_state, "off", sizeof(s_st->log_state));
+    s_st->query_logging = -1;
+    s_map_mux = xSemaphoreCreateMutex();
+    if (s_map_mux) s_mux = xSemaphoreCreateMutex();     // NULL leaves every entry point a no-op
     settings_on_change(on_settings);
 }
 
@@ -998,7 +1419,11 @@ bool pihole_start(void)
     bool ok = s_task != NULL, created = false;
     if (!ok) {
         if (!W) W = heap_caps_calloc(1, sizeof(*W), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (W && xTaskCreatePinnedToCoreWithCaps(pihole_task, "pihole", PIHOLE_TASK_STACK, NULL,
+        if (W && !s_map) {
+            s_map = heap_caps_calloc(1, sizeof(*s_map), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (s_map) for (int i = 0; i < PIHOLE_MAP_MAX; i++) s_map->head[i] = MAP_NIL;
+        }
+        if (W && s_map && xTaskCreatePinnedToCoreWithCaps(pihole_task, "pihole", PIHOLE_TASK_STACK, NULL,
                                                  PIHOLE_TASK_PRIO, &s_task, 1,
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
             ok = created = true;
@@ -1009,8 +1434,10 @@ bool pihole_start(void)
         }
     }
     xSemaphoreGive(s_mux);
-    if (created) ESP_LOGI(TAG, "Task started, %u KB of state in PSRAM", (unsigned)(sizeof(work_t) / 1024));
-    else if (!ok) ESP_LOGE(TAG, "Could not start: no PSRAM for %u KB of state, or no task", (unsigned)(sizeof(work_t) / 1024));
+    if (created) ESP_LOGI(TAG, "Task started, %u KB of state and a %u KB answer map in PSRAM",
+                          (unsigned)(sizeof(work_t) / 1024), (unsigned)(sizeof(ph_map_t) / 1024));
+    else if (!ok) ESP_LOGE(TAG, "Could not start: no PSRAM for %u KB of state and %u KB of map, or no task",
+                           (unsigned)(sizeof(work_t) / 1024), (unsigned)(sizeof(ph_map_t) / 1024));
     return ok;
 }
 
@@ -1097,7 +1524,29 @@ static void jw_str(jw_t *j, const char *s, size_t max)
     j->b[j->o] = '\0';
 }
 
-size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t cap, bool lead)
+// The addresses the DNS log saw each of the n names resolve to (an answer
+// to that name, or a client's question for it): one pass over the map, at
+// most PH_IPS_PER_NAME each. Caller holds s_mux; this takes the map lock
+// (the order everywhere: s_mux, then the map).
+#define PH_IPS_PER_NAME 4
+static void name_ips(const ph_top_t *top, int n, uint32_t out[][PH_IPS_PER_NAME], uint8_t *cnt)
+{
+    uint32_t h[PIHOLE_TOP_N];
+    for (int d = 0; d < n; d++) { h[d] = name_hash(top[d].d); cnt[d] = 0; }
+    if (!s_map) return;
+    xSemaphoreTake(s_map_mux, portMAX_DELAY);
+    for (uint32_t i = 0; i < s_map->n; i++) {
+        const ph_ans_t *e = &s_map->e[i];
+        for (int d = 0; d < n; d++) {
+            bool hit = e->nh == h[d];
+            for (int k = 0; k < e->n_by && !hit; k++) hit = e->by[k].nh == h[d];
+            if (hit && cnt[d] < PH_IPS_PER_NAME) out[d][cnt[d]++] = e->ip;
+        }
+    }
+    xSemaphoreGive(s_map_mux);
+}
+
+size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t cap, bool lead, bool answers)
 {
     if (!buf || cap < 16 || !s_mux || !settings_pihole_enabled()) return 0;
     char ips[16] = "";
@@ -1119,6 +1568,9 @@ size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t c
            (unsigned long)d->first, (unsigned long)d->last, (unsigned long)d->all_queries);
     if (d->queries >= 0) jw_raw(&j, ",\"queries\":%ld", (long)d->queries);
     if (d->blocked >= 0) jw_raw(&j, ",\"blocked\":%ld", (long)d->blocked);
+    uint32_t aips[PIHOLE_TOP_N][PH_IPS_PER_NAME];
+    uint8_t acnt[PIHOLE_TOP_N] = { 0 };
+    if (d->top_ts && answers) name_ips(d->top, d->n_top, aips, acnt);
     if (d->top_ts) {
         jw_raw(&j, ",\"top_domains\":[");
         for (int i = 0; i < d->n_top; i++) {
@@ -1130,7 +1582,17 @@ size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t c
             bool first = true;
             for (int b = 0; b < (int)(sizeof(BLK_KEY) / sizeof(BLK_KEY[0])); b++)
                 if (t->how & (1u << b)) { jw_raw(&j, "%s\"%s\"", first ? "" : ",", BLK_KEY[b]); first = false; }
-            jw_raw(&j, "]}");
+            jw_raw(&j, "]");
+            if (answers) {
+                jw_raw(&j, ",\"ips\":[");
+                for (int k = 0; k < acnt[i]; k++) {
+                    char a[16];
+                    fmt_ip(aips[i][k], a, sizeof(a));
+                    jw_raw(&j, "%s\"%s\"", k ? "," : "", a);
+                }
+                jw_raw(&j, "]");
+            }
+            jw_raw(&j, "}");
         }
         jw_raw(&j, "],\"top_of\":%u,\"top_ts\":%lu", (unsigned)d->top_of,
                (unsigned long)(d->top_ts > 1 ? d->top_ts : 0));
@@ -1176,5 +1638,70 @@ bool correlate_pihole_device(uint32_t ip, const uint8_t *mac, correlate_dns_t *o
         }
     }
     xSemaphoreGive(s_mux);
+    return found;
+}
+
+// correlate.c's DNS log hooks: the log's state, and the answers for a
+// device's destinations, from the map (RAM only).
+bool correlate_pihole_dnslog(correlate_dnslog_t *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+    if (!s_mux) return false;
+    out->on = settings_pihole_enabled() && s_task;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    strlcpy(out->state, s_st->log_state, sizeof(out->state));
+    uint32_t since = s_st->log_since, ev = s_st->map_evict_newest;
+    out->geo_blocked_ts = s_st->geo_blocked_ts;
+    char why[PIHOLE_ERR_LEN];
+    strlcpy(why, s_st->log_why, sizeof(why));
+    xSemaphoreGive(s_mux);
+    if (!out->on) {
+        strlcpy(out->state, "off", sizeof(out->state));
+        strlcpy(out->why, "Pi-hole is off in Settings", sizeof(out->why));
+        return true;
+    }
+    out->readable = !strcmp(out->state, "ok") && since;
+    out->cover_from = since > ev ? since : ev;
+    uint32_t now = epoch();
+    uint32_t got = out->readable && now > out->cover_from ? now - out->cover_from : 0;
+    out->usable = out->readable && got >= PIHOLE_LOG_COVER_S;
+    if (!out->readable)
+        snprintf(out->why, sizeof(out->why), "%s", why[0] ? why : "Pi-hole's DNS log has not been read yet");
+    else if (!out->usable)
+        snprintf(out->why, sizeof(out->why), "Pi-hole's DNS log covers %lu min so far; a missing lookup is called out after %u min",
+                 (unsigned long)(got / 60), (unsigned)(PIHOLE_LOG_COVER_S / 60));
+    return true;
+}
+
+int correlate_pihole_answers(uint32_t client, const correlate_dns_t *dns, const uint32_t *ips, int n,
+                             correlate_answer_t *out)
+{
+    if (!s_map || !s_map_mux || !ips || !out || n <= 0) return 0;
+    int found = 0;
+    xSemaphoreTake(s_map_mux, portMAX_DELAY);
+    for (int j = 0; j < n; j++) {
+        correlate_answer_t *a = &out[j];
+        memset(a, 0, sizeof(*a));
+        uint16_t i = ips[j] ? map_find(ips[j]) : MAP_NIL;
+        if (i == MAP_NIL) continue;
+        const ph_ans_t *e = &s_map->e[i];
+        a->found = true;
+        a->last = e->last;
+        strlcpy(a->name, e->name, sizeof(a->name));
+        found++;
+        int k = 0;
+        while (k < e->n_by && e->by[k].ip != client) k++;
+        if (k < e->n_by) {
+            a->self = true;
+            // It asked another name than the newest one: its own, if it is
+            // among its top domains.
+            for (int q = 0; dns && e->by[k].nh != e->nh && q < dns->n; q++)
+                if (name_hash(dns->q[q].domain) == e->by[k].nh) { strlcpy(a->name, dns->q[q].domain, sizeof(a->name)); break; }
+        } else if (e->n_by) {
+            a->by = e->by[0].ip;
+        }
+    }
+    xSemaphoreGive(s_map_mux);
     return found;
 }

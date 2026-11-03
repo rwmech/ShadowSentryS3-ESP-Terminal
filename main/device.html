@@ -109,6 +109,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Pi-hole verdicts, and a row or message the page points at (drill) */
 .ph-ok{background:rgba(0,210,160,.12);color:#99f6e4;border:1px solid rgba(0,210,160,.35)}
 tr.hit td{background:rgba(251,191,36,.12)}
+tr.nolk td{background:rgba(255,59,59,.10)}
 .mr.hit{background:rgba(251,191,36,.14);box-shadow:inset 3px 0 0 var(--amber)}
 </style>
 </head>
@@ -392,17 +393,18 @@ function renderPihole(d){
     if(!td.length)out.push(el('div','muted','None'));
     else{
       out.push(el('div','tsub','Allowed: Pi-hole answered, so the device could reach it. Blocked: Pi-hole refused every lookup. Mixed: some of each (often a name on a block list that was allowed for a while, or blocked only through another name it points to). '+
-        'The note says what a well-known name is used for. "Router" links to the router\'s outbound rows for an allowed name, when it shows any.'));
+        'The note says what a well-known name is used for. "Router" links an allowed name to the router\'s outbound rows going to an address Pi-hole gave out for it (read from Pi-hole\'s DNS log), or carrying that name.'));
       const t=el('table'),hd=el('thead'),hr=el('tr'),tb=el('tbody');
       ['Domain','Lookups','Pi-hole','Router'].forEach(h=>hr.append(el('th','',h)));hd.append(hr);
       td.forEach(e=>{
         const tr=el('tr'),dc=el('td'),v=e._v,note=window.ssDomainNote?ssDomainNote(S(e.d)):'';
         dc.append(el('div','mono',S(e.d)));if(note)dc.append(el('span','sub',note));
         const sc=el('td','nw');sc.append(el('span','tier-chip '+v.cls,v.t));if(v.sub)sc.append(el('span','sub',v.sub));
-        const rc=el('td','nw'),hits=v.r<2?rtRowsFor(S(e.d)):0;
+        const rc=el('td','nw'),hits=v.r<2?rtRowsFor(e):0,ni=arr(e.ips).length;
         if(hits){const a=el('a','',hits+' outbound row'+(hits===1?'':'s'));a.href='#rt-card';
-          a.onclick=ev=>{ev.preventDefault();rtShow(S(e.d));};rc.append(a);}
+          a.onclick=ev=>{ev.preventDefault();rtShow(e);};rc.append(a);}
         else rc.append(el('span','muted','-'));
+        if(ni)rc.append(el('span','sub',ni+' address'+(ni===1?'':'es')+' in the DNS log'));
         tr.append(dc,el('td','num',+e.n||0),sc,rc);tb.append(tr);
       });
       t.append(hd,tb);const w=el('div','tbl-wrap');w.append(t);out.push(w);
@@ -453,6 +455,7 @@ const FLAG_INFO={
   unusual_port:{r:3,t:'Unusual port',x:'Telnet, IRC, SMB, ADB and similar ports to the internet are rarely normal for a home device and are common in botnets.'},
   dns_bypass:{r:4,t:'Skips Pi-hole for DNS',x:'It looks names up somewhere other than your Pi-hole, so Pi-hole can neither see nor block those lookups.'},
   doh:{r:5,t:'Encrypted DNS',x:'DNS over HTTPS or TLS to a public resolver. Browsers and phones do this for privacy; it also hides the lookups from Pi-hole.'},
+  no_lookup:{r:2,t:'No lookup seen',x:'Pi-hole\'s DNS log shows nobody on your network looking these addresses up, yet the device talks to them. Addresses built into the firmware do this (common in IoT gear, and in malware), as do lookups made through other DNS or cached from before the log\'s cover began.'},
   direct_ip:{r:6,t:'No DNS name',x:'It talks to outside addresses it never looked up. Addresses built into the firmware are common in IoT gear, and in malware.'},
   fanout:{r:7,t:'Many outside hosts',x:'Talking to many internet hosts at once: normal for a browser, a console or a torrent client, odd for a plug or a camera.'}};
 const flagInfo=k=>FLAG_INFO[k]||{r:9,t:S(k).replace(/_/g,' '),x:''};
@@ -475,18 +478,21 @@ function connectedBy(id){
   return'not known';
 }
 const sigWord=s=>s>=-60?'strong':s>=-70?'good':s>=-80?'fair':'weak';
-// The outbound rows whose name is this domain (the Pi-hole table's Router link).
-let _rtHi='';
+// The outbound rows for a Pi-hole top domain (the Pi-hole table's Router link):
+// rows to an address the DNS log saw the name resolve to (e.ips), or rows
+// carrying the name (the router's or Pi-hole's name for the address).
+let _rtHi=null;
 const dnName=s=>S(s).toLowerCase().replace(/\.$/,'');
-const rtNameIs=(t,d)=>!!d&&dnName(t.name)===d;
-function rtRowsFor(d){
-  const cn=obj(obj(_intel&&_intel.mikrotik)&&_intel.mikrotik.conn);
-  return cn?dstList(cn).filter(t=>rtNameIs(t,dnName(d))).length:0;
+const rtKey=e=>({d:dnName(e&&e.d),ips:new Set(arr(e&&e.ips).map(S))});
+const rtIs=(t,k)=>!!k&&!!k.d&&(k.ips.has(S(t.ip))||dnName(t.name)===k.d||dnName(t.lookup_name)===k.d);
+function rtRowsFor(e){
+  const cn=obj(obj(_intel&&_intel.mikrotik)&&_intel.mikrotik.conn),k=rtKey(e);
+  return cn?dstList(cn).filter(t=>rtIs(t,k)).length:0;
 }
-function rtShow(d){
-  _rtHi=dnName(d);
+function rtShow(e){
+  _rtHi=rtKey(e);
   const cn=obj(obj(_intel&&_intel.mikrotik)&&_intel.mikrotik.conn);
-  if(cn&&dstList(cn).some(t=>rtNameIs(t,_rtHi)&&t.external!==true))_rtLan=true;
+  if(cn&&dstList(cn).some(t=>rtIs(t,_rtHi)&&t.external!==true))_rtLan=true;
   renderIntel(_intel);
   const r=document.querySelector('#rt-body tr.hit');
   (r||$('rt-card')).scrollIntoView({block:'center',behavior:'smooth'});
@@ -547,6 +553,11 @@ function renderIntel(d){
     (cn.as_of?'; this snapshot is from '+fmt(+cn.as_of):'')+'. A connection that opened and closed between two reads is missed, and the byte counts cover only the time the router tracked each connection. First and last seen are the reads that saw it.'));
   const all=dstList(cn),ext=all.filter(t=>t.external===true),lan=all.length-ext.length;
   if(cn.state==='ok'||all.length){
+    const lg=obj(d.dns_log)||{};
+    if(lg.on===true){
+      if(lg.usable===true)out.push(el('div','tsub','DNS lookup: from Pi-hole\'s DNS log, which the board reads every 10 s and which covers since '+fmt(+lg.cover_from)+'. "This device" means it looked the address up through Pi-hole; "Another device" means someone else on your network did. "No lookup seen" (red) means nobody did in that time: an address built into the firmware, DNS sent elsewhere, or a lookup older than the log\'s cover.'));
+      else out.push(el('div','msg','DNS lookups are '+(lg.readable===true?'matched, but a missing one is not called out yet: ':'not matched: ')+S(lg.why)+'.'));
+    }
     out.push(el('div','tsub',(+cn.total||0)+' connection'+(+cn.total===1?'':'s')+' in all, '+(+cn.external||0)+' to the internet, to '+(+cn.external_hosts||0)+' distinct internet host'+(+cn.external_hosts===1?'':'s')+
       (cn.truncated?' (more than the board keeps; the quietest were left out)':'')+'.'));
     const rows=_rtLan?all:ext;
@@ -568,9 +579,27 @@ function renderIntel(d){
   }
   $('rt-body').replaceChildren(...out);
 }
+// The DNS lookup column (correlate.h, CORRELATE_LK_*): self, other, unseen
+// (called out), before, wait; "" not checked.
+function lookupCell(x,lg){
+  const c=el('td'),k=S(x.lookup),when=+x.lookup_ts?'last answer '+fmt(+x.lookup_ts):'';
+  if(k==='self'){c.append(el('span','tier-chip ph-ok','This device'));if(x.lookup_name)c.append(el('span','sub mono',S(x.lookup_name)));if(when)c.append(el('span','sub',when));}
+  else if(k==='other'){c.append(el('span','tier-chip tier-probe','Another device'));
+    const who=x.lookup_by?(S(x.lookup_by_label)?S(x.lookup_by_label)+' ('+S(x.lookup_by)+')':S(x.lookup_by)):'a device the log did not name (IPv6, or its question was missed)';
+    c.append(el('span','sub',who));if(x.lookup_name)c.append(el('span','sub mono',S(x.lookup_name)));if(when)c.append(el('span','sub',when));}
+  else if(k==='unseen'){c.append(el('span','tier-chip tier-alert','No lookup seen'));
+    c.append(el('span','sub','nobody looked this address up through Pi-hole since '+fmt(+lg.cover_from)));}
+  else if(k==='before')c.append(el('span','muted','not in the log: the router saw this connection before the log\'s cover began'));
+  else if(k==='wait')c.append(el('span','muted','not in the log yet'));
+  else c.append(el('span','muted',x.external===true&&lg.readable===true?'not checked (DNS itself or a public resolver)':'-'));
+  return c;
+}
 function dstTable(rows){
   const src=rows.some(t=>t.source!=null&&t.source!=='');
-  const heads=['Destination','Port','Up','Down','Conns','First seen','Last seen','Owner','Flags'];
+  const lg=obj(_intel&&_intel.dns_log)||{},lkc=lg.on===true;
+  const heads=['Destination','Port','Up','Down','Conns','First seen','Last seen','Owner'];
+  if(lkc)heads.push('DNS lookup');
+  heads.push('Flags');
   if(src)heads.push('Seen by');
   const blk=_blkOn&&rows.some(t=>t.external===true);
   if(blk)heads.push('Block');
@@ -578,7 +607,8 @@ function dstTable(rows){
   heads.forEach(h=>hr.append(el('th','',h)));hd.append(hr);
   rows.forEach(x=>{
     const tr=el('tr'),dc=el('td');
-    if(rtNameIs(x,_rtHi))tr.className='hit';
+    if(rtIs(x,_rtHi))tr.className='hit';
+    else if(x.lookup==='unseen')tr.className='nolk';
     dc.append(el('div','',S(x.name)||(x.external===true?'no name':'local')));
     if(x.name&&x.name_src)dc.append(el('span','sub','name from '+(NAME_SRC[x.name_src]||S(x.name_src))));
     dc.append(el('span','sub mono',S(x.ip)));
@@ -588,7 +618,9 @@ function dstTable(rows){
     fc.append(ch);const bn=beaconText(x.beacon);if(bn)fc.append(el('span','sub','Beacon: '+bn));
     tr.append(dc,pc,el('td','num',bytes(x.bytes_out)),el('td','num',bytes(x.bytes_in)),el('td','num',+x.conns||0),
       el('td','nw',fmt(+x.first_seen)),el('td','nw',fmt(+x.last_seen)),
-      el('td','',x.external===true?owner(x)||'not looked up yet':'your network'),fc);
+      el('td','',x.external===true?owner(x)||(+lg.geo_blocked_ts?'not known: Pi-hole blocks ip-api.com, the owner lookup':'not looked up yet'):'your network'));
+    if(lkc)tr.append(lookupCell(x,lg));
+    tr.append(fc);
     if(src)tr.append(el('td','',SRC_NAME[x.source]||S(x.source)));
     if(blk)tr.append(blkCell(x));
     tb.append(tr);
@@ -892,8 +924,9 @@ function aiNet(room){
     if(cn.state==='ok'||(Array.isArray(cn.dst)&&cn.dst.length)){
       L.push('- Connection snapshot '+fmt(+cn.as_of)+': '+(+cn.total||0)+' in all, '+(+cn.external||0)+' to the internet, '+(+cn.external_hosts||0)+' internet hosts');
       dstList(cn).filter(t=>t.external===true).slice(0,8).forEach(t=>{const o=owner(t),b=beaconText(t.beacon),f=arr(t.flags);
+        const lk={self:', looked up by this device',other:', looked up by another device',unseen:', no DNS lookup seen in Pi-hole\'s log'}[S(t.lookup)]||'';
         L.push('- Out to '+(t.name?S(t.name)+' ':'')+S(t.ip)+' '+portText(t)+', up '+bytes(t.bytes_out)+', down '+bytes(t.bytes_in)+
-          ', '+(+t.conns||0)+' conn'+(o?', '+o:'')+(f.length?', flags '+f.join(' '):'')+(b?', beacon '+b:'')+(t.source?', from '+S(t.source):''));});
+          ', '+(+t.conns||0)+' conn'+(o?', '+o:'')+lk+(f.length?', flags '+f.join(' '):'')+(b?', beacon '+b:'')+(t.source?', from '+S(t.source):''));});
     }
   }
   if(_ph){

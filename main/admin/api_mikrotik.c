@@ -26,7 +26,7 @@
 #include <time.h>
 
 #define SEND_TIMEOUT_S  10
-#define INTEL_JSON_MAX  (40 * 1024)     // 48 destinations at about 430 B (with IPFIX), flags, identity, integrity
+#define INTEL_JSON_MAX  (48 * 1024)     // 48 destinations at about 560 B (with IPFIX and the lookup), flags, identity, integrity
 #define WATCH_JSON_MAX  (12 * 1024)     // 20 checks at about 400 B
 #define QUERY_MAX       160
 
@@ -253,11 +253,23 @@ static void intel_json(jb_t *j, const correlate_t *c)
         jb_lit(j, ",");
         jb_kv(j, "org", c->geo[i].org, sizeof(c->geo[i].org));
         jb_lit(j, ",\"flags\":[");
-        for (int b = 0, f = 0; b < 7; b++)
+        for (int b = 0, f = 0; b < CORRELATE_F_BITS; b++)
             if (c->dflags[i] & (1u << b)) jb_fmt(j, "%s\"%s\"", f++ ? "," : "", correlate_flag_key(b));
         jb_lit(j, "]");
         if (d->beacon_n) jb_fmt(j, ",\"beacon\":{\"every_s\":%lu,\"times\":%u}", (unsigned long)d->beacon_s, (unsigned)d->beacon_n);
         jb_fmt(j, ",\"source\":\"%s\"", correlate_src_key(c->dsrc[i]));
+        // Pi-hole's DNS log: who looked this address up (correlate.h).
+        if (c->lk[i].lk) {
+            jb_fmt(j, ",\"lookup\":\"%s\",\"lookup_ts\":%lu,", correlate_lookup_key(c->lk[i].lk),
+                   (unsigned long)c->lk[i].when);
+            jb_kv(j, "lookup_name", c->lk[i].name, sizeof(c->lk[i].name));
+            if (c->lk[i].by) {
+                jb_lit(j, ",");
+                jb_ip(j, "lookup_by", c->lk[i].by);
+                jb_lit(j, ",");
+                jb_kv(j, "lookup_by_label", c->lk[i].by_label, sizeof(c->lk[i].by_label));
+            }
+        }
         if (c->fidx[i] >= 0 && c->fidx[i] < c->flow.n) {
             const router_flow_dst_t *f = &c->flow.d[c->fidx[i]];
             jb_fmt(j, ",\"flow\":{\"bytes_out\":%llu,\"bytes_in\":%llu,\"pkts_out\":%lu,\"pkts_in\":%lu,"
@@ -294,6 +306,16 @@ static void intel_json(jb_t *j, const correlate_t *c)
     } else {
         jb_lit(j, ",\"pihole\":{\"state\":\"off\"}");
     }
+    // Pi-hole's DNS log, what the lookup column rests on: off, or its state
+    // and why it cannot call out a missing lookup (yet).
+    const correlate_dnslog_t *g = &c->dnslog;
+    jb_fmt(j, ",\"dns_log\":{\"on\":%s,\"readable\":%s,\"usable\":%s,\"cover_from\":%lu,\"geo_blocked_ts\":%lu,",
+           g->on ? "true" : "false", g->readable ? "true" : "false", g->usable ? "true" : "false",
+           (unsigned long)g->cover_from, (unsigned long)g->geo_blocked_ts);
+    jb_kv(j, "state", g->state[0] ? g->state : "off", sizeof(g->state));
+    jb_lit(j, ",");
+    jb_kv(j, "why", g->why, sizeof(g->why));
+    jb_lit(j, "}");
 
     // The router itself: its integrity checks.
     uint32_t rip = mikrotik_watch_router_ip();

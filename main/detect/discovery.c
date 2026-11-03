@@ -1566,7 +1566,7 @@ size_t discovery_devices_json(char *buf, size_t cap)
             }
             jraw(buf, lim, &o, "]");
             if (o < lim) {      // ,"pihole":{...} when Pi-hole knows the device (main/admin/pihole.h)
-                size_t w = pihole_device_json(d->ip, d->mac_known ? d->mac : NULL, buf + o, lim - o, true);
+                size_t w = pihole_device_json(d->ip, d->mac_known ? d->mac : NULL, buf + o, lim - o, true, false);
                 o = w >= lim - o ? lim : o + w;
             }
             jraw(buf, lim, &o, "}");
