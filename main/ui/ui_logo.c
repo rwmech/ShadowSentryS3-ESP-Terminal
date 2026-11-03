@@ -1,4 +1,5 @@
-// Panel logo: the built-in PNG, decoded once into PSRAM. See ui_logo.h.
+// Panel logo: the card's PNG or the built-in one, decoded once into PSRAM. See
+// ui_logo.h.
 //
 // lodepng is called directly rather than through lv_img_decoder_open(), so its
 // zlib output can be capped at what the IHDR allows: a deflate bomb then stops
@@ -13,7 +14,11 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sd_log.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static const char *TAG = "LOGO";
 
@@ -126,13 +131,41 @@ static bool decode(const uint8_t *png, size_t len, const char *what)
     return true;
 }
 
+// The card's PNG, read whole into PSRAM (at most UI_LOGO_MAX_BYTES), decoded.
+static bool from_card(void)
+{
+    sd_status_t sd;
+    sd_log_status(&sd);
+    if (!sd.mounted) { ESP_LOGI(TAG, "No microSD card: the built-in logo"); return false; }
+    struct stat st;
+    if (stat(UI_LOGO_PATH, &st) != 0) return false;
+    if (st.st_size < 33 || st.st_size > UI_LOGO_MAX_BYTES) {
+        ESP_LOGW(TAG, "%s is %ld B (at most %d): the built-in logo", UI_LOGO_PATH, (long)st.st_size, UI_LOGO_MAX_BYTES);
+        return false;
+    }
+    size_t len = (size_t)st.st_size;
+    uint8_t *png = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!png) return false;
+    FILE *f = fopen(UI_LOGO_PATH, "rb");
+    bool ok = f && fread(png, 1, len, f) == len;
+    if (f) fclose(f);
+    ok = ok && decode(png, len, UI_LOGO_PATH);
+    free(png);
+    return ok;
+}
+
 const lv_img_dsc_t *ui_logo_get(void)
 {
     if (!s_tried) {
         s_tried = true;
-        size_t len;
-        const uint8_t *png = ui_logo_builtin(&len);
-        s_ok = decode(png, len, "built-in");
+        s_ok = from_card();
+        if (!s_ok) {
+            size_t len;
+            const uint8_t *png = ui_logo_builtin(&len);
+            s_ok = decode(png, len, "built-in");
+        }
     }
     return s_ok ? &s_dsc : NULL;
 }
+
+bool ui_logo_tried(void) { return s_tried; }

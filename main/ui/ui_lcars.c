@@ -1,5 +1,6 @@
 #include "ui_lcars.h"
 #include "ui_subsys.h"
+#include "ui_logo.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -560,7 +561,7 @@ static void marks_update(void)
 static void rail_cb(lv_event_t *ev)
 {
     int i = (int)(uintptr_t)lv_event_get_user_data(ev);
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (i == 5) {
         s_auto = !s_auto;
         s_page_at = lv_tick_get();
@@ -2099,7 +2100,7 @@ static void fx_spawn_cb(lv_timer_t *t)
 {
     (void)t;
     if (lv_tick_elaps(s_sense_at) >= FX_SENSE_MS) { s_sense_at = lv_tick_get(); fx_sense(); }
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     bool ops = s_cur == PG_OPS;
     for (int l = 0; l < FX_LANES; l++) {                // real activity first
         fx_t *f = &s_fx[l];
@@ -2178,7 +2179,7 @@ static void gauges_ease(void)
 static void anim_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (s_cur == PG_NET) gauges_ease();
     else if (s_cur == PG_DEV && !s_dv_open) dev_bars();
 }
@@ -2214,7 +2215,7 @@ static void page_show(int p)
         "LCARS TRIPWIRES, watch pass and cell flashes", "LCARS NET, gauges and label flashes",
         "LCARS DEVICES, activity bars",
     };
-    if (!measured[p]) {
+    if (!measured[p] && !s_splash) {
         measured[p] = true;
         ui_refr_measure(WHAT[p]);
     }
@@ -2223,7 +2224,7 @@ static void page_show(int p)
 static void fast_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_green || s_cur != PG_OPS) return;
+    if (!s_green || s_splash || s_cur != PG_OPS) return;
     s_scan_x = (s_scan_x + SCAN_STEP) % CH_W;
     lv_obj_set_x(s_scan, (lv_coord_t)(CH_X + s_scan_x));
 }
@@ -2236,7 +2237,7 @@ static void slow_cb(lv_timer_t *t)
         fmt_hm((uint32_t)time(NULL), b, sizeof(b));
         set_text(s_clock, b);
     }
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (s_auto && lv_tick_elaps(s_page_at) >= (uint32_t)settings_get()->panel_rotate_s * 1000u) { page_show((s_cur + 1) % PAGES); return; }
     if (lv_tick_elaps(s_data_at) >= DATA_MS) { s_data_at = lv_tick_get(); page_refresh(false); }
     if (s_cur == PG_OPS && lv_tick_elaps(s_focus_at) >= FOCUS_MS) {
@@ -2244,6 +2245,182 @@ static void slow_cb(lv_timer_t *t)
         s_focus = (s_focus + 1) % 4;
         focus_update();
     }
+}
+
+// ── Boot splash ───────────────────────────────────────────────────────────────
+//
+// At every boot and on a switch to this style (lcars_view() showing GREEN on
+// a hidden panel), from docs/mockups/about-boot.html: the logo (native size,
+// centred, its foot at y 240) and "SHADOWSENTRY S3" fade in, hold, fade out;
+// the frame's pieces roll in from their edges SP_PIECE_GAP_MS apart; then the
+// page fades in a band at a time (a whole-content fade would be one 400 x 282
+// repaint a frame, about 113k px; a band is a quarter of that). Every motion
+// is an lv_anim on position or opacity, at the display's 30 ms refresh. Any
+// alert, or the dashboard style, cuts it short (splash_stop()).
+//
+// At boot the card is waited for (up to SP_CARD_WAIT_MS) so an uploaded logo
+// can show; the logo is decoded once, here, before the fade.
+
+#define SP_CARD_WAIT_MS 1500
+#define SP_LOGO_FADE_MS 700
+#define SP_LOGO_HOLD_MS 1500
+#define SP_LOGO_FOOT_Y  240
+#define SP_CAP_Y        246
+#define SP_PIECE_GAP_MS 60
+#define SP_PIECE_MS     280
+#define SP_BANDS        4
+#define SP_BAND_MS      120
+
+EXT_RAM_BSS_ATTR static lv_obj_t   *s_sp_logo, *s_sp_cap, *s_sp_band[SP_BANDS];
+EXT_RAM_BSS_ATTR static lv_timer_t *s_sp_wait;
+EXT_RAM_BSS_ATTR static uint32_t    s_sp_at;
+
+// v 0..256: from the piece's edge (0) to its place (256).
+static void sp_piece_cb(void *var, int32_t v)
+{
+    sp_piece_t *p = var;
+    lv_obj_set_style_translate_x(p->o, (lv_coord_t)(p->dx * (256 - v) / 256), 0);
+    lv_obj_set_style_translate_y(p->o, (lv_coord_t)(p->dy * (256 - v) / 256), 0);
+    lv_obj_set_style_opa(p->o, (lv_opa_t)(v > 255 ? 255 : v), 0);
+}
+
+static void sp_logo_cb(void *var, int32_t v)
+{
+    (void)var;
+    lv_obj_set_style_opa(s_sp_logo, (lv_opa_t)v, 0);
+    lv_obj_set_style_opa(s_sp_cap, (lv_opa_t)v, 0);
+}
+
+static void sp_band_cb(void *var, int32_t v) { lv_obj_set_style_bg_opa(var, (lv_opa_t)v, 0); }
+
+static void sp_anim(void *var, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms, uint32_t delay,
+                    lv_anim_ready_cb_t ready)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, var);
+    lv_anim_set_exec_cb(&a, cb);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_time(&a, ms);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    if (ready) lv_anim_set_ready_cb(&a, ready);
+    lv_anim_start(&a);
+}
+
+// Everything in its final place, the anims gone.
+static void sp_finish(void)
+{
+    lv_timer_pause(s_sp_wait);
+    lv_anim_del(&s_sp_logo, NULL);
+    show(s_sp_logo, false);
+    show(s_sp_cap, false);
+    for (int i = 0; i < s_sp_n; i++) {
+        lv_anim_del(&s_sp[i], NULL);
+        sp_piece_cb(&s_sp[i], 256);
+    }
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_anim_del(s_sp_band[k], NULL);
+        show(s_sp_band[k], false);
+    }
+    s_splash = false;
+    fx_stop_all();                              // nothing sensed under the splash plays now
+    s_page_at = lv_tick_get();                  // AUTO counts from here
+    s_sn_prime = true;                          // the motion's first sense only records
+}
+
+// Each band hides itself as it ends, so no frame repaints more than one band;
+// the last ends the splash.
+static void sp_band_done_cb(lv_anim_t *a)
+{
+    show(a->var, false);
+    if (a->var != s_sp_band[SP_BANDS - 1]) return;
+    ESP_LOGI(TAG, "Splash done in %u ms", (unsigned)lv_tick_elaps(s_sp_at));
+    sp_finish();
+}
+
+static void sp_logo_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    show(s_sp_logo, false);
+    show(s_sp_cap, false);
+    for (int i = 0; i < s_sp_n; i++)
+        sp_anim(&s_sp[i], sp_piece_cb, 0, 256, SP_PIECE_MS, (uint32_t)i * SP_PIECE_GAP_MS, NULL);
+    uint32_t t = (uint32_t)(s_sp_n - 1) * SP_PIECE_GAP_MS + SP_PIECE_MS;
+    for (int k = 0; k < SP_BANDS; k++)
+        sp_anim(s_sp_band[k], sp_band_cb, LV_OPA_COVER, LV_OPA_TRANSP, SP_BAND_MS, t + (uint32_t)k * SP_BAND_MS,
+                sp_band_done_cb);
+    ui_refr_measure("LCARS splash, frame roll-in and content bands");
+}
+
+static void sp_logo_start(void)
+{
+    const lv_img_dsc_t *d = ui_logo_get();
+    if (d) {
+        lv_img_set_src(s_sp_logo, d);
+        lv_coord_t y = SP_LOGO_FOOT_Y - (lv_coord_t)d->header.h;
+        lv_obj_set_pos(s_sp_logo, (480 - (lv_coord_t)d->header.w) / 2, y < 0 ? 0 : y);
+        show(s_sp_logo, true);
+    }
+    show(s_sp_cap, true);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &s_sp_logo);
+    lv_anim_set_exec_cb(&a, sp_logo_cb);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_time(&a, SP_LOGO_FADE_MS);
+    lv_anim_set_playback_delay(&a, SP_LOGO_HOLD_MS);
+    lv_anim_set_playback_time(&a, SP_LOGO_FADE_MS);
+    lv_anim_set_ready_cb(&a, sp_logo_done_cb);
+    lv_anim_start(&a);
+    ui_refr_measure("LCARS splash, logo fade");
+}
+
+static void sp_wait_cb(lv_timer_t *t)
+{
+    sd_status_t sd;
+    sd_log_status(&sd);
+    if (!sd.mounted && lv_tick_elaps(s_sp_at) < SP_CARD_WAIT_MS) return;
+    lv_timer_pause(t);
+    sp_logo_start();
+}
+
+static void splash_start(void)
+{
+    s_splash = true;
+    s_sp_at = lv_tick_get();
+    for (int i = 0; i < s_sp_n; i++) sp_piece_cb(&s_sp[i], 0);
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_obj_set_style_bg_opa(s_sp_band[k], LV_OPA_COVER, 0);
+        show(s_sp_band[k], true);
+    }
+    lv_obj_set_style_opa(s_sp_logo, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_opa(s_sp_cap, LV_OPA_TRANSP, 0);
+    if (ui_logo_tried()) sp_logo_start();
+    else { lv_timer_reset(s_sp_wait); lv_timer_resume(s_sp_wait); }
+}
+
+static void splash_stop(void)
+{
+    if (s_splash) sp_finish();
+}
+
+static void build_splash(void)
+{
+    s_sp_logo = lv_img_create(s_root);
+    show(s_sp_logo, false);
+    s_sp_cap = text(s_root, F12, LCARS_COL(c4), 0, SP_CAP_Y, 480, "SHADOWSENTRY S3");
+    lv_obj_set_style_text_align(s_sp_cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_letter_space(s_sp_cap, 4, 0);
+    show(s_sp_cap, false);
+    // A quarter of the content each, over the pages and the alert box.
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_coord_t y0 = (lv_coord_t)(LCARS_CONTENT_H * k / SP_BANDS), y1 = (lv_coord_t)(LCARS_CONTENT_H * (k + 1) / SP_BANDS);
+        s_sp_band[k] = fill(s_content, 0, y0, LCARS_CONTENT_W, y1 - y0, COL_BLACK);
+        show(s_sp_band[k], false);
+    }
+    s_sp_wait = lv_timer_create(sp_wait_cb, 50, NULL);
+    lv_timer_pause(s_sp_wait);
 }
 
 // ── Public ────────────────────────────────────────────────────────────────────
@@ -2267,6 +2444,7 @@ void lcars_build(lv_obj_t *scr)
     s_alert = fill(s_content, 0, 0, LCARS_CONTENT_W, LCARS_CONTENT_H, COL_BLACK);
     show(s_alert, false);
     subsys_build(s_root, subsys_back);
+    build_splash();
     show(s_root, false);
     lv_timer_create(fast_cb, SCAN_MS, NULL);
     for (int l = 0; l < FX_LANES; l++) {
@@ -2291,8 +2469,10 @@ void lcars_view(alarm_cond_t c, bool on)
         s_secured_cond = ALARM_COND_GREEN;
     }
     s_prev_cond = c;
+    bool was_on = !lv_obj_has_flag(s_root, LV_OBJ_FLAG_HIDDEN);
     if (!green) {
         fx_stop_all();                          // the motion pauses under an alert view
+        splash_stop();                          // an alert cuts the splash short
         subsys_close(false);                    // and the about screen gives way to it
     }
     show(s_root, on);
@@ -2301,7 +2481,9 @@ void lcars_view(alarm_cond_t c, bool on)
     show(s_alert, !green);
     if (green) {
         if (subsys_shown()) return;             // RETURN brings the page back
+        if (!was_on) s_splash = true;           // set first: page_show() then skips its measurement
         if (!s_green) { s_green = true; page_show(s_cur); }
+        if (!was_on) splash_start();            // boot, or a switch to this style
         return;
     }
     s_green = false;

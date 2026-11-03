@@ -7,6 +7,7 @@
 #include "api_cam.h"
 #include "api_devices.h"
 #include "api_oui.h"
+#include "api_logo.h"
 #include "api_devlog.h"
 #include "api_tasks.h"
 #include "api_crash.h"
@@ -462,6 +463,7 @@ static void handle_request(int sock, char *buf, int len)
     if (api_cam_handle(sock, buf, len)) return;   // camera snapshot routes
     if (api_devices_handle(sock, buf, len)) return;   // LAN discovery table
     if (api_oui_handle(sock, buf, len)) return;       // vendor database upload and status
+    if (api_logo_handle(sock, buf, len)) return;      // panel logo upload and download
     if (api_devlog_handle(sock, buf, len)) return;    // one device's log lines
     if (api_tasks_handle(sock, buf, len)) return;     // per-task CPU share (no console)
     if (api_crash_handle(sock, buf, len)) return;     // crash records, debug crash

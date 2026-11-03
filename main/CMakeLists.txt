@@ -107,6 +107,7 @@ idf_component_register(
         "detect/discovery.c"
         "admin/api_devices.c"
         "admin/api_oui.c"
+        "admin/api_logo.c"
         "admin/api_devlog.c"
         "admin/web_assets.c"
         "admin/api_tasks.c"

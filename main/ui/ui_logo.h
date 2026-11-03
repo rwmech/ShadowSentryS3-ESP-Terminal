@@ -13,8 +13,15 @@
  * with the lodepng that LVGL's PNG decoder uses (CONFIG_LV_USE_PNG), into a
  * PSRAM buffer in LVGL's true colour with alpha (3 bytes a pixel), and drawn
  * from there; the PNG is never decoded again.
+ *
+ * An uploaded logo (POST /api/ui/logo, api_logo.c) is kept on the card as
+ * UI_LOGO_PATH and wins when it is there, checks out and decodes; a file that
+ * is missing, too big or fails falls back to the built-in one. The panel
+ * decodes the first time the LCARS panel shows (the boot splash), so a new
+ * upload shows from the next boot.
  */
 
+#define UI_LOGO_PATH       "/sd/ui/logo.png"    // SD_MOUNT_POINT "/ui/logo.png"
 #define UI_LOGO_MAX_PX     240                  // either side, for any logo
 #define UI_LOGO_MAX_BYTES  (200 * 1024)         // the PNG file
 
@@ -29,3 +36,6 @@ const uint8_t *ui_logo_builtin(size_t *len);
 // The decoded logo, for lv_img_set_src() (UI task only). Decodes on the first
 // call; NULL if that failed.
 const lv_img_dsc_t *ui_logo_get(void);
+
+// ui_logo_get() has run (so it will not touch the card again).
+bool ui_logo_tried(void);
