@@ -132,7 +132,7 @@ Rob: 30+ years in embedded, Linux, networking. A peer, not a customer.
 - Open: the first Wi-Fi join after a boot can land on a weak AP (-80 dBm on fc78037) until the RSSI re-roam moves it (`roams` 1, to b0:a7:b9:40:ac:a2 at -50 dBm).
 - Done in lane drill (below), not on the board yet: the system event task (`sys_evt`) had 416 B of stack free on ecb9fe3; `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE` is now 3584 (default 2304).
 - Open, Rob 2026-11-02: the dashboard's "Top credentials" card does not say where the tries came from ("it just says credentials, microtik? hikvision?"). Proposed: name each trap as what it pretends to be (port 80 and the HTTP alternates are the fake Hikvision NVR login, `/doc/page/login.asp`; RTSP 554 the camera stream; Telnet, SSH, FTP with their ports), a Where and a Last column, and the card titled for the traps. Needs the service kept per pair in `stats.bin` (format bump with migration). Built in lane drill (item 4, below), not on the board yet.
-- `main` push: the TA pushed batch 6 (`origin/main` a9072ba) and relayed Rob's go for GitHub pushes under this file's rules (2026-11-03, batch 7).
+- `main` push: the TA pushed batches 6 and 7 (`origin/main` 3861fa8) and relayed Rob's go for GitHub pushes under this file's rules (2026-11-03). The merge lane's own `git push origin main` after batch 8 was denied by Claude Code's permission system ("Out-of-Place Publication"), so batch 8 (from 7703100 on) is not pushed; the TA or Rob pushes it.
 
 ## Current state (2026-10-31)
 
