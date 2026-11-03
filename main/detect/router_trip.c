@@ -546,18 +546,23 @@ static void on_firewall(const char *m)
     char ds[16] = "?";
     if (dst) ip_s(dst, ds, sizeof(ds));
     uint16_t held = 0;
+    // Kept short: the headline ("Code CC-NN <name> | <source>: " plus this,
+    // DESCRIBE_MAX 96) cuts at 95 characters, and the code name already says
+    // what the rule is. Worst case (7-character proto, 15-character addresses,
+    // 5-digit port) is 90 characters, so the port is never cut; a " (+N held)"
+    // tail may be.
     if (code == K_PSD) {
         if (hold_pass(code, src, 0, HOLD_S, &held))
-            trip_event(code, src, held, "port scan seen by the router (%s, first to %s)", proto[0] ? proto : "?", ds);
+            trip_event(code, src, held, "%s, first to %s", proto[0] ? proto : "?", ds);
     } else if (code == K_MGMT) {
         if (hold_pass(code, src, dport, HOLD_S, &held))
-            trip_event(code, src, held, "%s to the router's management port %s:%u", proto[0] ? proto : "?", ds, dport);
+            trip_event(code, src, held, "%s to %s:%u", proto[0] ? proto : "?", ds, dport);
     } else if (code == K_DNS_RED) {
         if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
-            trip_event(code, src, held, "DNS (%s 53) to %s, redirected to the Pi-hole", proto, ds);
+            trip_event(code, src, held, "%s 53 to %s", proto, ds);
     } else {
         if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
-            trip_event(code, src, held, "DNS (%s %u) to %s, not the Pi-hole", proto[0] ? proto : "?", dport, ds);
+            trip_event(code, src, held, "%s %u to %s, not the Pi-hole", proto[0] ? proto : "?", dport, ds);
     }
 }
 
