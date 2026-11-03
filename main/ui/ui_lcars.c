@@ -79,6 +79,13 @@ EXT_RAM_BSS_ATTR static lv_obj_t *s_rail_mark[6];
 static int       s_cur = PG_OPS;
 static bool      s_auto = true;
 EXT_RAM_BSS_ATTR static bool      s_green;               // the pages are shown (GREEN, LCARS style)
+// The strip says "SECURED FROM RED/YELLOW ALERT" for SECURED_MS after an incident
+// closes, then "ALL SYSTEMS NORMAL" (TNG wording; "condition green" is the TOS
+// duress code, "Bread and Circuses"). Rob, 2026-11-03.
+#define SECURED_MS        60000
+EXT_RAM_BSS_ATTR static alarm_cond_t s_prev_cond;         // the last condition lcars_view() was given
+EXT_RAM_BSS_ATTR static alarm_cond_t s_secured_cond;      // RED or YELLOW while the secured line shows
+EXT_RAM_BSS_ATTR static uint32_t     s_secured_at;
 EXT_RAM_BSS_ATTR static uint32_t  s_page_at;             // tick of the last page change, for AUTO
 
 // ── Today's figures (UI task) ─────────────────────────────────────────────────
@@ -605,7 +612,7 @@ static void build_ops(lv_obj_t *pg)
 {
     lv_obj_t *c = fill(pg, 0, 0, 400, 18, LCARS_COL(c4));
     lv_obj_set_style_radius(c, 9, 0);
-    s_cond = text(c, F12, COL_BLACK, 0, 0, 0, "CONDITION GREEN");
+    s_cond = text(c, F12, COL_BLACK, 0, 0, 0, "ALL SYSTEMS NORMAL");
     lv_obj_align(s_cond, LV_ALIGN_RIGHT_MID, -10, 0);
 
     static const char *const PILL[4] = { "ALERTS", "PROBES", "SCANS", "DEVICES" };
@@ -791,11 +798,18 @@ static void ops_refresh(bool force)
 {
     char b[64], ip[WIFI_IP_STR_LEN];
     day_roll();
-    // The board's address and admin port (Rob, 2026-11-02): 327 px at worst
-    // ("255.255.255.255:65535") in the strip's 380.
+    // The board's address and admin port (Rob, 2026-11-02). Widths in the strip's
+    // 380 px at worst ("255.255.255.255:65535"): normal 350, secured 340 (the port
+    // count left out while the secured line shows).
     wifi_manager_get_ip_str(ip, sizeof(ip));
-    if (ip[0]) snprintf(b, sizeof(b), "CONDITION GREEN | %s:%d | %d PORTS", ip, ADMIN_PORT, s_nports);
-    else       snprintf(b, sizeof(b), "CONDITION GREEN | NO WI-FI | %d PORTS", s_nports);
+    if (s_secured_cond != ALARM_COND_GREEN && lv_tick_elaps(s_secured_at) >= SECURED_MS)
+        s_secured_cond = ALARM_COND_GREEN;
+    if (s_secured_cond != ALARM_COND_GREEN) {
+        const char *w = s_secured_cond == ALARM_COND_RED ? "RED" : "YELLOW";
+        if (ip[0]) snprintf(b, sizeof(b), "SECURED FROM %s ALERT | %s:%d", w, ip, ADMIN_PORT);
+        else       snprintf(b, sizeof(b), "SECURED FROM %s ALERT | NO WI-FI", w);
+    } else if (ip[0]) snprintf(b, sizeof(b), "ALL SYSTEMS NORMAL | %s:%d | %d PORTS", ip, ADMIN_PORT, s_nports);
+    else              snprintf(b, sizeof(b), "ALL SYSTEMS NORMAL | NO WI-FI | %d PORTS", s_nports);
     set_text(s_cond, b);
     uint32_t dev = (uint32_t)discovery_summary(NULL, 0, NULL);
     const uint32_t v[4] = { s_t.alerts, s_t.probes, s_t.scans, dev };
@@ -2194,6 +2208,13 @@ lv_obj_t *lcars_alert_box(void) { return s_alert; }
 void lcars_view(alarm_cond_t c, bool on)
 {
     bool green = on && c == ALARM_COND_GREEN;
+    if (c == ALARM_COND_GREEN && s_prev_cond != ALARM_COND_GREEN) {  // an incident just closed
+        s_secured_cond = s_prev_cond;
+        s_secured_at = lv_tick_get();
+    } else if (c != ALARM_COND_GREEN) {
+        s_secured_cond = ALARM_COND_GREEN;
+    }
+    s_prev_cond = c;
     if (!green) fx_stop_all();                  // the motion pauses under an alert view
     show(s_root, on);
     if (!on) { s_green = false; return; }

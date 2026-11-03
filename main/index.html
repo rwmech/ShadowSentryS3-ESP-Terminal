@@ -1369,7 +1369,7 @@ function condOf(a){
   const s=a&&a.state;
   return s===1||s==='active'?'red':s===2||s==='acked'?'yellow':'green';
 }
-const COND_TITLE={red:'ALERT / CONDITION: RED',yellow:'CONDITION: YELLOW',green:'Condition green'};
+const COND_TITLE={red:'ALERT / CONDITION: RED',yellow:'CONDITION: YELLOW',green:'All systems normal'};   // "condition green" is the TOS duress code
 // "14:02:11" today, "2026-10-31 14:02:11" otherwise.
 function whenOf(s){if(!(s>1600000000))return'--';const f=fmt(s),n=fmt(Date.now()/1000);return f.slice(0,10)===n.slice(0,10)?f.slice(11):f;}
 function alarmSource(a){
