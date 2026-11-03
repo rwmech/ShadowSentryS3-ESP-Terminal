@@ -435,7 +435,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
 .cond-yellow .cond-title{font-size:17px;color:#ffe08a}
 .cond-yellow .cond-meta{color:#fde68a}
 .cond-green{padding:4px 28px;background:rgba(0,210,160,.08);border-bottom:1px solid rgba(34,255,154,.35)}
-.cond-green .cond-emb,.cond-green .cond-btns{display:none}
+.cond-green .cond-emb{display:none}
+.cond-btns button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.cond-green .cond-btns button{padding:3px 10px;font-size:12px;color:#22ff9a;border-color:rgba(34,255,154,.55);background:transparent}
 .cond-green .cond-title{font-size:13px;font-weight:600;letter-spacing:.5px;color:#22ff9a}
 /* Codes and tiers (alert-web) */
 .code-chip{display:inline-block;margin-right:8px;padding:0 7px;border-radius:6px;font:700 13px var(--mono);
@@ -519,6 +521,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     <button type="button" id="cond-res" onclick="resolveAlarm()">RESOLVE</button>
     <button type="button" id="cond-ige" onclick="ignoreAlarm('error')">IGNORE ERROR</button>
     <button type="button" id="cond-igd" onclick="ignoreAlarm('device')">IGNORE DEVICE</button>
+    <button type="button" id="cond-dev" onclick="openAlarmDevice()" title="The source's device page, with this incident's newest event opened">OPEN ON DEVICE PAGE</button>
   </div>
   <div class="cond-err" id="cond-err" hidden></div>
 </div>
@@ -1439,8 +1442,22 @@ function renderAlarm(a){
   g('cond-res').hidden=!open;
   g('cond-ige').hidden=!open||!code;          // needs a code: firmware with codes only
   g('cond-igd').hidden=!open;
+  g('cond-dev').hidden=!(open||(a.id&&a.resolved_by))||!alarmDevUrl(a);
   if(!open)condErr('');
 }
+// The device page for the incident's source (MAC and IP, by IP alone without
+// a MAC), at its newest event and code, which the page opens. "" without either.
+function alarmDevUrl(a){
+  const src=alarmSource(a||{}),q=new URLSearchParams(),mac=src.mac.toLowerCase(),code=codeOf(a||{});
+  if(/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac))q.set('mac',mac);
+  if(/^\d{1,3}(\.\d{1,3}){3}$/.test(src.ip))q.set('ip',src.ip);
+  if(![...q.keys()].length)return'';
+  const t=+a.last||+a.first;
+  if(t>0)q.set('at',String(Math.floor(t)));
+  if(/^\d{2}-\d{2}$/.test(code))q.set('code',code);
+  return'/device?'+q.toString();
+}
+function openAlarmDevice(){const u=alarmDevUrl(_alarm);if(u)window.open(u,'_blank','noopener');}
 function condErr(t){const e=document.getElementById('cond-err');e.textContent=t;e.hidden=!t;}
 function condBusy(on){document.querySelectorAll('.cond-btns button').forEach(x=>x.disabled=on);}
 // POST the new route; on 404 (older firmware) the old one, when there is one.

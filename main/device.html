@@ -263,6 +263,8 @@ const qMac=(Q.get('mac')||'').toLowerCase(),qIp=Q.get('ip')||'';
 const DEV={mac:/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(qMac)&&isMac(qMac)?qMac:'',ip:/^\d{1,3}(\.\d{1,3}){3}$/.test(qIp)?qIp:''};
 // at=<unix time>: a message to show (from a dashboard log row): pages are read back to it.
 const AT=(v=>/^\d{9,10}$/.test(v)?+v:0)(Q.get('at')||'');
+// code=NN-NN (the dashboard banner): prefer that code's line at or nearest at=, and open it.
+const AT_CODE=(v=>/^\d{2}-\d{2}$/.test(v)?v:'')(Q.get('code')||'');
 let _dev=null,_ai=null,_ign=null;
 
 // ── Analysis: main/analysis.js (GET /analysis.js), shared with the dashboard ──
@@ -756,10 +758,13 @@ function lineRow(o){
   r.append(codeLead(el('span','h'),c,lineText(o)));
   r.append(el('span','k',[S(o.kind),o.kind==='attack'?TNAME[o.type]||'':S(o.proto)].filter(Boolean).join(' ')));
   let d=null;
+  const show=()=>{d=lineDetail(o);r.after(d);r.classList.add('open');};
   r.onclick=()=>{
     if(d){d.remove();d=null;r.classList.remove('open');return;}
-    d=lineDetail(o);r.after(d);r.classList.add('open');
+    show();
   };
+  // Open with the raw line shown too (findAt with code=).
+  r.openFull=()=>{if(!d)show();const x=d.querySelector('details');if(x)x.open=true;};
   return r;
 }
 function lineDetail(o){
@@ -837,11 +842,16 @@ async function findAt(t){
     while(_more&&oldest()>t&&n<AT_PAGES){const c=_cursor;await older(300);n++;if(_cursor===c)break;}   // a failed read keeps the cursor
     _scanning=false;$('full').disabled=false;$('older').disabled=false;pg.hidden=true;pg.value=0;
   }
-  let hits=_lines.filter(o=>+o.ts===t),exact=hits.length>0;
-  if(!exact&&_lines.length){
-    let best=null;for(const o of _lines){const d=Math.abs((+o.ts||0)-t);if(!best||d<best.d)best={o,d};}
+  // With code=: that code's lines (the attack line first) at t, else the
+  // nearest of them; without it, or when none has the code, any line.
+  const coded=AT_CODE?_lines.filter(o=>codeOf(o)===AT_CODE):[];
+  const pool=coded.length?coded:_lines;
+  let hits=pool.filter(o=>+o.ts===t),exact=hits.length>0;
+  if(!exact&&pool.length){
+    let best=null;for(const o of pool){const d=Math.abs((+o.ts||0)-t);if(!best||d<best.d)best={o,d};}
     hits=[best.o];
   }
+  if(coded.length)hits.sort((a,b)=>(b.kind==='attack')-(a.kind==='attack'));
   document.querySelectorAll('#ml .mr.hit').forEach(r=>r.classList.remove('hit'));
   const rows=hits.map(o=>_rowOf.get(o)).filter(Boolean);
   rows.forEach(r=>r.classList.add('hit'));
@@ -850,6 +860,7 @@ async function findAt(t){
     exact?(rows.length>1?rows.length+' messages at '+fmt(t)+' are':'The message of '+fmt(t)+' is')+' highlighted':
     (n>=AT_PAGES&&_more?'Stopped looking for '+what+' after '+n+' pages; the nearest so far is highlighted, and Load older goes on':
       'No message at exactly '+fmt(t)+'; the nearest, '+fmt(+hits[0].ts)+', is highlighted'));
+  if(rows.length&&coded.length)rows[0].openFull();
   if(rows.length)rows[0].scrollIntoView({block:'center',behavior:'smooth'});
 }
 // Page to the end of the history; the bar is bytes read over the day files' total.
