@@ -167,6 +167,7 @@ typedef struct {
     uint32_t ip;                        // network order, 0 = unknown
     uint8_t  mac[6];
     uint32_t per_hour;
+    uint32_t packets;                   // all protocols, since the device was first seen
     char     label[DISCOVERY_LABEL_LEN];
     char     vendor[DISCOVERY_VENDOR_LEN];
 } discovery_talker_t;
@@ -175,6 +176,12 @@ int discovery_top_talkers(discovery_talker_t *out, int max);
 // The UDP ports the listeners bind (DHCP 67 only with DISCOVERY_DHCP; none
 // without DISCOVERY_ENABLE), in table order, into out. Returns how many.
 int discovery_ports(uint16_t *out, int max);
+
+// The same ports, with the datagrams each listener has received since boot
+// (the board's own included), for the front panel. Returns how many. Any
+// task; no lock (each count is one aligned 32-bit word, written by the
+// discovery task only).
+int discovery_port_packets(uint16_t *port, uint32_t *packets, int max);
 
 // The best label of the device with this MAC (if not NULL and known) or IP,
 // into buf. False, and buf "", if there is none. Any task; takes the lock.
