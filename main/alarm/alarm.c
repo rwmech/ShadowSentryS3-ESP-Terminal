@@ -168,6 +168,9 @@ bool alarm_should_alert(const attack_log_t *e)
 {
     if (!e) return false;
     if ((unsigned)e->type < 32 && !(settings_get()->alert_mask & (1u << e->type))) return false;
+    // Router SEV3 codes (55-28, DNS on 53 the router redirected to the
+    // Pi-hole) are info only: logged, no incident, whatever the router's bit.
+    if (e->type == ATTACK_ROUTER && describe_tier(e) == TIER_SEV3) return false;
     return !ignore_match(e->src_ip, e->src_mac, describe_code(e));
 }
 

@@ -93,6 +93,10 @@ _Static_assert((PIHOLE_ENABLE) == 0 || (PIHOLE_ENABLE) == 1, "PIHOLE_ENABLE must
 #ifndef MIKROTIK_CERT_SHA256
 #define MIKROTIK_CERT_SHA256 ""
 #endif
+#ifndef ROUTER_DNS_REDIRECT
+#define ROUTER_DNS_REDIRECT 1
+#endif
+_Static_assert((ROUTER_DNS_REDIRECT) == 0 || (ROUTER_DNS_REDIRECT) == 1, "ROUTER_DNS_REDIRECT must be 0 or 1");
 
 // Both copies in PSRAM (EXT_RAM_BSS_ATTR, a no-op without
 // CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY): 1.1 KB each, read by tasks only.
@@ -146,6 +150,7 @@ static void defaults(settings_t *s)
     strlcpy(s->mikrotik_password, MIKROTIK_PASSWORD, sizeof(s->mikrotik_password));
     if (!settings_sha256_norm(MIKROTIK_CERT_SHA256, s->mikrotik_cert_sha256)) s->mikrotik_cert_sha256[0] = 0;
     s->mikrotik_enabled = true;
+    s->router_dns_redirect = (ROUTER_DNS_REDIRECT) != 0;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t len)
@@ -246,6 +251,7 @@ void settings_init(void)
         get_str(h, "mt_pw", s_live.mikrotik_password, sizeof(s_live.mikrotik_password));
         get_str(h, "mt_pin", s_live.mikrotik_cert_sha256, sizeof(s_live.mikrotik_cert_sha256));
         get_bool(h, "mt_on", &s_live.mikrotik_enabled);
+        get_bool(h, "rt_dnsred", &s_live.router_dns_redirect);
         nvs_close(h);
     }
     s_saved = s_live;
@@ -587,6 +593,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_str(h, "mt_pw",      s->mikrotik_password));
     SET(nvs_set_str(h, "mt_pin",     s->mikrotik_cert_sha256));
     SET(nvs_set_u8(h,  "mt_on",      s->mikrotik_enabled));
+    SET(nvs_set_u8(h,  "rt_dnsred",  s->router_dns_redirect));
     // Wi-Fi keys are written only when the Wi-Fi changes, so an untouched
     // config.h network stays "not overridden" (no boot fallback timer). Going
     // back to the config.h network erases them.

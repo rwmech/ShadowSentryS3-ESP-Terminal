@@ -895,6 +895,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-mtpin" class="mt-https">Certificate SHA-256 pin</label><input id="st-mtpin" class="mt-https" maxlength="99" autocomplete="off" spellcheck="false" placeholder="blank = trust on first use">
       <div class="hint mt-https" id="st-mt-cert"></div>
       <div class="ctl mt-https"><button class="btn" type="button" id="st-mtforget" onclick="forgetMikrotikCert()">Forget recorded certificate</button><span id="st-mtfres" class="muted"></span></div>
+      <label for="st-rtdns">The router redirects port 53 to the Pi-hole (DNS bypass on 53 is info only)</label><input type="checkbox" id="st-rtdns">
       <div class="hint" id="st-mt-hint"></div>
       <div></div>
       <div class="ctl"><button class="btn" type="button" id="st-mttest" onclick="testMikrotik()">Test connection</button><span id="st-mtres" class="muted"></span></div>
@@ -1044,6 +1045,31 @@ const TDESC=['Fake Hikvision camera','Fake NVR login page','Fake Ubuntu 20.04','
   'A device seen on SSDP, WS-Discovery, LLMNR, NBNS, DHCP or a vendor broadcast (log only)',
   'A DHCP lease on the router from a MAC never seen before (needs the MikroTik settings)',
   'The router\'s configuration changed against the armed baseline: scheduler, users, proxy, NAT, services, firewall, DNS, tunnels, logging, logins, version'];
+// Per code, where one type carries several codes (the router's); TDESC is the fallback.
+const CDESC={
+  '60-02':'A device the router has never leased an address to before joined the network',
+  '55-01':'A scheduler entry or script on the router changed against the armed baseline',
+  '55-02':'A router user, user group or SSH key changed against the armed baseline',
+  '55-03':'The router\'s web proxy or SOCKS server changed against the armed baseline',
+  '55-04':'A NAT rule on the router changed against the armed baseline',
+  '55-05':'A router service (Winbox, SSH, API, web and so on) changed against the armed baseline',
+  '55-06':'A firewall input rule on the router changed against the armed baseline',
+  '55-07':'The router\'s DNS servers or static DNS entries changed against the armed baseline',
+  '55-08':'A tunnel or other interface appeared or changed on the router against the armed baseline',
+  '55-09':'The router\'s logging rules or log actions changed against the armed baseline',
+  '55-10':'Someone logged in to the router, seen in its log or its active sessions',
+  '55-11':'The RouterOS version, packages or firmware changed against the armed baseline',
+  '55-21':'A login to the router failed, from an address that is not an admin (or 3 in 5 minutes from one)',
+  '55-22':'Someone logged in to the router from an address that is not an admin',
+  '55-23':'The router\'s configuration was changed by a non-admin address, a scheduler or a script',
+  '55-24':'The router saw a port scan from this device',
+  '55-25':'A device that is not an admin reached the router\'s management ports',
+  '55-26':'A device sent DNS to a server other than the Pi-hole',
+  '55-27':'A new entry on the router\'s tripwire address list that no syslog line explained',
+  '55-28':'A device asked a public DNS server on port 53; the router redirected it to the Pi-hole'};
+// Codes that come from the router's syslog, not from a port on this board.
+const CSRC={'55-21':'Router syslog','55-22':'Router syslog','55-23':'Router syslog','55-24':'Router syslog',
+  '55-25':'Router syslog','55-26':'Router syslog','55-28':'Router syslog'};
 const IGN='<span class="ign-chip" title="Source on the ignore list: logged, no alarm">ignored</span>';
 // ISO country code -> flag emoji (two regional-indicator code points)
 const flagOf=c=>(c&&c.length===2&&/^[A-Za-z]{2}$/.test(c))
@@ -1137,7 +1163,8 @@ function showDetailKey(key){
   document.getElementById('d-icon').innerHTML=ICON[e.type]||'?';   // constant entities, no event data
   const title=eventTitle(e),h=document.getElementById('d-title');
   h.replaceChildren(document.createTextNode(title+' '),mk('span','tier-chip tier-'+tier,TIERS[tier]));
-  const sub=`Port ${port||TPORT[e.type]||'?'} · ${TDESC[e.type]||''}`;
+  const via=CSRC[c]||('Port '+(port||TPORT[e.type]||'?'));
+  const sub=`${via} · ${CDESC[c]||TDESC[e.type]||''}`;
   document.getElementById('d-sub').textContent=sub;
   const geo=(e.country||e.org)?`${flagOf(e.cc)} ${e.country||''}${e.org?' · '+e.org:''}${e.asn?' ('+e.asn+')':''}${e.geotag?' ['+e.geotag+']':''}`.trim():'';
   const dash='—';
@@ -1147,7 +1174,7 @@ function showDetailKey(key){
   if(e.headline)rows.push(['Headline',e.headline]);
   rows.push(['Tier',TIERS[tier]],
     ['Time',fmt(e.ts)],
-    ['Protocol',`${name} · port ${port||TPORT[e.type]||'?'}`],
+    ['Protocol',`${name} · ${CSRC[c]||'port '+(port||TPORT[e.type]||'?')}`],
     ['Source IP',`${flagOf(e.cc)} ${ip}`.trim()+(port?' (port '+port+')':'')],
     ['Location',geo||dash],
     ['MAC',mac||'unknown'],
@@ -2173,7 +2200,7 @@ async function loadSettings(){
     $('st-mton').checked=s.mikrotik_enabled!==false;$('st-mturl').value=s.mikrotik_url||'';$('st-mtuser').value=s.mikrotik_user||'';
     $('st-mtpw').value='';$('st-mtclr').checked=false;$('st-mtpw').disabled=false;
     $('st-mtpw').placeholder=s.mikrotik_password_set?'set; blank = unchanged':'not set';
-    $('st-mtpin').value=s.mikrotik_cert_sha256||'';mtScheme();loadMikrotik(s);if('mikrotik_url' in s)loadIntegrity();
+    $('st-mtpin').value=s.mikrotik_cert_sha256||'';$('st-rtdns').checked=s.router_dns_redirect!==false;mtScheme();loadMikrotik(s);if('mikrotik_url' in s)loadIntegrity();
     $('st-open').checked=!s.wifi_password_set;$('st-wpw').disabled=!s.wifi_password_set;
     $('st-wpw').placeholder=s.wifi_password_set?'set; blank = unchanged':'';
     $('st-tok').placeholder=s.tg_token_set?'set; blank = unchanged':'not set';
@@ -2227,7 +2254,7 @@ async function saveSettings(ev){
     return showMsg('err','Pi-hole over https needs the certificate SHA-256 (Test connection shows the server\'s), or use http://.');
   if('mikrotik_url' in (_stLast||{})){
     body.mikrotik_enabled=$('st-mton').checked;body.mikrotik_url=$('st-mturl').value.trim();body.mikrotik_user=$('st-mtuser').value.trim();
-    body.mikrotik_cert_sha256=$('st-mtpin').value.trim();
+    body.mikrotik_cert_sha256=$('st-mtpin').value.trim();body.router_dns_redirect=$('st-rtdns').checked;
     if($('st-mtclr').checked)body.mikrotik_password_clear=true;
     else if($('st-mtpw').value)body.mikrotik_password=$('st-mtpw').value;
   }

@@ -47,6 +47,10 @@ extern "C" {
  *                                     but the Pi-hole)
  *   55-27 Router tripwire list SEV2  a new shadowsentry-trip entry that no
  *                                     syslog line explained (list check below)
+ *   55-28 DNS bypass, redirected SEV3 SS-TRIP-DNS on UDP or TCP 53 while the
+ *                                     router_dns_redirect setting is on (the
+ *                                     router NATs 53 to the Pi-hole): logged,
+ *                                     no incident; DoT 853 stays 55-26
  *   DHCP "<server> assigned <ip> for <MAC> <host>" goes to the MikroTik
  *   client's known-device set: a MAC never seen raises Code 60-02 once,
  *   whichever of syslog and the lease poll sees it first.

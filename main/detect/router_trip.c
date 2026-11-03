@@ -129,6 +129,7 @@ typedef struct {
     hold_t       hold[HOLD_N];
     fail_t       fail[FAIL_N];
     attack_log_t ev;
+    mikrotik_host_t host;           // src_mac()'s copy, off the task stack
     uint32_t     admin[ROUTER_ADMIN_MAX];
     int          n_admin;
     int64_t      sd_min;            // uptime minute of the SD budget
@@ -143,8 +144,8 @@ static router_trip_status_t s_st;                              // counters under
 
 #define ST_INC(f) do { portENTER_CRITICAL(&s_st_mux); s_st.f++; portEXIT_CRITICAL(&s_st_mux); } while (0)
 
-enum { K_FAIL, K_LOGIN, K_CHANGE, K_PSD, K_MGMT, K_DNS, K_LIST };
-static const char *const CODE[] = { "55-21", "55-22", "55-23", "55-24", "55-25", "55-26", "55-27" };
+enum { K_FAIL, K_LOGIN, K_CHANGE, K_PSD, K_MGMT, K_DNS, K_LIST, K_DNS_RED };
+static const char *const CODE[] = { "55-21", "55-22", "55-23", "55-24", "55-25", "55-26", "55-27", "55-28" };
 
 // Uptime seconds + 1, so 0 stays "never".
 static void recent_note(uint32_t ip)
@@ -261,6 +262,17 @@ static uint32_t our_ip(void)
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
+// The source's MAC for an event: this board's ARP table first, else the
+// MikroTik client's host cache (its ARP, leases and bridge hosts from the
+// last poll; a linear scan under its lock), so the vendor resolves for
+// devices this board never talked to. h is the caller's scratch copy.
+static void src_mac(uint32_t ip, uint8_t mac[6], mikrotik_host_t *h)
+{
+    static const uint8_t zero[6] = { 0 };
+    if (!ip || wifi_manager_lookup_mac(ip, mac)) return;
+    if (mikrotik_host(NULL, ip, h, NULL) && memcmp(h->mac, zero, 6)) memcpy(mac, h->mac, 6);
+}
+
 // One event per code, source and aux per hold time; repeats are counted into
 // the next. True when the event should go out now (*held = repeats before it).
 static bool hold_pass(int code, uint32_t src, uint32_t aux, int hold_s, uint16_t *held)
@@ -295,7 +307,7 @@ static void trip_event(int code, uint32_t src, uint16_t held, const char *fmt, .
     e->timestamp = (uint32_t)time(NULL);
     e->type = ATTACK_ROUTER;
     e->src_ip = src ? src : s_rip;
-    if (e->src_ip) wifi_manager_lookup_mac(e->src_ip, e->src_mac);
+    src_mac(e->src_ip, e->src_mac, &R->host);
     char tail[20] = "";
     if (held) snprintf(tail, sizeof(tail), " (+%u held)", (unsigned)held);
     size_t room = sizeof(e->payload) - strlen(tail);
@@ -306,7 +318,7 @@ static void trip_event(int code, uint32_t src, uint16_t held, const char *fmt, .
     va_end(ap);
     strlcat(e->payload, tail, sizeof(e->payload));
     ESP_LOGW(TAG, "%s", e->payload);
-    if (code == K_PSD || code == K_MGMT || code == K_DNS) recent_note(src);
+    if (code == K_PSD || code == K_MGMT || code == K_DNS || code == K_DNS_RED) recent_note(src);
     if (mikrotik_watch_post(e)) ST_INC(events);
     else ESP_LOGW(TAG, "event dropped (queue full)");
 }
@@ -523,6 +535,12 @@ static void on_firewall(const char *m)
         if (!ip4_n(d, (size_t)((dc ? dc : d + dn) - d), &dst)) dst = 0;
         if (dc) dport = (unsigned)strtoul(dc + 1, NULL, 10);
     }
+    // The router NATs every LAN device's port 53 to the Pi-hole, after this
+    // rule saw it: a lookup on 53 was handled, so 55-28 (info). DoT (853)
+    // and the rest cannot be redirected and stay 55-26.
+    if (code == K_DNS && dport == 53 && (!strcmp(proto, "UDP") || !strcmp(proto, "TCP")) &&
+        settings_get()->router_dns_redirect)
+        code = K_DNS_RED;
     sd_line(code == K_PSD ? "psd" : code == K_MGMT ? "mgmt" : "dns", CODE[code], src, "", "", m);
     if (!src || router_trip_is_admin(src)) return;
     char ds[16] = "?";
@@ -534,6 +552,9 @@ static void on_firewall(const char *m)
     } else if (code == K_MGMT) {
         if (hold_pass(code, src, dport, HOLD_S, &held))
             trip_event(code, src, held, "%s to the router's management port %s:%u", proto[0] ? proto : "?", ds, dport);
+    } else if (code == K_DNS_RED) {
+        if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
+            trip_event(code, src, held, "DNS (%s 53) to %s, redirected to the Pi-hole", proto, ds);
     } else {
         if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
             trip_event(code, src, held, "DNS (%s %u) to %s, not the Pi-hole", proto[0] ? proto : "?", dport, ds);
@@ -752,6 +773,7 @@ typedef struct {
     bool     learned;
     int64_t  due;
     attack_log_t ev;
+    mikrotik_host_t host;
 } list_t;
 static list_t *L;
 
@@ -811,7 +833,7 @@ bool router_trip_list_tick(void)
         e->timestamp = (uint32_t)time(NULL);
         e->type = ATTACK_ROUTER;
         e->src_ip = L->cur[i].ip;
-        wifi_manager_lookup_mac(e->src_ip, e->src_mac);
+        src_mac(e->src_ip, e->src_mac, &L->host);
         char ip[16];
         ip_s(e->src_ip, ip, sizeof(ip));
         snprintf(e->payload, sizeof(e->payload), "[%s] %s is on the router's %s list, no syslog line for it",

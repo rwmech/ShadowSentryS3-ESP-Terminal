@@ -200,6 +200,13 @@
 //   router, the Pi-hole (ROUTER_PIHOLE_IP), ROUTER_ADMIN_IPS, the admin
 //   allowlist, 0/8, 127/8, multicast and broadcast. main/admin/blocklist.h.
 #define ROUTER_NEVER_BLOCK          ""      // "192.168.0.10"
+// ROUTER_DNS_REDIRECT: 1 if the router redirects every LAN device's port 53
+//   to the Pi-hole by NAT (docs/router-setup.md, section 2). The SS-TRIP-DNS
+//   rule runs before that NAT, so a device that asks a public server on UDP
+//   or TCP 53 is logged as Code 55-28 (SEV3: no incident, no Discord post)
+//   instead of 55-26. DoT (TCP 853) stays 55-26, SEV2. 0: every SS-TRIP-DNS
+//   line is 55-26. The default for the Settings page switch (NVS "rt_dnsred").
+#define ROUTER_DNS_REDIRECT         1
 
 // ── Admin panel ───────────────────────────────────────────────────────────────
 //
@@ -484,6 +491,8 @@ _Static_assert(sizeof(MIKROTIK_PASSWORD) <= 65,
 _Static_assert(sizeof(MIKROTIK_CERT_SHA256) == 1 || sizeof(MIKROTIK_CERT_SHA256) == 65 ||
                sizeof(MIKROTIK_CERT_SHA256) == 96,
     "MIKROTIK_CERT_SHA256 must be empty or 64 hex digits (or 32 colon-separated pairs)");
+_Static_assert(ROUTER_DNS_REDIRECT == 0 || ROUTER_DNS_REDIRECT == 1,
+    "ROUTER_DNS_REDIRECT must be 0 or 1");
 
 _Static_assert(LOG_RING_SIZE >= 10 && LOG_RING_SIZE <= 500,
     "LOG_RING_SIZE must be 10–500  (500 entries ≈ 117 KB RAM)");
