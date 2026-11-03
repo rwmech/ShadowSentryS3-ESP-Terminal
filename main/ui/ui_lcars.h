@@ -27,7 +27,7 @@
 typedef struct {
     uint32_t c1, c2, c3, c4, c5, c6;    // frame and rail colours
     uint32_t txt, dim, track, accent;   // text, dim text, gauge track, hits and danger
-    uint32_t scan;                      // the port scan and the selection mark
+    uint32_t hi;                        // near-white warm: the selection mark and the flashes
     uint32_t red, yellow;               // the alert emblems
 } lcars_palette_t;
 
