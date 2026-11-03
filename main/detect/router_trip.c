@@ -434,12 +434,10 @@ static void on_login_fail(const char *m)
     txt(user, sizeof(user), u, f ? (size_t)(f - u) : tok(u, 23));
     sd_line("login_fail", CODE[K_FAIL], a, user, via, m);
     if (a && a == our_ip()) return;                     // our own read-only login
-    char as[16] = "?";
-    if (a) ip_s(a, as, sizeof(as));
     uint16_t held = 0;
     if (!a || !router_trip_is_admin(a)) {
         if (hold_pass(K_FAIL, a, 0, HOLD_S, &held))
-            trip_event(K_FAIL, a, held, "login failure for %s from %s via %s", user, as, via[0] ? via : "?");
+            trip_event(K_FAIL, a, held, "as %s via %s", user, via[0] ? via : "?");   // the source is the headline's
         return;
     }
     // An admin address: a burst only.
@@ -456,8 +454,8 @@ static void on_login_fail(const char *m)
     x->n++;
     if (x->n >= FAIL_BURST && !x->raised) {
         x->raised = true;
-        trip_event(K_FAIL, a, 0, "%u login failures in %lu s from admin %s (last as %s via %s)", (unsigned)x->n,
-              (unsigned long)(now - x->first), as, user, via[0] ? via : "?");
+        trip_event(K_FAIL, a, 0, "%u in %lu s from an admin, as %s via %s", (unsigned)x->n,
+              (unsigned long)(now - x->first), user, via[0] ? via : "?");
     }
 }
 
@@ -474,11 +472,9 @@ static void on_login(const char *m)
     if (a && a == our_ip()) return;                     // our own REST login: every request logs one
     sd_line("login", "", a, user, via, m);
     if (!a || router_trip_is_admin(a)) return;
-    char as[16];
-    ip_s(a, as, sizeof(as));
     uint16_t held = 0;
     if (hold_pass(K_LOGIN, a, 0, HOLD_S, &held))
-        trip_event(K_LOGIN, a, held, "%s logged in from %s via %s, not an admin address", user, as, via[0] ? via : "?");
+        trip_event(K_LOGIN, a, held, "as %s via %s, not an admin", user, via[0] ? via : "?");
 }
 
 // "<item> changed by <actor>[ (<command>)]". actor: "admin",
@@ -547,10 +543,11 @@ static void on_firewall(const char *m)
     if (dst) ip_s(dst, ds, sizeof(ds));
     uint16_t held = 0;
     // Kept short: the headline ("Code CC-NN <name> | <source>: " plus this,
-    // DESCRIBE_MAX 96) cuts at 95 characters, and the code name already says
-    // what the rule is. Worst case (7-character proto, 15-character addresses,
-    // 5-digit port) is 90 characters, so the port is never cut; a " (+N held)"
-    // tail may be.
+    // DESCRIBE_MAX 96) ends at 95 characters, and the code name already says
+    // what the rule is. Worst case (15-character addresses, 5-digit port) is
+    // 90 characters (55-28; a 7-character proto makes 55-25 80), so the
+    // address and port are never cut; a " (+N held)" tail may be, at a word,
+    // with "..." (describe.c).
     if (code == K_PSD) {
         if (hold_pass(code, src, 0, HOLD_S, &held))
             trip_event(code, src, held, "%s, first to %s", proto[0] ? proto : "?", ds);
@@ -559,10 +556,12 @@ static void on_firewall(const char *m)
             trip_event(code, src, held, "%s to %s:%u", proto[0] ? proto : "?", ds, dport);
     } else if (code == K_DNS_RED) {
         if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
-            trip_event(code, src, held, "%s 53 to %s", proto, ds);
+            trip_event(code, src, held, "%s 53 to %s, redirected", proto, ds);
     } else {
+        // TCP 853 is DNS over TLS: named, since that is what bypasses the Pi-hole.
         if (hold_pass(code, src, dst, HOLD_DNS_S, &held))
-            trip_event(code, src, held, "%s %u to %s, not the Pi-hole", proto[0] ? proto : "?", dport, ds);
+            trip_event(code, src, held, "%s %u to %s", dport == 853 && !strcmp(proto, "TCP") ? "DoT" : proto[0] ? proto : "?",
+                       dport, ds);
     }
 }
 
@@ -841,9 +840,9 @@ bool router_trip_list_tick(void)
         src_mac(e->src_ip, e->src_mac, &L->host);
         char ip[16];
         ip_s(e->src_ip, ip, sizeof(ip));
-        snprintf(e->payload, sizeof(e->payload), "[%s] %s is on the router's %s list, no syslog line for it",
-                 CODE[K_LIST], ip, ROUTER_TRIP_LIST);
-        ESP_LOGW(TAG, "%s", e->payload);
+        // Short for the headline, which names the source already.
+        snprintf(e->payload, sizeof(e->payload), "[%s] on the %s list, not in syslog", CODE[K_LIST], ROUTER_TRIP_LIST);
+        ESP_LOGW(TAG, "%s: %s", ip, e->payload);
         recent_note(e->src_ip);
         if (mikrotik_watch_post(e)) ST_INC(list_events);
     }
@@ -853,7 +852,7 @@ bool router_trip_list_tick(void)
         e->timestamp = (uint32_t)time(NULL);
         e->type = ATTACK_ROUTER;
         e->src_ip = more_ip;
-        snprintf(e->payload, sizeof(e->payload), "[%s] %d more new entries on the router's %s list",
+        snprintf(e->payload, sizeof(e->payload), "[%s] %d more new on the %s list",
                  CODE[K_LIST], more, ROUTER_TRIP_LIST);
         if (mikrotik_watch_post(e)) ST_INC(list_events);
     }

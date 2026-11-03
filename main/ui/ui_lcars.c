@@ -650,7 +650,7 @@ static void build_frame(void)
     corner(e, 52, 0, 18, 24, 8, COL_BLACK, false);
     lv_obj_add_flag(e, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(e, subsys_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *l = text(e, F12, COL_BLACK, 0, 0, 0, "07\nSUBSYS");
+    lv_obj_t *l = text(e, F12, COL_BLACK, 0, 0, 0, "07\nSYS");   // "SUBSYS" ran into the rounded corner (Rob, 2026-11-03)
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_line_space(l, -2, 0);
     lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, -(70 - 52) - 2, -3);
