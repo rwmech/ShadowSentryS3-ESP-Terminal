@@ -55,6 +55,20 @@ CHECKS = [
     ("alert code", "CODE 30-01 WEB LOGIN ATTEMPT", 20, 400, 0), ("alert src", "192.168.0.75 | DELL INC. | DELL LAPTOP", 14, 400, 0),
     ("alert stat", "17-03 PROBE", 14, 129, 0),
     ("alert btn", "ACKNOWLEDGE", 14, 124, 0), ("alert btn", "IGNORE ERROR", 14, 118, 0), ("alert btn", "IGNORE DEVICE", 14, 122, 0),
+    # 07 SUBSYS and the about screen, about-boot.html (the terminal lines: key and
+    # value together against the 452 px line, values cut with "..." past it)
+    ("subsys btn", "SUBSYS", 12, 50, 0), ("subsys btn", "07", 12, 50, 0),
+    ("ab bar", "SHADOWSENTRY | LOCAL SUBSYSTEM CTL", 12, 464, 1),
+    ("ab title", "SUBSYSTEM INFO", 28, 356, 2), ("ab sub", "LOCAL ACCESS GRANTED", 14, 356, 0),
+    ("ab sub", "SUBSYS ID = SENTRY S3 / 1BF46C5-DIRTY", 14, 356, 0),
+    ("ab line", "UNIT = ELECROW CROWPANEL ESP32-S3 3.5 IN", 12, 452, 1),
+    ("ab line", "BASE = SHADOWSENTRY S3 BY RDX1S (MIT)", 12, 452, 1),
+    ("ab line", "FORK = ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL", 12, 452, 1),
+    ("ab line", "BUILD = 1BF46C5-DIRTY | 2026-11-03 | IDF 5.4.0", 12, 452, 1),
+    ("ab line", "NODE = 192.168.100.118:9999 | UP 99 D 23 H", 12, 452, 1),
+    ("ab line", "ACCESS CODE = 03-11-2026-0118-9999_", 12, 452, 1),
+    ("ab btn", "RETURN", 12, 92, 0), ("ab btn", "55-21", 12, 58, 0), ("ab btn", "00-00", 12, 58, 0),
+    ("splash", "SHADOWSENTRY S3", 12, 480, 4),
 ]
 
 if __name__ == "__main__":

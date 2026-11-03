@@ -11,6 +11,9 @@
  * Touch, camera SCCB and the Crowtail I2C header share one I2C bus (2/1).
  */
 
+// The board's name on the panel's SUBSYS screen (upper case, ASCII)
+#define BOARD_NAME          "ELECROW CROWPANEL ESP32-S3 3.5 IN"
+
 // ── ILI9488 480x320 over SPI (SPI3_HOST) ──────────────────────────────────────
 #define BOARD_LCD_SCLK      12
 #define BOARD_LCD_MOSI      13
