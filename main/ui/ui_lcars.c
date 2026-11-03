@@ -103,6 +103,7 @@ EXT_RAM_BSS_ATTR static struct {
 
 EXT_RAM_BSS_ATTR static lc_port_t s_ports[LC_PORTS_MAX];
 EXT_RAM_BSS_ATTR static int s_nports;
+EXT_RAM_BSS_ATTR static bool s_port_ev[LC_PORTS_MAX];    // an event named the port since the last sense
 
 static bool s_chart_dirty = true;
 static bool fx_busy(lv_obj_t *o);      // Motion: o is being flashed
@@ -495,7 +496,7 @@ void lcars_event(const attack_log_t *e)
 
     uint16_t port = ev_port(e);
     if (port)
-        for (int i = 0; i < s_nports; i++) if (s_ports[i].port == port) s_ports[i].hit = true;
+        for (int i = 0; i < s_nports; i++) if (s_ports[i].port == port) s_ports[i].hit = s_port_ev[i] = true;
     int k = trap_index(e, port);
     if (k >= 0) hit_note(&s_t.trap[k], e);
     k = wire_index(code);
@@ -945,14 +946,17 @@ static const char *wire_off(int i)
     return mikrotik_watch_armed() ? NULL : "NOT ARMED: ARM THE BASELINE IN SETTINGS";
 }
 
-// The cell's colours for its state (also what a flash returns to).
-static void wire_style(int i)
+// The cell's colours for its state (also what an effect returns to): part 0
+// the bar, 1 the name.
+static void wire_part_style(int i, int part)
 {
     uint8_t st = s_wi_st[i];
-    lv_obj_set_style_bg_color(s_wi_bar[i], st == WS_HIT ? LCARS_COL(accent)
-                              : st == WS_OFF ? LCARS_COL(track) : LCARS_COL(c4), 0);
-    lv_obj_set_style_text_color(s_wi_nm[i], st == WS_OFF ? LCARS_COL(dim) : LCARS_COL(txt), 0);
+    if (!part) lv_obj_set_style_bg_color(s_wi_bar[i], st == WS_HIT ? LCARS_COL(accent)
+                                         : st == WS_OFF ? LCARS_COL(track) : LCARS_COL(c4), 0);
+    else       lv_obj_set_style_text_color(s_wi_nm[i], st == WS_OFF ? LCARS_COL(dim) : LCARS_COL(txt), 0);
 }
+
+static void wire_style(int i) { wire_part_style(i, 0); wire_part_style(i, 1); }
 
 static void wires_refresh(bool force)
 {
@@ -1366,243 +1370,467 @@ static void build_dev(lv_obj_t *pg)
 // ── Motion ────────────────────────────────────────────────────────────────────
 //
 // Rob, 2026-11-03: "make it feel like the HAL screens where numbers and codes
-// flash out. Nothing in order", and something moving on every page. Colours
-// only: nothing moves or resizes, except a NET gauge easing to a new value.
-// A flash recolours up to FX_OBJS objects to a tone and back, 1 to 3 times,
-// on its own lv_timer whose period is the phase (60 ms at the least). One
-// spawn timer, its period drawn again on each run, starts flashes for the
-// shown page; anim_cb (ANIM_MS) eases the NET gauges and flickers the DEV
-// lights. All of it stops, colours restored, on a page change and while an
-// alert view is up or the LCARS panel is hidden (the alert stripes are ui.c's).
+// flash out", then "the blinking ... should feel measured", "make them
+// somewhat functional, you just are blinking these for any old reason",
+// "vary animations ... it should feel organic" and "random times between
+// transitions". Colours only: nothing moves or resizes, except a NET gauge
+// easing to a new value.
+//
+// Every effect comes from real activity. fx_sense() runs every FX_SENSE_MS,
+// compares the counters the shown page can read with the last run, and
+// queues an effect for each element whose counter moved (one entry per
+// element: a burst coalesces). The queue plays one effect at a time, with a
+// random FX_GAP_MIN_MS..FX_GAP_MAX_MS between one ending and the next. With
+// nothing happening, nothing moves. Each kind of activity has its own
+// effect and tone, every step's length is drawn again each time (a range,
+// or the base value +/- FX_JITTER_PCT), and the same effect never plays
+// twice running at the same timing:
+//   EF_DECAY   solid, then flashes each dimmer (FX_FLASH_PCT), back to normal: hi
+//   EF_GLOW    a slow fade up and back, no blink: c2
+//   EF_RIPPLE  the first cell, then the next ones in turn, fading behind: c5
+//   EF_TICK    one short brighten: c4
+//   EF_PULSE   two soft swells: hi at FX_PULSE_PEAK %
+//   EF_SWEEP   a TRAPS row brightens left to right (dot, tag, bar, track): c5
+// A cell whose normal colour is the effect's tone uses hi instead. The tone
+// is reached FX_FLASH_PCT (or the effect's own) % of the way from the cell's
+// normal colour (lv_color_mix). The DEV activity lights (anim_cb, ANIM_MS)
+// stay rate-driven. All of it stops, colours restored and the queue
+// emptied, on a page change and while an alert view is up or the LCARS panel
+// is hidden (the alert stripes are ui.c's); the first sense after that only
+// records the counters.
 
-#define FX_SLOTS 3                      // flashes at once
-#define FX_OBJS  5
-#define ANIM_MS  50
+#define FX_SENSE_MS         1000        // how often the counters are compared
+#define FX_GAP_MIN_MS       300         // between one effect ending and the next starting
+#define FX_GAP_MAX_MS       1500
+#define FX_JITTER_PCT       20          // each fixed step: +/- this much, drawn each time
+#define FX_SOLID_MS         500         // EF_DECAY: the tone, held
+#define FX_FLASHES          3           //   then flashes while dimming
+#define FX_FLASH_ON_MS      140
+#define FX_FLASH_OFF_MS     140
+static const uint8_t FX_FLASH_PCT[FX_FLASHES] = { 100, 65, 35 };   // of the way from normal to the tone
+#define FX_GLOW_MIN_MS      600         // EF_GLOW: up and back in all
+#define FX_GLOW_MAX_MS      900
+#define FX_GLOW_STEPS       12
+#define FX_RIPPLE_MIN_MS    80          // EF_RIPPLE: one cell to the next
+#define FX_RIPPLE_MAX_MS    120
+#define FX_TICK_MS          150         // EF_TICK
+#define FX_PULSE_MIN_MS     60          // EF_PULSE: each of its 7 steps
+#define FX_PULSE_MAX_MS     100
+#define FX_PULSE_PEAK       80          //   % at the top of a swell
+#define FX_SWEEP_MIN_MS     70          // EF_SWEEP: one part of the row to the next
+#define FX_SWEEP_MAX_MS     110
+#define FX_RSSI_DB          3           // NET: an RSSI change this big ticks the access point
+
+#define FX_OBJS     5
+#define FX_STEP_MAX 16
+#define FX_Q        12
+#define ANIM_MS     50
 enum { FX_TEXT, FX_BG };
-
-typedef void (*fx_rest_t)(int item);    // the item's normal colours
+enum { EF_DECAY, EF_GLOW, EF_RIPPLE, EF_TICK, EF_PULSE, EF_SWEEP, EF_N };
 
 typedef struct {
     lv_timer_t *tm;
     lv_obj_t   *o[FX_OBJS];
     int16_t     item[FX_OBJS];
-    uint8_t     n;                      // objects; 0 = the slot is free
-    uint8_t     part, phases, ph;       // phases: on, off, on ...; ph the current one
-    uint16_t    on_ms, off_ms;
-    uint32_t    tone;
-    fx_rest_t   rest;
+    lv_color_t  base[FX_OBJS], tone[FX_OBJS];   // normal colour (read at the start) and target
+    lv_opa_t    base_opa[FX_OBJS];
+    uint8_t     part[FX_OBJS], lvl[FX_OBJS];    // lvl: % as painted, 0 = normal
+    uint8_t     n;                              // objects; 0 = idle
+    uint8_t     plen, lag, steps, st;           // object k runs pct[] lag * k steps late
+    uint8_t     pct[FX_STEP_MAX];
+    uint16_t    ms[FX_STEP_MAX];                // per step
 } fx_t;
 
-EXT_RAM_BSS_ATTR static fx_t s_fx[FX_SLOTS];
+typedef struct { uint8_t kind, n; int16_t item[FX_OBJS]; } fxq_t;
+
+EXT_RAM_BSS_ATTR static fx_t     s_fx;
+EXT_RAM_BSS_ATTR static fxq_t    s_q[FX_Q];
+EXT_RAM_BSS_ATTR static uint8_t  s_q_head, s_q_n;
+EXT_RAM_BSS_ATTR static uint32_t s_fx_idle_at, s_fx_gap, s_sense_at, s_fx_sig[EF_N];
+static bool s_sn_prime = true;                  // the next sense only records
 
 static uint32_t rnd(uint32_t lo, uint32_t hi) { return lo + esp_random() % (hi - lo + 1); }
+static uint16_t jit(uint32_t ms) { return (uint16_t)(ms * rnd(100 - FX_JITTER_PCT, 100 + FX_JITTER_PCT) / 100u); }
 
 static bool fx_busy(lv_obj_t *o)
 {
-    for (int s = 0; s < FX_SLOTS; s++)
-        for (int k = 0; k < s_fx[s].n; k++) if (s_fx[s].o[k] == o) return true;
+    for (int k = 0; k < s_fx.n; k++) if (s_fx.o[k] == o) return true;
     return false;
 }
 
-static fx_t *fx_free(void)
+// Items, per page: OPS the port index; TRAPS row * 4 + part (dot, tag, bar,
+// track); WIRES cell * 2 + part (bar, name); NET 0..8 values, 9..17 names;
+// DEV the row.
+static lv_obj_t *fx_obj(int it, uint8_t *part)
 {
-    for (int s = 0; s < FX_SLOTS; s++) if (!s_fx[s].n) return &s_fx[s];
-    return NULL;
+    *part = FX_TEXT;
+    switch (s_cur) {
+    case PG_OPS:   return it < s_nports ? s_ports[it].l : NULL;
+    case PG_TRAPS: {
+        *part = FX_BG;
+        lv_obj_t *const o[4] = { s_tr_dot[it / 4], s_tr_tag[it / 4], s_tr_fill[it / 4], s_tr_track[it / 4] };
+        if (it % 4 == 2 && lv_obj_get_width(o[2]) <= 0) return NULL;      // no hits on the bar yet
+        return o[it % 4];
+    }
+    case PG_WIRES: if (!(it & 1)) { *part = FX_BG; return s_wi_bar[it / 2]; } return s_wi_nm[it / 2];
+    case PG_NET:   return it < 9 ? s_nl_v[it] : s_nl_k[it - 9];
+    case PG_DEV:   return s_dv_open || it >= s_ntalk ? NULL : s_dv_nm[it];
+    default:       return NULL;
+    }
 }
 
-static void fx_add(fx_t *f, lv_obj_t *o, int item)
+// The item's normal colours.
+static void fx_rest(int it)
 {
-    if (f->n >= FX_OBJS || !o) return;
-    f->o[f->n] = o;
-    f->item[f->n] = (int16_t)item;
-    f->n++;
+    switch (s_cur) {
+    case PG_OPS: {
+        lc_port_t *p = &s_ports[it];
+        p->lit = p->hit;
+        lv_obj_set_style_text_color(p->l, grp_col(p->grp), 0);
+        lv_obj_set_style_text_opa(p->l, p->hit ? LV_OPA_COVER : DIM_OPA, 0);
+        break;
+    }
+    case PG_TRAPS: {
+        int i = it / 4;
+        if (it % 4 == 0)      lv_obj_set_style_bg_color(s_tr_dot[i], LCARS_COL(c6), 0);
+        else if (it % 4 == 1) lv_obj_set_style_bg_color(s_tr_tag[i], LCARS_COL(c6), 0);
+        else if (it % 4 == 2) lv_obj_set_style_bg_color(s_tr_fill[i], LCARS_COL(c1), 0);
+        else                  lv_obj_set_style_bg_color(s_tr_track[i], LCARS_COL(track), 0);
+        break;
+    }
+    case PG_WIRES: wire_part_style(it / 2, it & 1); break;
+    case PG_NET:
+        if (it < 9) lv_obj_set_style_text_color(s_nl_v[it], LCARS_COL(c2), 0);
+        else        lv_obj_set_style_text_color(s_nl_k[it - 9], LCARS_COL(c4), 0);
+        break;
+    case PG_DEV: lv_obj_set_style_text_color(s_dv_nm[it], LCARS_COL(c2), 0); break;
+    default: break;
+    }
 }
 
-static void fx_paint(fx_t *f, bool on)
+static void fx_paint(fx_t *f)
 {
     for (int k = 0; k < f->n; k++) {
-        if (!on)                   f->rest(f->item[k]);
-        else if (f->part == FX_BG) lv_obj_set_style_bg_color(f->o[k], lv_color_hex(f->tone), 0);
+        int idx = (int)f->st - k * (int)f->lag;
+        uint8_t p = idx >= 0 && idx < f->plen ? f->pct[idx] : 0;
+        if (p == f->lvl[k]) continue;                   // unchanged: no repaint
+        f->lvl[k] = p;
+        if (!p) { fx_rest(f->item[k]); continue; }
+        lv_color_t c = lv_color_mix(f->tone[k], f->base[k], (lv_opa_t)(p * 255u / 100u));
+        if (f->part[k] == FX_BG) lv_obj_set_style_bg_color(f->o[k], c, 0);
         else {
-            lv_obj_set_style_text_color(f->o[k], lv_color_hex(f->tone), 0);
-            lv_obj_set_style_text_opa(f->o[k], LV_OPA_COVER, 0);
+            lv_opa_t b = f->base_opa[k];
+            lv_obj_set_style_text_color(f->o[k], c, 0);
+            lv_obj_set_style_text_opa(f->o[k], (lv_opa_t)(b + (LV_OPA_COVER - b) * p / 100u), 0);
         }
     }
 }
 
-static void fx_end(fx_t *f)
+static void fx_end(void)
 {
+    fx_t *f = &s_fx;
     int n = f->n;
-    f->n = 0;                           // free before the restore: ops_refresh's port test
-    for (int k = 0; k < n; k++) f->rest(f->item[k]);
+    f->n = 0;                           // idle before the restore: ops_refresh's port test
+    for (int k = 0; k < n; k++) if (f->lvl[k]) fx_rest(f->item[k]);
     lv_timer_pause(f->tm);
+    s_fx_idle_at = lv_tick_get();
+    s_fx_gap = rnd(FX_GAP_MIN_MS, FX_GAP_MAX_MS);
 }
 
-// After the caller's fx_add()s: paint the first on phase and run the timer.
-static void fx_start(fx_t *f, uint8_t part, uint32_t tone, uint32_t flashes, uint32_t on_ms, uint32_t off_ms,
-                     fx_rest_t rest)
+// The effect's shape: its tone, the per-object profile and each step's length.
+static uint32_t fx_shape(fx_t *f, uint8_t kind)
 {
-    if (!f->n) return;
-    f->part = part;
-    f->tone = tone;
-    f->phases = (uint8_t)(2 * flashes - 1);
-    f->ph = 0;
-    f->on_ms = (uint16_t)on_ms;
-    f->off_ms = (uint16_t)off_ms;
-    f->rest = rest;
-    fx_paint(f, true);
-    lv_timer_set_period(f->tm, on_ms);
+    static const uint8_t RIPPLE[] = { 100, 60, 25 }, SWEEP[] = { 100, 55, 20 };
+    static const uint8_t PULSE[] = { FX_PULSE_PEAK / 2, FX_PULSE_PEAK, FX_PULSE_PEAK / 2, 0,
+                                     FX_PULSE_PEAK / 2, FX_PULSE_PEAK, FX_PULSE_PEAK / 2 };
+    _Static_assert(1 + 2 * FX_FLASHES <= FX_STEP_MAX && FX_GLOW_STEPS <= FX_STEP_MAX
+                   && sizeof(RIPPLE) + FX_OBJS - 1 <= FX_STEP_MAX, "FX_STEP_MAX: too small");
+    f->lag = 0;
+    switch (kind) {
+    case EF_DECAY:
+        f->plen = 1 + 2 * FX_FLASHES;
+        f->pct[0] = 100;
+        f->ms[0] = jit(FX_SOLID_MS);
+        for (int k = 0; k < FX_FLASHES; k++) {
+            f->pct[1 + 2 * k] = 0;
+            f->ms[1 + 2 * k] = jit(FX_FLASH_OFF_MS);
+            f->pct[2 + 2 * k] = FX_FLASH_PCT[k];
+            f->ms[2 + 2 * k] = jit(FX_FLASH_ON_MS);
+        }
+        return LCARS_PAL->hi;
+    case EF_GLOW: {
+        uint32_t step = rnd(FX_GLOW_MIN_MS, FX_GLOW_MAX_MS) / FX_GLOW_STEPS, half = FX_GLOW_STEPS / 2;
+        f->plen = FX_GLOW_STEPS;
+        for (uint32_t s = 0; s < FX_GLOW_STEPS; s++) {
+            f->pct[s] = (uint8_t)(s < half ? (s + 1) * 100u / half : (FX_GLOW_STEPS - s - 1) * 100u / half);
+            f->ms[s] = (uint16_t)step;
+        }
+        return LCARS_PAL->c2;
+    }
+    case EF_RIPPLE:
+    case EF_SWEEP:
+        f->plen = sizeof(RIPPLE);
+        memcpy(f->pct, kind == EF_RIPPLE ? RIPPLE : SWEEP, sizeof(RIPPLE));
+        f->lag = 1;
+        for (int s = 0; s < FX_STEP_MAX; s++)
+            f->ms[s] = (uint16_t)(kind == EF_RIPPLE ? rnd(FX_RIPPLE_MIN_MS, FX_RIPPLE_MAX_MS)
+                                                    : rnd(FX_SWEEP_MIN_MS, FX_SWEEP_MAX_MS));
+        return LCARS_PAL->c5;
+    case EF_TICK:
+        f->plen = 1;
+        f->pct[0] = 100;
+        f->ms[0] = jit(FX_TICK_MS);
+        return LCARS_PAL->c4;
+    default:                                            // EF_PULSE
+        f->plen = sizeof(PULSE);
+        memcpy(f->pct, PULSE, sizeof(PULSE));
+        for (int s = 0; s < (int)sizeof(PULSE); s++) f->ms[s] = (uint16_t)rnd(FX_PULSE_MIN_MS, FX_PULSE_MAX_MS);
+        return LCARS_PAL->hi;
+    }
+}
+
+static void fx_play(const fxq_t *q)
+{
+    fx_t *f = &s_fx;
+    uint8_t n = 0;
+    for (int k = 0; k < q->n && n < FX_OBJS; k++) {
+        uint8_t part;
+        lv_obj_t *o = fx_obj(q->item[k], &part);
+        if (!o) continue;
+        f->o[n] = o;
+        f->item[n] = q->item[k];
+        f->part[n] = part;
+        f->lvl[n] = 0;
+        f->base[n] = part == FX_BG ? lv_obj_get_style_bg_color(o, LV_PART_MAIN)
+                                   : lv_obj_get_style_text_color(o, LV_PART_MAIN);
+        f->base_opa[n] = lv_obj_get_style_text_opa(o, LV_PART_MAIN);
+        n++;
+    }
+    if (!n) return;
+    lv_color_t tone = lv_color_hex(fx_shape(f, q->kind)), hi = LCARS_COL(hi);
+    for (int k = 0; k < n; k++) f->tone[k] = f->base[k].full == tone.full ? hi : tone;
+    f->steps = (uint8_t)(f->plen + (n - 1) * f->lag);
+    uint32_t sig = 0;
+    for (int s = 0; s < f->steps; s++) sig = sig * 31u + f->ms[s];
+    if (sig == s_fx_sig[q->kind]) { f->ms[0] += 7; sig += 7; }      // never twice at one timing
+    s_fx_sig[q->kind] = sig;
+    f->st = 0;
+    f->n = n;
+    fx_paint(f);
+    lv_timer_set_period(f->tm, f->ms[0]);
     lv_timer_reset(f->tm);
     lv_timer_resume(f->tm);
 }
 
 static void fx_cb(lv_timer_t *t)
 {
-    fx_t *f = t->user_data;
+    fx_t *f = &s_fx;
     if (!f->n) { lv_timer_pause(t); return; }
-    if (!s_green || ++f->ph >= f->phases) { fx_end(f); return; }
-    bool on = !(f->ph & 1);
-    fx_paint(f, on);
-    lv_timer_set_period(t, on ? f->on_ms : f->off_ms);
+    if (!s_green || ++f->st >= f->steps) { fx_end(); return; }
+    fx_paint(f);
+    lv_timer_set_period(t, f->ms[f->st]);
 }
 
 static void dev_blink_clear(void);
 
 static void fx_stop_all(void)
 {
-    for (int s = 0; s < FX_SLOTS; s++) if (s_fx[s].n) fx_end(&s_fx[s]);
+    if (s_fx.n) fx_end();
+    s_q_n = 0;
+    s_sn_prime = true;
     dev_blink_clear();
 }
 
-// OPS: a cluster of 2 to 5 neighbouring port cells (the table is 2 columns:
-// i ^ 1 beside, i +/- 2 above and below) flashes 2 or 3 times in hi.
-static void port_rest(int i)
+// Queue an effect on the shown page; an element already waiting is not
+// queued again (a burst coalesces), nor anything once the queue is full.
+static void fxq_push(uint8_t kind, const int16_t *item, int n)
 {
-    lc_port_t *p = &s_ports[i];
-    p->lit = p->hit;
-    lv_obj_set_style_text_color(p->l, grp_col(p->grp), 0);
-    lv_obj_set_style_text_opa(p->l, p->hit ? LV_OPA_COVER : DIM_OPA, 0);
+    if (!s_green || s_sn_prime || n <= 0 || s_q_n >= FX_Q) return;
+    for (int k = 0; k < s_q_n; k++) if (s_q[(s_q_head + k) % FX_Q].item[0] == item[0]) return;
+    fxq_t *q = &s_q[(s_q_head + s_q_n++) % FX_Q];
+    q->kind = kind;
+    q->n = (uint8_t)(n > FX_OBJS ? FX_OBJS : n);
+    memcpy(q->item, item, sizeof(item[0]) * q->n);
 }
 
-static void spawn_ports(void)
+static void fxq_one(uint8_t kind, int it) { int16_t v = (int16_t)it; fxq_push(kind, &v, 1); }
+static void fxq_two(uint8_t kind, int a, int b) { int16_t v[2] = { (int16_t)a, (int16_t)b }; fxq_push(kind, v, 2); }
+
+// ── Motion: what moved ────────────────────────────────────────────────────────
+
+EXT_RAM_BSS_ATTR static struct {
+    uint32_t trap[LC_TRAPS], wire[LC_WIRES];
+    uint16_t disc_port[16];
+    uint32_t disc[16];
+    uint32_t rt_rx, rt_c[7], flow, ph_sync, mt_poll, sd_lines, dc_posted, cam_seq;
+    uint8_t  bssid[6];
+    int8_t   rssi;
+    bool     clock;
+    uint8_t  dv_mac[LC_DEVS][6];
+    uint32_t dv_pk[LC_DEVS];
+    int      dv_n;
+} s_sn;
+EXT_RAM_BSS_ATTR static pihole_status_t   s_sn_ph;     // PSRAM: large
+EXT_RAM_BSS_ATTR static mikrotik_status_t s_sn_mt;
+
+static bool moved(uint32_t cur, uint32_t *prev)
 {
-    fx_t *f = fx_free();
-    if (!f || s_nports < 2) return;
-    int seed = (int)rnd(0, (uint32_t)s_nports - 1);
-    if (fx_busy(s_ports[seed].l)) return;
-    uint32_t want = rnd(2, 5);
-    fx_add(f, s_ports[seed].l, seed);
-    for (int tries = 0; f->n < want && tries < 16; tries++) {
-        int from = f->item[rnd(0, f->n - 1u)], c;
-        switch (rnd(0, 3)) {
-        case 0:  c = from - 2; break;
-        case 1:  c = from + 2; break;
-        default: c = from ^ 1; break;
-        }
-        if (c < 0 || c >= s_nports || fx_busy(s_ports[c].l)) continue;
-        fx_add(f, s_ports[c].l, c);
+    bool m = cur > *prev;
+    *prev = cur;
+    return m;
+}
+
+static int port_idx(uint16_t port)
+{
+    for (int i = 0; i < s_nports; i++) if (s_ports[i].port == port) return i;
+    return -1;
+}
+
+// OPS. A port fires on an event that names it or whose trap maps to it
+// (s_port_ev, from lcars_event(): MNDP and MAC-Telnet included, as their
+// decoys log events; mt_decoy has no packet counter), on discovery packets
+// (discovery_port_packets()), router syslog lines on ROUTER_SYSLOG_PORT
+// (router_trip_status_t.received) and IPFIX records on ROUTER_IPFIX_PORT
+// (router_flow_counters()). One port: EF_DECAY for an event, else EF_GLOW.
+// Several in one sense: one EF_RIPPLE over them, then the first one's
+// neighbours (the table is 2 columns: i ^ 1 beside, i +/- 2 above and below).
+static void sense_ops(void)
+{
+    uint8_t why[LC_PORTS_MAX] = { 0 };          // 1 packets, 2 an event
+    for (int i = 0; i < s_nports; i++) if (s_port_ev[i]) why[i] = 2;
+    uint16_t pp[16];
+    uint32_t pk[16];
+    int n = discovery_port_packets(pp, pk, 16);
+    for (int k = 0; k < n; k++) {
+        int i = port_idx(pp[k]);
+        if (moved(pk[k], &s_sn.disc[k]) && pp[k] == s_sn.disc_port[k] && i >= 0 && !why[i]) why[i] = 1;
+        s_sn.disc_port[k] = pp[k];
     }
-    fx_start(f, FX_TEXT, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), port_rest);
-}
+    router_trip_status_t r;
+    router_trip_get_status(&r);
+    int i = port_idx(ROUTER_SYSLOG_PORT);
+    if (moved(r.received, &s_sn.rt_rx) && i >= 0 && !why[i]) why[i] = 1;
+    uint32_t rec, drop;
+    router_flow_counters(&rec, &drop);
+    i = port_idx(ROUTER_IPFIX_PORT);
+    if (moved(rec, &s_sn.flow) && i >= 0 && !why[i]) why[i] = 1;
 
-// TRAPS: a row is polled: its tag (honey or butter) or its bar (butter, or
-// the empty track in c3) flashes 2 or 3 times.
-static void trap_rest(int i)
-{
-    lv_obj_set_style_bg_color(s_tr_dot[i], LCARS_COL(c6), 0);
-    lv_obj_set_style_bg_color(s_tr_tag[i], LCARS_COL(c6), 0);
-    lv_obj_set_style_bg_color(s_tr_fill[i], LCARS_COL(c1), 0);
-    lv_obj_set_style_bg_color(s_tr_track[i], LCARS_COL(track), 0);
-}
-
-static void spawn_trap(void)
-{
-    fx_t *f = fx_free();
-    if (!f) return;
-    int i = (int)rnd(0, LC_TRAPS - 1);
-    if (fx_busy(s_tr_tag[i]) || fx_busy(s_tr_fill[i]) || fx_busy(s_tr_track[i])) return;
-    uint32_t tone;
-    if (rnd(0, 1)) {
-        fx_add(f, s_tr_dot[i], i);
-        fx_add(f, s_tr_tag[i], i);
-        tone = rnd(0, 1) ? LCARS_PAL->c2 : LCARS_PAL->c5;
-    } else if (lv_obj_get_width(s_tr_fill[i]) > 0) {
-        fx_add(f, s_tr_fill[i], i);
-        tone = LCARS_PAL->c5;
-    } else {
-        fx_add(f, s_tr_track[i], i);
-        tone = LCARS_PAL->c3;
+    int16_t v[FX_OBJS];
+    int m = 0, ev = 0;
+    for (i = 0; i < s_nports; i++) if (why[i]) { if (m < FX_OBJS) v[m++] = (int16_t)i; ev |= why[i]; }
+    if (m == 1) { fxq_push(ev & 2 ? EF_DECAY : EF_GLOW, v, 1); return; }
+    if (!m) return;
+    const int nb[3] = { v[0] ^ 1, v[0] - 2, v[0] + 2 };
+    for (int k = 0; k < 3 && m < FX_OBJS; k++) {
+        bool dup = nb[k] < 0 || nb[k] >= s_nports;
+        for (int j = 0; j < m && !dup; j++) dup = v[j] == nb[k];
+        if (!dup) v[m++] = (int16_t)nb[k];
     }
-    fx_start(f, FX_BG, tone, rnd(2, 3), rnd(70, 110), rnd(60, 90), trap_rest);
+    fxq_push(EF_RIPPLE, v, m);
 }
 
-// WIRES: a live cell's state bar (hi) or name (gold) flashes 2 or 3 times;
-// one armed cell in four pulses its bar once instead, 250 to 400 ms.
-static void wire_rest(int i) { wire_style(i); }
-
-static void spawn_wire(void)
+// TRAPS: a row's hits today (s_t.trap[].n, from lcars_event()) went up: an
+// EF_SWEEP along the row for a connection; SHELL SESSIONS (shell commands)
+// an EF_DECAY on its dot and tag.
+static void sense_traps(void)
 {
-    fx_t *f = fx_free();
-    if (!f) return;
-    int i = (int)rnd(0, LC_WIRES - 1);
-    if (s_wi_st[i] == WS_OFF || fx_busy(s_wi_bar[i]) || fx_busy(s_wi_nm[i])) return;
-    if (s_wi_st[i] == WS_ARMED && !rnd(0, 3)) {
-        fx_add(f, s_wi_bar[i], i);
-        fx_start(f, FX_BG, LCARS_PAL->hi, 1, rnd(250, 400), 60, wire_rest);
-    } else if (rnd(0, 1)) {
-        fx_add(f, s_wi_bar[i], i);
-        fx_start(f, FX_BG, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), wire_rest);
-    } else {
-        fx_add(f, s_wi_nm[i], i);
-        fx_start(f, FX_TEXT, LCARS_PAL->c4, rnd(2, 3), rnd(60, 90), rnd(60, 90), wire_rest);
+    for (int i = 0; i < LC_TRAPS; i++) {
+        if (!moved(s_t.trap[i].n, &s_sn.trap[i])) continue;
+        if (i == TR_SHELL) { fxq_two(EF_DECAY, i * 4, i * 4 + 1); continue; }
+        int16_t v[4] = { (int16_t)(i * 4), (int16_t)(i * 4 + 1), (int16_t)(i * 4 + 2), (int16_t)(i * 4 + 3) };
+        fxq_push(EF_SWEEP, v, 4);
     }
 }
 
-// NET: a grid value, its name, or both flash 2 or 3 times in hi. Items 0..8
-// are the values (c2), 9..17 the names (c4).
-static void net_rest(int i)
+// WIRES: a cell's hits today (s_t.wire[].n) went up: EF_DECAY on its bar and
+// name. The router cells' names also glow (EF_GLOW) when router_trip's line
+// counters for them move: c_login_fail ROUTER LOGIN FAIL, c_mgmt ROUTER MGMT
+// PORT, c_psd ROUTER PORT SCAN, c_dns DNS BYPASS, c_dhcp NEW DEVICE, c_login
+// and c_change ROUTER CONFIG.
+static void sense_wires(void)
 {
-    if (i < 9) lv_obj_set_style_text_color(s_nl_v[i], LCARS_COL(c2), 0);
-    else       lv_obj_set_style_text_color(s_nl_k[i - 9], LCARS_COL(c4), 0);
+    bool hit[LC_WIRES];
+    for (int i = 0; i < LC_WIRES; i++) {
+        hit[i] = moved(s_t.wire[i].n, &s_sn.wire[i]);
+        if (hit[i]) fxq_two(EF_DECAY, i * 2, i * 2 + 1);
+    }
+    router_trip_status_t r;
+    router_trip_get_status(&r);
+    const uint32_t c[7] = { r.c_login_fail, r.c_mgmt, r.c_psd, r.c_dns, r.c_dhcp, r.c_login, r.c_change };
+    const int cell[7] = { WI_ROUTER0, WI_ROUTER0 + 1, WI_ROUTER0 + 2, WI_ROUTER0 + 3, WI_NEWDEV, WI_CONFIG, WI_CONFIG };
+    for (int k = 0; k < 7; k++)
+        if (moved(c[k], &s_sn.rt_c[k]) && !hit[cell[k]] && s_wi_st[cell[k]] != WS_OFF) fxq_one(EF_GLOW, cell[k] * 2 + 1);
 }
 
-static void spawn_net(void)
+// NET: a cell's value and name, when its source updates.
+static void sense_net(void)
 {
-    fx_t *f = fx_free();
-    if (!f) return;
-    int i = (int)rnd(0, 8);
-    if (fx_busy(s_nl_v[i]) || fx_busy(s_nl_k[i])) return;
-    uint32_t w = rnd(0, 2);
-    if (w != 1) fx_add(f, s_nl_v[i], i);
-    if (w != 0) fx_add(f, s_nl_k[i], i + 9);
-    fx_start(f, FX_TEXT, LCARS_PAL->hi, rnd(2, 3), rnd(60, 90), rnd(60, 90), net_rest);
+    wifi_ap_record_t ap;
+    if (wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        bool roam = memcmp(ap.bssid, s_sn.bssid, 6) != 0;                   // ACCESS POINT: a roam, EF_PULSE
+        int d = (int)ap.rssi - s_sn.rssi;
+        if (roam) { memcpy(s_sn.bssid, ap.bssid, 6); fxq_two(EF_PULSE, 0, 9); }
+        else if (d >= FX_RSSI_DB || d <= -FX_RSSI_DB) fxq_two(EF_TICK, 0, 9);   // or an RSSI change, EF_TICK
+        if (roam || d >= FX_RSSI_DB || d <= -FX_RSSI_DB) s_sn.rssi = ap.rssi;
+    }
+    bool set = time(NULL) >= 1600000000;                                    // CLOCK: SNTP first set it (no
+    if (set && !s_sn.clock) fxq_two(EF_PULSE, 1, 10);                       //   sync counter), EF_PULSE
+    s_sn.clock = set;
+    pihole_get_status(&s_sn_ph);                                            // PI-HOLE: syncs, EF_TICK (no
+    if (moved(s_sn_ph.syncs, &s_sn.ph_sync)) fxq_two(EF_TICK, 3, 12);      //   dns_log on this tree)
+    mikrotik_get_status(&s_sn_mt);                                          // ROUTER: polls, EF_TICK
+    if (moved(s_sn_mt.polls, &s_sn.mt_poll)) fxq_two(EF_TICK, 4, 13);
+    uint32_t rec, drop;                                                     // IPFIX: records, EF_GLOW
+    router_flow_counters(&rec, &drop);
+    if (moved(rec, &s_sn.flow)) fxq_two(EF_GLOW, 5, 14);
+    sd_status_t sd;                                                         // MICROSD: lines_written, EF_TICK
+    sd_log_status(&sd);
+    if (moved(sd.lines_written, &s_sn.sd_lines)) fxq_two(EF_TICK, 6, 15);
+    cam_meta_t cm;                                                          // CAMERA: a snapshot (seq), EF_PULSE
+    if (cam_last_meta(&cm) && moved(cm.seq, &s_sn.cam_seq)) fxq_two(EF_PULSE, 7, 16);
+    discord_status_t dc;                                                    // DISCORD: posted, EF_PULSE
+    discord_get_status(&dc);
+    if (moved(dc.posted, &s_sn.dc_posted)) fxq_two(EF_PULSE, 8, 17);
 }
 
-// DEV: a row's name brightens once, 200 to 300 ms.
-static void dev_rest(int i) { lv_obj_set_style_text_color(s_dv_nm[i], LCARS_COL(c2), 0); }
-
-static void spawn_dev(void)
+// DEV: a listed device's packet count (discovery_talker_t.packets, as
+// dev_refresh() last read it) went up: EF_GLOW on its name.
+static void sense_dev(void)
 {
-    fx_t *f = fx_free();
-    if (!f || s_dv_open || s_ntalk <= 0) return;
-    int i = (int)rnd(0, (uint32_t)s_ntalk - 1);
-    if (fx_busy(s_dv_nm[i])) return;
-    fx_add(f, s_dv_nm[i], i);
-    fx_start(f, FX_TEXT, LCARS_PAL->hi, 1, rnd(200, 300), 60, dev_rest);
+    for (int i = 0; i < s_ntalk; i++) {
+        for (int k = 0; k < s_sn.dv_n; k++)
+            if (!memcmp(s_sn.dv_mac[k], s_talk[i].mac, 6)) {
+                if (s_talk[i].packets > s_sn.dv_pk[k]) fxq_one(EF_GLOW, i);
+                break;
+            }
+    }
+    s_sn.dv_n = s_ntalk;
+    for (int i = 0; i < s_ntalk; i++) { memcpy(s_sn.dv_mac[i], s_talk[i].mac, 6); s_sn.dv_pk[i] = s_talk[i].packets; }
+}
+
+static void fx_sense(void)
+{
+    switch (s_cur) {
+    case PG_OPS:   sense_ops();   break;
+    case PG_TRAPS: sense_traps(); break;
+    case PG_WIRES: sense_wires(); break;
+    case PG_NET:   sense_net();   break;
+    case PG_DEV:   sense_dev();   break;
+    default: break;
+    }
+    memset(s_port_ev, 0, sizeof(s_port_ev));
+    s_sn_prime = !s_green;                      // under an alert view: keep recording only
 }
 
 static void fx_spawn_cb(lv_timer_t *t)
 {
-    uint32_t next = 500;
-    if (s_green) switch (s_cur) {
-    case PG_OPS:   spawn_ports(); next = rnd(150, 700);  break;
-    case PG_TRAPS: spawn_trap();  next = rnd(250, 900);  break;
-    case PG_WIRES: spawn_wire();  next = rnd(250, 900);  break;
-    case PG_NET:   spawn_net();   next = rnd(300, 1000); break;
-    case PG_DEV:   spawn_dev();   next = rnd(600, 1500); break;
-    default: break;
-    }
-    lv_timer_set_period(t, next);
+    (void)t;
+    if (lv_tick_elaps(s_sense_at) >= FX_SENSE_MS) { s_sense_at = lv_tick_get(); fx_sense(); }
+    if (!s_green || s_fx.n || !s_q_n || lv_tick_elaps(s_fx_idle_at) < s_fx_gap) return;
+    fxq_t q = s_q[s_q_head];
+    s_q_head = (uint8_t)((s_q_head + 1) % FX_Q);
+    s_q_n--;
+    fx_play(&q);
 }
 
 // DEV lights: each tick a row lights one of its lit dots in hi for 2 ticks,
@@ -1744,11 +1972,9 @@ void lcars_build(lv_obj_t *scr)
     show(s_alert, false);
     show(s_root, false);
     lv_timer_create(fast_cb, SCAN_MS, NULL);
-    for (int i = 0; i < FX_SLOTS; i++) {
-        s_fx[i].tm = lv_timer_create(fx_cb, 60, &s_fx[i]);
-        lv_timer_pause(s_fx[i].tm);
-    }
-    lv_timer_create(fx_spawn_cb, 500, NULL);
+    s_fx.tm = lv_timer_create(fx_cb, 60, NULL);
+    lv_timer_pause(s_fx.tm);
+    lv_timer_create(fx_spawn_cb, 100, NULL);
     lv_timer_create(anim_cb, ANIM_MS, NULL);
     lv_timer_create(slow_cb, 1000, NULL);
     ESP_LOGI(TAG, "Built: %d ports (%d pages), AUTO every %u s", s_nports, PAGES, (unsigned)settings_get()->panel_rotate_s);

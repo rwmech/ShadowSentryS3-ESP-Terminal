@@ -169,6 +169,21 @@ static char     s_stage[L_N];           // 'b' bind, 'j' join, 's' socket
 static uint32_t s_pkts[L_N];
 static volatile uint32_t s_macq_drop;
 
+int discovery_port_packets(uint16_t *port, uint32_t *packets, int max)
+{
+    int n = 0;
+#if DISCOVERY_ENABLE
+    for (int i = 0; i < L_N && n < max; i++) {
+        if (i == L_DHCP && !DISCOVERY_DHCP) continue;
+        port[n] = LSN[i].port;
+        packets[n++] = s_pkts[i];
+    }
+#else
+    (void)port; (void)packets; (void)max;
+#endif
+    return n;
+}
+
 // mDNS query ring: single producer (the frame tap, Wi-Fi RX task), single
 // consumer (the discovery task). The producer fills slot head % N and then
 // publishes head; the consumer copies slot tail % N out and then publishes
@@ -1640,6 +1655,7 @@ int discovery_top_talkers(discovery_talker_t *out, int max)
         t->ip = d->ip;
         memcpy(t->mac, d->mac, 6);
         t->per_hour = r;
+        t->packets = d->total;
         strlcpy(t->label, d->label, sizeof(t->label));
         strlcpy(t->vendor, d->vendor, sizeof(t->vendor));
         if (n < max) n++;
