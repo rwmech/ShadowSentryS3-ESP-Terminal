@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "config.h"         // ROUTER_NEVER_BLOCK, before the #ifndef default below
 
 #ifdef __cplusplus
 extern "C" {
