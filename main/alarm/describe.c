@@ -90,6 +90,9 @@ static const code_row_t CODES[] = {
     { "55-25", "Router management",   TIER_SEV2, NULL },
     { "55-26", "DNS bypass",          TIER_SEV2, NULL },
     { "55-27", "Router tripwire list", TIER_SEV2, NULL },
+    // DNS to another server on port 53 while the router redirects port 53 to
+    // the Pi-hole (ROUTER_DNS_REDIRECT): handled, so info only.
+    { "55-28", "DNS bypass, redirected", TIER_SEV3, NULL },
 };
 #define CODE_N ((int)(sizeof(CODES) / sizeof(CODES[0])))
 
@@ -101,7 +104,7 @@ enum {      // indexes into CODES, for the fixed per-type picks
     C_ARP_SPOOF, C_WIFI_DEAUTH, C_DISCOVERY,
     C_MT_FIRST, C_MT_LAST = C_MT_FIRST + 4,
     C_NEW_DEVICE, C_ROUTER_FIRST, C_ROUTER_LAST = C_ROUTER_FIRST + 10,
-    C_RTRLOG_FIRST, C_RTRLOG_LAST = C_RTRLOG_FIRST + 6, C_COUNT
+    C_RTRLOG_FIRST, C_RTRLOG_LAST = C_RTRLOG_FIRST + 6, C_DNS_REDIRECTED, C_COUNT
 };
 _Static_assert(C_COUNT == sizeof(CODES) / sizeof(CODES[0]), "describe.c: CODES[] and its index enum disagree");
 _Static_assert(C_COUNT <= DESCRIBE_CODE_BITS, "describe.c: more codes than alarm_info_t.codes has bits");
@@ -169,6 +172,7 @@ static const code_row_t *code_row(const attack_log_t *e)
         if (p[0] == '[' && strlen(p) > 6 && p[6] == ']') { memcpy(code, p + 1, 5); code[5] = 0; }
         for (int i = C_ROUTER_FIRST; i <= C_ROUTER_LAST; i++) if (!strcmp(CODES[i].code, code)) return &CODES[i];
         for (int i = C_RTRLOG_FIRST; i <= C_RTRLOG_LAST; i++) if (!strcmp(CODES[i].code, code)) return &CODES[i];
+        if (!strcmp(CODES[C_DNS_REDIRECTED].code, code)) return &CODES[C_DNS_REDIRECTED];
         return &CODES[C_ROUTER_FIRST];
     }
     default:               return &UNKNOWN;

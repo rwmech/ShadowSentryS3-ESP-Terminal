@@ -390,6 +390,7 @@ static void get_settings(int sock)
     JB_LIT(&j, "\"mikrotik_cert_sha256\":"); jb_str(&j, s.mikrotik_cert_sha256, sizeof(s.mikrotik_cert_sha256)); JB_LIT(&j, ",");
     jb_bool(&j, "mikrotik_enabled", s.mikrotik_enabled);          JB_LIT(&j, ",");
     jb_bool(&j, "mikrotik_active", settings_mikrotik_enabled());  JB_LIT(&j, ",");
+    jb_bool(&j, "router_dns_redirect", s.router_dns_redirect);    JB_LIT(&j, ",");
     jb_bool(&j, "reboot_pending", settings_reboot_pending());
     JB_LIT(&j, ",\"running_wifi_ssid\":");
     char ssid[sizeof(live->wifi_ssid)];
@@ -646,6 +647,7 @@ static void post_settings(int sock, const char *req, int req_len)
             err = "MikroTik certificate pin: 64 hex digits (SHA-256), or empty";
     }
     if (!err) err = take_bool(root, "mikrotik_enabled", &s.mikrotik_enabled);
+    if (!err) err = take_bool(root, "router_dns_redirect", &s.router_dns_redirect);
     s.brightness = (uint8_t)bright;
     s.discord_min_tier = (uint8_t)dc_tier;
     s.ui_volume = (uint8_t)ui_vol;

@@ -69,6 +69,7 @@ typedef struct {
     char     mikrotik_password[65]; // secret
     char     mikrotik_cert_sha256[65]; // "" or 64 lowercase hex: the pinned certificate (https only)
     bool     mikrotik_enabled;      // the switch; on only when URL, user and password are set too
+    bool     router_dns_redirect;   // the router NATs port 53 to the Pi-hole: SS-TRIP-DNS on 53 is 55-28, SEV3
 } settings_t;
 
 // Load defaults, then NVS overrides. Call once, after nvs_flash_init().
