@@ -44,6 +44,20 @@ extern "C" {
  *                                   their _CNAME forms, EXTERNAL_BLOCKED_IP,
  *                                   _NULL, _NXRA, _EDE15, SPECIAL_DOMAIN,
  *                                   DBBUSY; UNKNOWN and IN_PROGRESS neither
+ *   GET    /api/logs/dnsmasq?nextID= the DNS resolver's log (FTL src/api/logs.c,
+ *                                   logs.yaml): log[]: timestamp, message, prio;
+ *                                   nextID (the ID to ask for next), pid (FTL's;
+ *                                   a change means FTL restarted). FTL keeps the
+ *                                   last LOG_SIZE 512 lines of up to 259
+ *                                   characters (src/log.h) and answers every
+ *                                   line from max(nextID, newest - 512), so a
+ *                                   nextID past the newest gives no lines and
+ *                                   just the current nextID.
+ *   GET    /api/config/dns/queryLogging   config.dns.queryLogging: false means
+ *                                   dnsmasq logs no queries (FTL
+ *                                   src/config/dnsmasq_config.c writes
+ *                                   log-queries, or log-queries=proto with
+ *                                   misc.extraLogging, only when it is true)
  * The SID goes in the X-FTL-SID header on every request. One session is kept
  * until it expires (re-auth on a 401), so the client never takes more than one
  * of Pi-hole's session seats.
@@ -69,6 +83,23 @@ extern "C" {
  * has no MAC. Responses are read into one PIHOLE_RESP_MAX buffer and parsed
  * with cJSON; a larger response is skipped and counted. Every string from
  * Pi-hole is untrusted and escaped by json_esc() on the way out.
+ *
+ * DNS answers: every PIHOLE_LOG_POLL_S the task reads the new lines of the
+ * dnsmasq log (nextID paging, the 64 KB response cap: when the board fell
+ * behind, it skips to the newest PIHOLE_LOG_BACK lines and counts the gap).
+ * Lines parsed, each cut at PIHOLE_LOG_LINE bytes and at most 8 words:
+ *   [<serial> <client>/<port> ]query[<type>] <name> from <client>
+ *   [<serial> <client>/<port> ]reply|cached|cached-stale <name> is <answer>
+ *   [...] <list> blocked <name> is <answer>    (only ip-api.com, see below)
+ * (the optional prefix is log-queries=proto). <answer> "<CNAME>" starts or
+ * continues a chain: the next reply line in a row belongs to the same
+ * question, so an address is kept under the name the client asked for.
+ * The asker is the prefix's client, else the newest "query" line for that
+ * name in a PIHOLE_QRING ring. Kept in a PSRAM map: IPv4 address to name,
+ * newest answer time and up to PIHOLE_MAP_ASKERS clients, PIHOLE_MAP_MAX
+ * entries, the least recently answered evicted. A "blocked" line for
+ * ip-api.com asked by this board is recorded too: it is why GeoIP owners
+ * stay empty.
  *
  * Memory: the task stack (PSRAM: it only does sockets, HTTP and RAM lookups,
  * no flash, NVS or SPIFFS), the response buffer and two cache tables, all in
@@ -100,6 +131,16 @@ extern "C" {
 #define PIHOLE_KNOWN_MAX        96      // discovery devices plus recent attackers
 #define PIHOLE_RECENT           32      // recent attacks read for attacker IPs
 #define PIHOLE_ERR_LEN          160
+#define PIHOLE_LOG_POLL_S       10      // between dnsmasq log reads
+#define PIHOLE_LOG_RETRY_S      60      // after a failed read
+#define PIHOLE_LOG_RECHECK_S    600     // endpoint missing or logging off: ask again this often
+#define PIHOLE_LOG_BACK         150     // lines read back at the start or after falling behind
+#define PIHOLE_LOG_LINE         272     // a log line is cut here (FTL keeps 259)
+#define PIHOLE_LOG_COVER_S      900     // the log must cover this long before "no lookup seen" is called
+#define PIHOLE_MAP_MAX          4096    // addresses kept (PSRAM, about 116 B each)
+#define PIHOLE_MAP_NAME         64      // a longer name is cut (matched by its full-name hash)
+#define PIHOLE_MAP_ASKERS       3       // clients kept per address
+#define PIHOLE_QRING            256     // recent "query" lines, for the asker of a reply
 
 // Once at boot, after settings_init(): the table lock, the cJSON allocator
 // (PSRAM first) and the settings listener. Never starts the task.
@@ -146,6 +187,18 @@ typedef struct {
     int      test_status;       // HTTP status of the failing step, -1 transport, 0 config
     char     test_msg[PIHOLE_ERR_LEN];
     uint32_t stack_free;        // task stack high-water (B), 0 before the first sync
+    // The dnsmasq log (answers). log_state: "off", "starting", "ok",
+    // "no_endpoint" (404), "denied" (403), "logging_off" (dns.queryLogging
+    // false), "no_queries" (lines but no query lines), "error"; log_why says
+    // it in plain words when not "ok".
+    char     log_state[16];
+    char     log_why[PIHOLE_ERR_LEN];
+    uint32_t log_since;         // epoch the log has been read without a gap since, 0 none
+    uint32_t log_polls, log_lines, log_queries, log_answers, log_missed, log_gaps;
+    uint32_t map_entries, map_evicted;
+    uint32_t map_evict_newest;  // epoch: the newest answer evicted (coverage starts after it)
+    uint32_t geo_blocked_ts;    // epoch Pi-hole last refused ip-api.com to this board, 0 never
+    int8_t   query_logging;     // dns.queryLogging: 1 on, 0 off, -1 unknown
 } pihole_status_t;
 
 void pihole_get_status(pihole_status_t *out);
@@ -157,8 +210,10 @@ void pihole_get_status(pihole_status_t *out);
 // device, or cap when it did not fit (buf then holds garbage up to cap).
 // Every string is escaped. Any task; takes the table lock briefly. Lock order:
 // callers may hold the discovery table lock; this module never takes it while
-// holding its own.
-size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t cap, bool lead);
+// holding its own. With answers true each top domain gains "ips": the
+// addresses the DNS log saw it resolve to (one pass over the answer map, so
+// for one device at a time, not for the device list).
+size_t pihole_device_json(uint32_t ip, const uint8_t mac[6], char *buf, size_t cap, bool lead, bool answers);
 
 #ifdef __cplusplus
 }

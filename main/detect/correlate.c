@@ -27,6 +27,8 @@
 
 // Optional: defined by the Pi-hole client when it is built in, else NULL.
 #pragma weak correlate_pihole_device
+#pragma weak correlate_pihole_dnslog
+#pragma weak correlate_pihole_answers
 
 #define RING_MAX 200        // the flash ring's size (log_store.c)
 
@@ -67,8 +69,16 @@ static const char *resolver(uint32_t ip)
 
 const char *correlate_flag_key(int bit)
 {
-    static const char *const K[] = { "dns_bypass", "doh", "unusual_port", "beaconing", "upload", "direct_ip", "blocked_contact" };
-    return bit >= 0 && bit < 7 ? K[bit] : "";
+    static const char *const K[] = { "dns_bypass", "doh", "unusual_port", "beaconing", "upload", "direct_ip",
+                                     "blocked_contact", "no_lookup" };
+    _Static_assert(sizeof(K) / sizeof(K[0]) == CORRELATE_F_BITS, "a key per flag bit");
+    return bit >= 0 && bit < CORRELATE_F_BITS ? K[bit] : "";
+}
+
+const char *correlate_lookup_key(uint8_t lk)
+{
+    static const char *const K[] = { "", "self", "other", "unseen", "before", "wait" };
+    return lk < sizeof(K) / sizeof(K[0]) ? K[lk] : "";
 }
 
 static void mb(uint64_t n, char *b, size_t len)
@@ -277,7 +287,7 @@ static void flags(correlate_t *c)
     // Direct-IP: only when a name source covers this device.
     bool covered = c->dns_on && dns_any_ips(&c->dns);
     for (int i = 0; i < k->n_dst && !covered; i++) covered = k->dst[i].name_src == MIKROTIK_NAME_ROUTER_DNS;
-    if (covered) {
+    if (covered && !c->dnslog.readable) {
         char dl[72] = "";
         int nd = 0;
         for (int i = 0; i < k->n_dst; i++) {
@@ -295,6 +305,28 @@ static void flags(correlate_t *c)
         }
         if (nd) flag(c, "direct_ip", "%d external host%s with no DNS lookup behind %s: %s%s", nd, nd == 1 ? "" : "s",
                      nd == 1 ? "it" : "them", dl, nd > 3 ? " and more" : "");
+    }
+
+    // No lookup seen: Pi-hole's log covered the time, and nobody looked the
+    // address up through it (the verdicts are set in lookups()).
+    if (c->dnslog.usable) {
+        char dl[72] = "";
+        int nn = 0;
+        for (int i = 0; i < k->n_dst; i++) {
+            if (c->lk[i].lk != CORRELATE_LK_UNSEEN) continue;
+            c->dflags[i] |= CORRELATE_F_NOLOOKUP;
+            if (nn < 3) {
+                char one[28];
+                ip_s(k->dst[i].ip, ip, sizeof(ip));
+                snprintf(one, sizeof(one), "%s%s:%u", nn ? ", " : "", ip, (unsigned)k->dst[i].port);
+                strlcat(dl, one, sizeof(dl));
+            }
+            nn++;
+        }
+        uint32_t now = (uint32_t)time(NULL), min = c->dnslog.cover_from && now > c->dnslog.cover_from
+                       ? (now - c->dnslog.cover_from) / 60 : 0;
+        if (nn) flag(c, "no_lookup", "%d internet host%s nobody looked up through Pi-hole in its log's last %lu min: %s%s",
+                     nn, nn == 1 ? "" : "s", (unsigned long)min, dl, nn > 3 ? " and more" : "");
     }
 
     // Fan-out.
@@ -385,6 +417,54 @@ static void summarise(correlate_t *c)
     strlcpy(c->summary, s, sizeof(c->summary));
 }
 
+// ── Pi-hole's DNS log: who looked each destination up ─────────────────────────
+
+// A destination a lookup should stand behind: internet, TCP or UDP, not DNS
+// itself and not a known public resolver on 443 or 853 (the doh flag).
+static bool wants_lookup(const correlate_t *c, const mikrotik_dst_t *d)
+{
+    if (!d->external || (d->proto != 6 && d->proto != 17)) return false;
+    if (d->port == 53 || d->port == 853) return false;
+    if (d->port == 443 && resolver(d->ip)) return false;
+    return !(c->dns_on && c->dns.server_ip && d->ip == c->dns.server_ip);
+}
+
+static void lookups(correlate_t *c)
+{
+    if (!c->dnslog.readable || !correlate_pihole_answers || !c->ip) return;
+    mikrotik_conn_t *k = &c->conn;
+    uint32_t ips[MIKROTIK_DST_MAX];
+    int8_t at[MIKROTIK_DST_MAX];
+    int n = 0;
+    for (int i = 0; i < k->n_dst; i++) if (wants_lookup(c, &k->dst[i])) { at[n] = (int8_t)i; ips[n++] = k->dst[i].ip; }
+    if (!n) return;
+    correlate_answer_t *a = heap_caps_calloc((size_t)n, sizeof(*a), MALLOC_CAP_SPIRAM);
+    if (!a) return;
+    correlate_pihole_answers(c->ip, c->dns_on ? &c->dns : NULL, ips, n, a);
+    for (int j = 0; j < n; j++) {
+        int i = at[j];
+        mikrotik_dst_t *d = &k->dst[i];
+        if (a[j].found) {
+            c->lk[i].lk = a[j].self ? CORRELATE_LK_SELF : CORRELATE_LK_OTHER;
+            c->lk[i].when = a[j].last;
+            c->lk[i].by = a[j].self ? 0 : a[j].by;
+            txt(c->lk[i].name, sizeof(c->lk[i].name), a[j].name);
+            if (c->lk[i].name[0]) {
+                strlcpy(d->name, c->lk[i].name, sizeof(d->name));
+                d->name_src = MIKROTIK_NAME_PIHOLE;
+            }
+            if (c->lk[i].by) discovery_label_for(c->lk[i].by, NULL, c->lk[i].by_label, sizeof(c->lk[i].by_label));
+        } else if (!c->dnslog.usable) {
+            c->lk[i].lk = CORRELATE_LK_WAIT;
+        } else if (d->first_seen && c->dnslog.cover_from && d->first_seen < c->dnslog.cover_from) {
+            c->lk[i].lk = CORRELATE_LK_BEFORE;
+        } else {
+            c->lk[i].lk = CORRELATE_LK_UNSEEN;
+        }
+    }
+    free(a);
+}
+
 // ── Build ─────────────────────────────────────────────────────────────────────
 
 void correlate_build(uint32_t ip, const uint8_t *mac, bool fetch, bool with_events, correlate_t *c)
@@ -419,6 +499,8 @@ void correlate_build(uint32_t ip, const uint8_t *mac, bool fetch, bool with_even
     if (correlate_pihole_device && c->ip)
         c->dns_on = correlate_pihole_device(c->ip, c->mac_known ? c->mac : NULL, &c->dns);
 
+    if (correlate_pihole_dnslog) correlate_pihole_dnslog(&c->dnslog);
+    if (c->conn_found) lookups(c);
     if (c->conn_found) {
         int asked = 0;
         for (int i = 0; i < c->conn.n_dst; i++) {
