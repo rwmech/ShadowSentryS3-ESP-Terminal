@@ -778,9 +778,13 @@ static void focus_update(void)
 
 static void ops_refresh(bool force)
 {
-    char b[48];
+    char b[64], ip[WIFI_IP_STR_LEN];
     day_roll();
-    snprintf(b, sizeof(b), "CONDITION GREEN | %d PORTS WATCHED", s_nports);
+    // The board's address and admin port (Rob, 2026-11-02): 327 px at worst
+    // ("255.255.255.255:65535") in the strip's 380.
+    wifi_manager_get_ip_str(ip, sizeof(ip));
+    if (ip[0]) snprintf(b, sizeof(b), "CONDITION GREEN | %s:%d | %d PORTS", ip, ADMIN_PORT, s_nports);
+    else       snprintf(b, sizeof(b), "CONDITION GREEN | NO WI-FI | %d PORTS", s_nports);
     set_text(s_cond, b);
     uint32_t dev = (uint32_t)discovery_summary(NULL, 0, NULL);
     const uint32_t v[4] = { s_t.alerts, s_t.probes, s_t.scans, dev };
