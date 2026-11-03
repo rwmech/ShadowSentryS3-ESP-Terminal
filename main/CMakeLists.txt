@@ -50,6 +50,14 @@ execute_process(
 if(NOT ss_gzip_result EQUAL 0)
     message(FATAL_ERROR "tools/gzip_assets.py failed")
 endif()
+# Fork (subsys): gz/build_id.h, the git short hash and build date for the
+# panel's SUBSYS screen (tools/build_id.py; PlatformIO runs it on every build).
+execute_process(
+    COMMAND ${ss_python} "${CMAKE_CURRENT_LIST_DIR}/../tools/build_id.py" "${CMAKE_CURRENT_LIST_DIR}/.."
+    RESULT_VARIABLE ss_build_id_result)
+if(NOT ss_build_id_result EQUAL 0)
+    message(FATAL_ERROR "tools/build_id.py failed")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_LIST_DIR}/index.html" "${CMAKE_CURRENT_LIST_DIR}/device.html"
     "${CMAKE_CURRENT_LIST_DIR}/analysis.js")
@@ -90,6 +98,8 @@ idf_component_register(
         "ui/ui.c"
         "ui/ui_lcars.c"
         "ui/lv_mem_psram.c"
+        "ui/ui_subsys.c"
+        "ui/ui_logo.c"
         "camera/cam.c"
         "admin/api_cam.c"
         "detect/detect.c"
@@ -97,6 +107,7 @@ idf_component_register(
         "detect/discovery.c"
         "admin/api_devices.c"
         "admin/api_oui.c"
+        "admin/api_logo.c"
         "admin/api_devlog.c"
         "admin/web_assets.c"
         "admin/api_tasks.c"
@@ -130,6 +141,7 @@ idf_component_register(
         "gz/index.html.gz"   # dashboard, gzip (web_assets.c)
         "gz/device.html.gz"  # device page, gzip (web_assets.c)
         "gz/analysis.js.gz"  # device analysis rules for both pages, gzip (web_assets.c)
+        "../docs/mockups/shadowsentry-logo-200.png"  # built-in panel logo, PNG (ui/ui_logo.c)
 
     REQUIRES
         # Core system

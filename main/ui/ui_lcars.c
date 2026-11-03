@@ -1,4 +1,6 @@
 #include "ui_lcars.h"
+#include "ui_subsys.h"
+#include "ui_logo.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -53,7 +55,7 @@ const lcars_palette_t LCARS_CERRITOS = {
 // Layout (screen coordinates; the pages use content coordinates)
 //   frame       top elbow 70 x 32 (radius 24, inner black 18 x 22, radius 8)
 //               and bar segments y 0..9, the title right-aligned (14 px);
-//               bottom elbow 70 x 34 and segments y 310..319, the clock
+//               bottom elbow 70 x 34 (the 07 SUBSYS button) and segments y 310..319, the clock
 //               right-aligned at y 304 (12 px)
 //   rail        x 0..51, six buttons 52 x 38 from y 36, 3 px apart
 //   content     x 76..475, y 20..301
@@ -74,6 +76,8 @@ static const char *const PAGE_TITLE[PAGES] = { "OPS", "TRAPS", "TRIPWIRES", "NET
 static const char *const RAIL_TXT[6] = { "01\nOPS", "02\nTRAPS", "03\nWIRES", "04\nNET", "05\nDEV", "06\nAUTO" };
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_root, *s_rail, *s_title, *s_clock, *s_content, *s_alert;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_frame;              // elbows, bars, title, rail, clock
+EXT_RAM_BSS_ATTR static bool      s_splash;             // the boot splash is running
 EXT_RAM_BSS_ATTR static lv_obj_t *s_page[PAGES];
 EXT_RAM_BSS_ATTR static lv_obj_t *s_rail_mark[6];
 static int       s_cur = PG_OPS;
@@ -115,6 +119,7 @@ EXT_RAM_BSS_ATTR static bool s_port_ev[LC_PORTS_MAX];    // an event named the p
 
 static bool s_chart_dirty = true;
 static bool fx_busy(lv_obj_t *o);      // Motion: o is being flashed
+static void fx_stop_all(void);
 static uint32_t rnd(uint32_t lo, uint32_t hi);
 
 static lv_color_t grp_col(uint8_t g)
@@ -230,13 +235,14 @@ static lv_obj_t *corner(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
 }
 
 // A bar segment with a rounded right end (radius h / 2).
-static void seg(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c, bool cap)
+static lv_obj_t *seg(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c, bool cap)
 {
-    if (!cap) { fill(p, x, y, w, h, c); return; }
+    if (!cap) return fill(p, x, y, w, h, c);
     lv_obj_t *a = area(p, x, y, w, h);
     lv_obj_t *d = fill(a, w - h, 0, h, h, c);
     lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
     fill(a, 0, 0, w - h / 2, h, c);
+    return a;
 }
 
 // The selection mark: the bottom MARK_H px of a box of width w, height h.
@@ -484,6 +490,7 @@ void lcars_reset(void)
 void lcars_event(const attack_log_t *e)
 {
     const char *code = describe_code(e);
+    subsys_note(e);                             // the SUBSYS screen's code buttons
     // The last events: any day, newest first.
     memmove(&s_t.last[1], &s_t.last[0], sizeof(s_t.last[0]) * (LC_LAST - 1));
     lc_last_t *l = &s_t.last[0];
@@ -513,6 +520,23 @@ void lcars_event(const attack_log_t *e)
     if (k >= 0) hit_note(&s_t.wire[k], e);
 }
 
+// ── Boot splash: the frame's pieces ───────────────────────────────────────────
+//
+// In the order they roll in (docs/mockups/about-boot.html): top elbow, top
+// bars, title, the six rail buttons, bottom elbow, bottom bars, clock. dx, dy:
+// where each starts from, px.
+
+#define SP_PIECES 15
+
+typedef struct { lv_obj_t *o; int8_t dx, dy; } sp_piece_t;
+EXT_RAM_BSS_ATTR static sp_piece_t s_sp[SP_PIECES];
+EXT_RAM_BSS_ATTR static int        s_sp_n;
+
+static void sp_add(lv_obj_t *o, int8_t dx, int8_t dy)
+{
+    if (s_sp_n < SP_PIECES) s_sp[s_sp_n++] = (sp_piece_t){ o, dx, dy };
+}
+
 // ── Frame and rail ────────────────────────────────────────────────────────────
 
 static void page_show(int p);
@@ -537,7 +561,7 @@ static void marks_update(void)
 static void rail_cb(lv_event_t *ev)
 {
     int i = (int)(uintptr_t)lv_event_get_user_data(ev);
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (i == 5) {
         s_auto = !s_auto;
         s_page_at = lv_tick_get();
@@ -549,31 +573,63 @@ static void rail_cb(lv_event_t *ev)
     page_show(i);
 }
 
+// ── 07 SUBSYS ─────────────────────────────────────────────────────────────────
+//
+// The bottom-left elbow is a button: the about screen (ui_subsys.c), GREEN
+// only, and it stops AUTO as 01 to 05 do. While it is up the frame and the
+// pages are hidden (s_green false, so nothing on them moves); RETURN brings
+// back the page that was shown, any alert closes it.
+
+static void subsys_close(bool back)
+{
+    if (!subsys_shown()) return;
+    subsys_show(false);
+    show(s_frame, true);
+    show(s_content, true);
+    if (back) {
+        s_green = true;
+        page_show(s_cur);
+    }
+}
+
+static void subsys_back(void) { subsys_close(true); }
+
+static void subsys_cb(lv_event_t *ev)
+{
+    (void)ev;
+    if (!s_green || s_splash) return;
+    s_auto = false;
+    marks_update();
+    fx_stop_all();
+    s_green = false;
+    show(s_frame, false);
+    show(s_content, false);
+    subsys_show(true);
+}
+
 static void build_frame(void)
 {
-    // Top: elbow, its inner black corner, three segments, the title.
-    lv_obj_t *e = corner(s_root, 0, 0, 70, 32, 24, LCARS_COL(c1), true);
-    corner(e, 52, 10, 18, 22, 8, COL_BLACK, true);
-    seg(s_root, 74, 0, 86, 10, LCARS_COL(c1), false);
-    seg(s_root, 163, 0, 22, 10, LCARS_COL(c2), false);
-    seg(s_root, 188, 0, 24, 10, LCARS_COL(c4), true);
-    s_title = text(s_root, F14, LCARS_COL(c1), 0, 0, 0, "SHADOWSENTRY");
-    lv_obj_align(s_title, LV_ALIGN_TOP_RIGHT, -4, -1);
+    s_frame = area(s_root, 0, 0, 480, 320);
 
-    // Bottom: elbow, segments, the clock.
-    e = corner(s_root, 0, 286, 70, 34, 24, LCARS_COL(c3), false);
-    corner(e, 52, 0, 18, 24, 8, COL_BLACK, false);
-    seg(s_root, 74, 310, 70, 10, LCARS_COL(c3), false);
-    seg(s_root, 147, 310, 30, 10, LCARS_COL(c6), true);
-    s_clock = text(s_root, F12, LCARS_COL(c4), 0, 0, 0, "--:--");
-    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -4, 304);
+    // Top: elbow, its inner black corner, three segments, the title. Each
+    // piece goes on the boot splash's list in its order, with the edge it
+    // rolls in from (sp_add, under Boot splash).
+    lv_obj_t *e = corner(s_frame, 0, 0, 70, 32, 24, LCARS_COL(c1), true);
+    corner(e, 52, 10, 18, 22, 8, COL_BLACK, true);
+    sp_add(e, -80, 0);
+    sp_add(seg(s_frame, 74, 0, 86, 10, LCARS_COL(c1), false), 0, -14);
+    sp_add(seg(s_frame, 163, 0, 22, 10, LCARS_COL(c2), false), 0, -14);
+    sp_add(seg(s_frame, 188, 0, 24, 10, LCARS_COL(c4), true), 0, -14);
+    s_title = text(s_frame, F14, LCARS_COL(c1), 0, 0, 0, "SHADOWSENTRY");
+    lv_obj_align(s_title, LV_ALIGN_TOP_RIGHT, -4, -1);
+    sp_add(s_title, 60, 0);
 
     // Rail
     // 02 TRAPS, 03 WIRES and 04 NET in their ports' colours on OPS. 04 is honey
     // c2 (the mockup had butter c5, on which the near-white mark would not
     // show), so 01 OPS took c1, the frame's colour.
     const uint32_t col[6] = { LCARS_PAL->c1, LCARS_PAL->c6, LCARS_PAL->c4, LCARS_PAL->c2, LCARS_PAL->c3, LCARS_PAL->c6 };
-    s_rail = area(s_root, 0, RAIL_Y, RAIL_W, 6 * RAIL_PITCH);
+    s_rail = area(s_frame, 0, RAIL_Y, RAIL_W, 6 * RAIL_PITCH);
     for (int i = 0; i < 6; i++) {
         lv_obj_t *b = fill(s_rail, 0, i * RAIL_PITCH, RAIL_W, RAIL_H, lv_color_hex(col[i]));
         lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
@@ -583,7 +639,27 @@ static void build_frame(void)
         lv_obj_set_style_text_line_space(l, -2, 0);
         lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, -4, -3);
         s_rail_mark[i] = mark(b, RAIL_W, RAIL_H);
+        sp_add(b, -80, 0);
     }
+
+    // Bottom: the elbow (07 SUBSYS), segments, the clock. "07 SUBSYS" on one
+    // line is 67 px in the 70 px elbow, whose inner black corner takes x 52..69
+    // above y 310, so it is on two lines like the rail's, right-aligned in the
+    // full-height part (SUBSYS is 49 px of the 52).
+    e = corner(s_frame, 0, 286, 70, 34, 24, LCARS_COL(c3), false);
+    corner(e, 52, 0, 18, 24, 8, COL_BLACK, false);
+    lv_obj_add_flag(e, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(e, subsys_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *l = text(e, F12, COL_BLACK, 0, 0, 0, "07\nSUBSYS");
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_line_space(l, -2, 0);
+    lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, -(70 - 52) - 2, -3);
+    sp_add(e, -80, 0);
+    sp_add(seg(s_frame, 74, 310, 70, 10, LCARS_COL(c3), false), 0, 14);
+    sp_add(seg(s_frame, 147, 310, 30, 10, LCARS_COL(c6), true), 0, 14);
+    s_clock = text(s_frame, F12, LCARS_COL(c4), 0, 0, 0, "--:--");
+    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -4, 304);
+    sp_add(s_clock, 60, 0);
 }
 
 // ── 01 OPS ────────────────────────────────────────────────────────────────────
@@ -2024,7 +2100,7 @@ static void fx_spawn_cb(lv_timer_t *t)
 {
     (void)t;
     if (lv_tick_elaps(s_sense_at) >= FX_SENSE_MS) { s_sense_at = lv_tick_get(); fx_sense(); }
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     bool ops = s_cur == PG_OPS;
     for (int l = 0; l < FX_LANES; l++) {                // real activity first
         fx_t *f = &s_fx[l];
@@ -2103,7 +2179,7 @@ static void gauges_ease(void)
 static void anim_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (s_cur == PG_NET) gauges_ease();
     else if (s_cur == PG_DEV && !s_dv_open) dev_bars();
 }
@@ -2139,7 +2215,7 @@ static void page_show(int p)
         "LCARS TRIPWIRES, watch pass and cell flashes", "LCARS NET, gauges and label flashes",
         "LCARS DEVICES, activity bars",
     };
-    if (!measured[p]) {
+    if (!measured[p] && !s_splash) {
         measured[p] = true;
         ui_refr_measure(WHAT[p]);
     }
@@ -2148,7 +2224,7 @@ static void page_show(int p)
 static void fast_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_green || s_cur != PG_OPS) return;
+    if (!s_green || s_splash || s_cur != PG_OPS) return;
     s_scan_x = (s_scan_x + SCAN_STEP) % CH_W;
     lv_obj_set_x(s_scan, (lv_coord_t)(CH_X + s_scan_x));
 }
@@ -2161,7 +2237,7 @@ static void slow_cb(lv_timer_t *t)
         fmt_hm((uint32_t)time(NULL), b, sizeof(b));
         set_text(s_clock, b);
     }
-    if (!s_green) return;
+    if (!s_green || s_splash) return;
     if (s_auto && lv_tick_elaps(s_page_at) >= (uint32_t)settings_get()->panel_rotate_s * 1000u) { page_show((s_cur + 1) % PAGES); return; }
     if (lv_tick_elaps(s_data_at) >= DATA_MS) { s_data_at = lv_tick_get(); page_refresh(false); }
     if (s_cur == PG_OPS && lv_tick_elaps(s_focus_at) >= FOCUS_MS) {
@@ -2169,6 +2245,182 @@ static void slow_cb(lv_timer_t *t)
         s_focus = (s_focus + 1) % 4;
         focus_update();
     }
+}
+
+// ── Boot splash ───────────────────────────────────────────────────────────────
+//
+// At every boot and on a switch to this style (lcars_view() showing GREEN on
+// a hidden panel), from docs/mockups/about-boot.html: the logo (native size,
+// centred, its foot at y 240) and "SHADOWSENTRY S3" fade in, hold, fade out;
+// the frame's pieces roll in from their edges SP_PIECE_GAP_MS apart; then the
+// page fades in a band at a time (a whole-content fade would be one 400 x 282
+// repaint a frame, about 113k px; a band is a quarter of that). Every motion
+// is an lv_anim on position or opacity, at the display's 30 ms refresh. Any
+// alert, or the dashboard style, cuts it short (splash_stop()).
+//
+// At boot the card is waited for (up to SP_CARD_WAIT_MS) so an uploaded logo
+// can show; the logo is decoded once, here, before the fade.
+
+#define SP_CARD_WAIT_MS 1500
+#define SP_LOGO_FADE_MS 700
+#define SP_LOGO_HOLD_MS 1500
+#define SP_LOGO_FOOT_Y  240
+#define SP_CAP_Y        246
+#define SP_PIECE_GAP_MS 60
+#define SP_PIECE_MS     280
+#define SP_BANDS        4
+#define SP_BAND_MS      120
+
+EXT_RAM_BSS_ATTR static lv_obj_t   *s_sp_logo, *s_sp_cap, *s_sp_band[SP_BANDS];
+EXT_RAM_BSS_ATTR static lv_timer_t *s_sp_wait;
+EXT_RAM_BSS_ATTR static uint32_t    s_sp_at;
+
+// v 0..256: from the piece's edge (0) to its place (256).
+static void sp_piece_cb(void *var, int32_t v)
+{
+    sp_piece_t *p = var;
+    lv_obj_set_style_translate_x(p->o, (lv_coord_t)(p->dx * (256 - v) / 256), 0);
+    lv_obj_set_style_translate_y(p->o, (lv_coord_t)(p->dy * (256 - v) / 256), 0);
+    lv_obj_set_style_opa(p->o, (lv_opa_t)(v > 255 ? 255 : v), 0);
+}
+
+static void sp_logo_cb(void *var, int32_t v)
+{
+    (void)var;
+    lv_obj_set_style_opa(s_sp_logo, (lv_opa_t)v, 0);
+    lv_obj_set_style_opa(s_sp_cap, (lv_opa_t)v, 0);
+}
+
+static void sp_band_cb(void *var, int32_t v) { lv_obj_set_style_bg_opa(var, (lv_opa_t)v, 0); }
+
+static void sp_anim(void *var, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms, uint32_t delay,
+                    lv_anim_ready_cb_t ready)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, var);
+    lv_anim_set_exec_cb(&a, cb);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_time(&a, ms);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    if (ready) lv_anim_set_ready_cb(&a, ready);
+    lv_anim_start(&a);
+}
+
+// Everything in its final place, the anims gone.
+static void sp_finish(void)
+{
+    lv_timer_pause(s_sp_wait);
+    lv_anim_del(&s_sp_logo, NULL);
+    show(s_sp_logo, false);
+    show(s_sp_cap, false);
+    for (int i = 0; i < s_sp_n; i++) {
+        lv_anim_del(&s_sp[i], NULL);
+        sp_piece_cb(&s_sp[i], 256);
+    }
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_anim_del(s_sp_band[k], NULL);
+        show(s_sp_band[k], false);
+    }
+    s_splash = false;
+    fx_stop_all();                              // nothing sensed under the splash plays now
+    s_page_at = lv_tick_get();                  // AUTO counts from here
+    s_sn_prime = true;                          // the motion's first sense only records
+}
+
+// Each band hides itself as it ends, so no frame repaints more than one band;
+// the last ends the splash.
+static void sp_band_done_cb(lv_anim_t *a)
+{
+    show(a->var, false);
+    if (a->var != s_sp_band[SP_BANDS - 1]) return;
+    ESP_LOGI(TAG, "Splash done in %u ms", (unsigned)lv_tick_elaps(s_sp_at));
+    sp_finish();
+}
+
+static void sp_logo_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    show(s_sp_logo, false);
+    show(s_sp_cap, false);
+    for (int i = 0; i < s_sp_n; i++)
+        sp_anim(&s_sp[i], sp_piece_cb, 0, 256, SP_PIECE_MS, (uint32_t)i * SP_PIECE_GAP_MS, NULL);
+    uint32_t t = (uint32_t)(s_sp_n - 1) * SP_PIECE_GAP_MS + SP_PIECE_MS;
+    for (int k = 0; k < SP_BANDS; k++)
+        sp_anim(s_sp_band[k], sp_band_cb, LV_OPA_COVER, LV_OPA_TRANSP, SP_BAND_MS, t + (uint32_t)k * SP_BAND_MS,
+                sp_band_done_cb);
+    ui_refr_measure("LCARS splash, frame roll-in and content bands");
+}
+
+static void sp_logo_start(void)
+{
+    const lv_img_dsc_t *d = ui_logo_get();
+    if (d) {
+        lv_img_set_src(s_sp_logo, d);
+        lv_coord_t y = SP_LOGO_FOOT_Y - (lv_coord_t)d->header.h;
+        lv_obj_set_pos(s_sp_logo, (480 - (lv_coord_t)d->header.w) / 2, y < 0 ? 0 : y);
+        show(s_sp_logo, true);
+    }
+    show(s_sp_cap, true);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &s_sp_logo);
+    lv_anim_set_exec_cb(&a, sp_logo_cb);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_time(&a, SP_LOGO_FADE_MS);
+    lv_anim_set_playback_delay(&a, SP_LOGO_HOLD_MS);
+    lv_anim_set_playback_time(&a, SP_LOGO_FADE_MS);
+    lv_anim_set_ready_cb(&a, sp_logo_done_cb);
+    lv_anim_start(&a);
+    ui_refr_measure("LCARS splash, logo fade");
+}
+
+static void sp_wait_cb(lv_timer_t *t)
+{
+    sd_status_t sd;
+    sd_log_status(&sd);
+    if (!sd.mounted && lv_tick_elaps(s_sp_at) < SP_CARD_WAIT_MS) return;
+    lv_timer_pause(t);
+    sp_logo_start();
+}
+
+static void splash_start(void)
+{
+    s_splash = true;
+    s_sp_at = lv_tick_get();
+    for (int i = 0; i < s_sp_n; i++) sp_piece_cb(&s_sp[i], 0);
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_obj_set_style_bg_opa(s_sp_band[k], LV_OPA_COVER, 0);
+        show(s_sp_band[k], true);
+    }
+    lv_obj_set_style_opa(s_sp_logo, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_opa(s_sp_cap, LV_OPA_TRANSP, 0);
+    if (ui_logo_tried()) sp_logo_start();
+    else { lv_timer_reset(s_sp_wait); lv_timer_resume(s_sp_wait); }
+}
+
+static void splash_stop(void)
+{
+    if (s_splash) sp_finish();
+}
+
+static void build_splash(void)
+{
+    s_sp_logo = lv_img_create(s_root);
+    show(s_sp_logo, false);
+    s_sp_cap = text(s_root, F12, LCARS_COL(c4), 0, SP_CAP_Y, 480, "SHADOWSENTRY S3");
+    lv_obj_set_style_text_align(s_sp_cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_letter_space(s_sp_cap, 4, 0);
+    show(s_sp_cap, false);
+    // A quarter of the content each, over the pages and the alert box.
+    for (int k = 0; k < SP_BANDS; k++) {
+        lv_coord_t y0 = (lv_coord_t)(LCARS_CONTENT_H * k / SP_BANDS), y1 = (lv_coord_t)(LCARS_CONTENT_H * (k + 1) / SP_BANDS);
+        s_sp_band[k] = fill(s_content, 0, y0, LCARS_CONTENT_W, y1 - y0, COL_BLACK);
+        show(s_sp_band[k], false);
+    }
+    s_sp_wait = lv_timer_create(sp_wait_cb, 50, NULL);
+    lv_timer_pause(s_sp_wait);
 }
 
 // ── Public ────────────────────────────────────────────────────────────────────
@@ -2191,6 +2443,8 @@ void lcars_build(lv_obj_t *scr)
     build_dev(s_page[PG_DEV]);
     s_alert = fill(s_content, 0, 0, LCARS_CONTENT_W, LCARS_CONTENT_H, COL_BLACK);
     show(s_alert, false);
+    subsys_build(s_root, subsys_back);
+    build_splash();
     show(s_root, false);
     lv_timer_create(fast_cb, SCAN_MS, NULL);
     for (int l = 0; l < FX_LANES; l++) {
@@ -2215,13 +2469,21 @@ void lcars_view(alarm_cond_t c, bool on)
         s_secured_cond = ALARM_COND_GREEN;
     }
     s_prev_cond = c;
-    if (!green) fx_stop_all();                  // the motion pauses under an alert view
+    bool was_on = !lv_obj_has_flag(s_root, LV_OBJ_FLAG_HIDDEN);
+    if (!green) {
+        fx_stop_all();                          // the motion pauses under an alert view
+        splash_stop();                          // an alert cuts the splash short
+        subsys_close(false);                    // and the about screen gives way to it
+    }
     show(s_root, on);
     if (!on) { s_green = false; return; }
     show(s_rail, green);
     show(s_alert, !green);
     if (green) {
+        if (subsys_shown()) return;             // RETURN brings the page back
+        if (!was_on) s_splash = true;           // set first: page_show() then skips its measurement
         if (!s_green) { s_green = true; page_show(s_cur); }
+        if (!was_on) splash_start();            // boot, or a switch to this style
         return;
     }
     s_green = false;

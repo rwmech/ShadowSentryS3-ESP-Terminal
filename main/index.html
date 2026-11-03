@@ -970,6 +970,20 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
     </div>
   </div>
   <div class="card" style="margin-top:14px">
+    <div class="card-title">Panel logo</div>
+    <div class="msg" id="lg-msg"></div>
+    <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">The image on the LCARS boot splash and the 07 SUBSYS screen (scaled to 96 px there, tinted red). A PNG of at most 200 KB and 240 x 240 px, transparent background; 200 x 200 suits the splash. Kept on the microSD card as /ui/logo.png and decoded at the next boot; without it the built-in ShadowSentry insignia is used.</div>
+    <div class="ctl" style="align-items:center;gap:12px">
+      <img id="lg-img" alt="Panel logo" width="100" height="100" style="background:#000;border-radius:6px;object-fit:contain">
+      <span class="muted" id="lg-src"></span>
+    </div>
+    <div class="ctl" style="margin-top:10px">
+      <input type="file" id="lg-file" accept=".png,image/png">
+      <button class="btn" type="button" onclick="uploadLogo()">Upload panel logo</button>
+      <progress id="lg-prog" max="100" value="0" hidden></progress>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
     <div class="card-title">Crashes</div>
     <div class="hint muted" style="font-size:.72rem;margin-bottom:8px">Panics and watchdog resets recorded on the board (the last 20). Each full report is also on the microSD card under /sd/crash; decode its PCs on a PC with tools/decode_crash.py and the firmware.elf of that build.</div>
     <div class="kv" id="cr-list">Loading...</div>
@@ -1521,7 +1535,7 @@ function showPage(p){
   if(location.hash!=='#'+p)history.replaceState(null,'','#'+p);
   if(p==='dash')load();
   if(p==='logs'){loadSummary();loadDays();}
-  if(p==='settings'){loadSettings();loadIgnore();loadOui();loadCrashes();}
+  if(p==='settings'){loadSettings();loadIgnore();loadOui();loadLogo();loadCrashes();}
   if(p==='devices')loadDevices();
 }
 window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)));
@@ -2325,6 +2339,41 @@ function uploadOui(){
     else ouMsg('err','Upload failed ('+x.status+'): '+String(d.error||x.statusText));
     setTimeout(loadOui,3000);};
   x.onerror=()=>{pr.hidden=true;ouMsg('err','Upload failed: connection lost.');};
+  x.send(f);
+}
+
+// ── Panel logo (GET/POST /api/ui/logo) ──
+function lgMsg(kind,text){const m=$('lg-msg');m.className='msg '+kind;m.textContent=text;}
+let _lgUrl='';
+async function loadLogo(){
+  try{const r=await fetch('/api/ui/logo',{cache:'no-store'});if(!r.ok)throw 0;
+    const src=r.headers.get('X-Logo-Source')||'';const b=await r.blob();
+    if(_lgUrl)URL.revokeObjectURL(_lgUrl);_lgUrl=URL.createObjectURL(b);$('lg-img').src=_lgUrl;
+    $('lg-src').textContent=src==='card'?'Uploaded logo on the card ('+kb(b.size)+'), used from the next boot':'Built-in logo';}
+  catch{$('lg-src').textContent='Logo unavailable';}
+}
+// Signature and IHDR, as the board checks them, so a wrong file is caught here.
+async function pngSize(f){
+  const v=new DataView(await f.slice(0,33).arrayBuffer());
+  if(v.byteLength<33||v.getUint32(0)!==0x89504e47||v.getUint32(4)!==0x0d0a1a0a||v.getUint32(12)!==0x49484452)return null;
+  return [v.getUint32(16),v.getUint32(20)];
+}
+async function uploadLogo(){
+  const f=$('lg-file').files[0];
+  if(!f){lgMsg('err','Choose a PNG first.');return;}
+  if(f.size>200*1024){lgMsg('err','That file is over 200 KB.');return;}
+  const wh=await pngSize(f);
+  if(!wh){lgMsg('err','That is not a PNG.');return;}
+  if(wh[0]<1||wh[1]<1||wh[0]>240||wh[1]>240){lgMsg('err','That PNG is '+wh[0]+' x '+wh[1]+' px; at most 240 x 240.');return;}
+  const x=new XMLHttpRequest(),pr=$('lg-prog');
+  x.open('POST','/api/ui/logo');x.setRequestHeader('X-ShadowSentry','1');x.setRequestHeader('Content-Type','image/png');
+  pr.hidden=false;pr.value=0;lgMsg('ok','Uploading...');
+  x.upload.onprogress=e=>{if(e.lengthComputable)pr.value=Math.round(e.loaded/e.total*100);};
+  x.onload=()=>{pr.hidden=true;let d={};try{d=JSON.parse(x.responseText);}catch{}
+    if(x.status===200)lgMsg('ok','Uploaded: '+d.width+' x '+d.height+' px. The panel shows it from the next boot.');
+    else lgMsg('err','Upload failed ('+x.status+'): '+String(d.error||x.statusText));
+    setTimeout(loadLogo,2000);};
+  x.onerror=()=>{pr.hidden=true;lgMsg('err','Upload failed: connection lost.');};
   x.send(f);
 }
 

@@ -71,6 +71,8 @@ CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_PERF_MONITOR=n
 CONFIG_LV_BUILD_EXAMPLES=n
+# PNG decoder (lodepng) for the panel logo: decoded once into PSRAM (ui/ui_logo.c)
+CONFIG_LV_USE_PNG=y
 # OV2640 (esp32-camera): SCCB on the new i2c_master driver, attached by port to
 # the bus touch creates on I2C0. The legacy driver must never be linked (IDF 5.4
 # aborts at boot when both are). Driver task on Core 1, with the admin world.

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ShadowSentry S3: boot sequence and SUBSYS / about screen, preview (480 x 320)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root{--c1:#ff7700;--c2:#ffcc99;--c3:#dd6622;--c4:#ffaa44;--c5:#ffeecc;--c6:#ff9911;--dim:#cc9966;--hi:#fff3dd;--red:#e8261c;--redd:#7a1410}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0d0d0d;color:#ddd;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif;padding:24px}
+  h1{font-size:18px;margin:0 0 4px} p.sub{margin:0 0 18px;color:#aaa;max-width:1000px}
+  .wrap{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .stage{width:960px;height:640px;border:2px solid #333;border-radius:10px;overflow:hidden;background:#000}
+  .controls{max-width:430px}
+  .controls button{display:block;width:100%;margin:0 0 7px;padding:8px 12px;border:0;border-radius:16px;font:600 12px Montserrat,Arial;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;text-align:right;color:#000;background:var(--c4)}
+  .controls h2{font-size:14px;margin:16px 0 6px;color:#fff} .controls ul{margin:0;padding-left:18px;color:#bbb} .controls li{margin-bottom:6px}
+  .screen{position:relative;width:480px;height:320px;background:#000;overflow:hidden;transform:scale(2);transform-origin:0 0;font-family:Montserrat,"Segoe UI",Arial,sans-serif;font-size:12px;line-height:14px;text-transform:uppercase;color:var(--c5);user-select:none}
+  .abs{position:absolute}
+  /* frame pieces, each with its own roll-in */
+  .el-t{left:0;top:0;width:70px;height:32px;background:var(--c1);border-top-left-radius:24px}
+  .el-t-in{left:52px;top:10px;width:18px;height:22px;background:#000;border-top-left-radius:8px}
+  .el-b{left:0;top:286px;width:70px;height:34px;background:var(--c3);border-bottom-left-radius:24px;cursor:pointer}
+  .el-b-in{left:52px;top:286px;width:18px;height:24px;background:#000;border-bottom-left-radius:8px;pointer-events:none}
+  .el-b span{position:absolute;left:6px;bottom:3px;color:#000;font-size:12px}
+  .seg{position:absolute;height:10px}.cap{border-radius:0 5px 5px 0}
+  .title{right:4px;top:-1px;color:var(--c1);font-size:14px;line-height:17px}
+  .clock{right:4px;top:304px;color:var(--c4)}
+  .rail{left:0;top:36px;width:52px;display:flex;flex-direction:column;gap:3px}
+  .rail div{width:52px;height:38px;background:var(--c2);color:#000;text-align:right;padding:0 4px 3px 0;display:flex;align-items:flex-end;justify-content:flex-end;line-height:13px}
+  .rail div:nth-child(2){background:var(--c6)}.rail div:nth-child(3){background:var(--c4)}.rail div:nth-child(4){background:var(--c2)}.rail div:nth-child(5){background:var(--c3)}
+  .content{left:76px;top:20px;width:400px;height:282px}
+  .strip{left:0;top:0;width:400px;height:18px;border-radius:9px;background:var(--c4);color:#000;line-height:18px;padding:0 10px;text-align:right}
+  .roll{transition:transform .28s ease-out,opacity .28s}
+  .out-l{transform:translateX(-80px);opacity:0}.out-t{transform:translateY(-14px);opacity:0}.out-b{transform:translateY(14px);opacity:0}.out-r{transform:translateX(60px);opacity:0}
+  .fadein{transition:opacity .4s}.hidden{opacity:0}
+
+  /* boot logo */
+  .logo{left:140px;top:40px;width:200px;height:200px;transition:opacity .7s}
+  .logo-cap{left:0;top:246px;width:480px;text-align:center;color:var(--c4);letter-spacing:.3em;transition:opacity .7s}
+
+  /* SUBSYS / about: after the First Contact manual-input screen, in red on black */
+  .about{display:none;inset:0}
+  .about.on{display:block}
+  .ab-bar{left:0;top:0;width:480px;height:14px;background:var(--redd);clip-path:polygon(0 0,100% 0,100% 100%,0 100%)}
+  .ab-bar span{position:absolute;left:8px;top:0;color:var(--red);font-size:12px;line-height:14px;letter-spacing:.08em}
+  .ab-logo{left:12px;top:24px;width:96px;height:96px}
+  .ab-big{left:116px;top:26px;width:356px;color:var(--red);font-size:28px;line-height:32px;letter-spacing:.06em}
+  .ab-sub{left:116px;top:62px;width:356px;color:var(--red);font-size:14px;line-height:18px}
+  .ab-lines{left:16px;top:128px;width:452px;color:var(--red);font-size:12px;line-height:16px;letter-spacing:.06em}
+  .ab-lines b{font-weight:400;color:#ff6a5e}
+  .ab-btns{left:8px;top:296px;width:464px;display:flex;gap:4px}
+  .ab-btns div{flex:1;height:18px;background:var(--redd);color:var(--red);font-size:12px;line-height:18px;text-align:center;cursor:pointer}
+  .ab-btns div.back{flex:1.6;background:var(--red);color:#000}
+  .ab-cur{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
+</style>
+</head>
+<body>
+<h1>ShadowSentry S3: boot sequence and the SUBSYS / about screen, preview only</h1>
+<p class="sub">Press "Play boot sequence": the logo shows, fades out, the LCARS frame rolls in piece by piece (elbows, bars, rail buttons, strip), then the page content appears. Tap the bottom-left elbow (labelled SUBSYS) for the about screen, styled after the First Contact manual-input panel: red on black, a header bar, a big title, terminal lines, a row of small buttons. The logo is an original ShadowSentry insignia, not the Starfleet delta. Not built.</p>
+<div class="wrap">
+<div class="stage"><div class="screen" id="scr">
+  <div id="frame">
+    <div class="abs el-t roll out-l" data-o="out-l" data-d="0"></div><div class="abs el-t-in roll out-l" data-o="out-l" data-d="0"></div>
+    <div class="seg roll out-t" style="left:74px;top:0;width:86px;background:var(--c1)" data-o="out-t" data-d="80"></div>
+    <div class="seg roll out-t" style="left:163px;top:0;width:22px;background:var(--c2)" data-o="out-t" data-d="140"></div>
+    <div class="seg cap roll out-t" style="left:188px;top:0;width:24px;background:var(--c4)" data-o="out-t" data-d="200"></div>
+    <div class="abs title roll out-r" id="title" data-o="out-r" data-d="260">SHADOWSENTRY | 01 OPS</div>
+    <div class="abs rail" id="rail">
+      <div class="roll out-l" data-o="out-l" data-d="300">01<br>OPS</div><div class="roll out-l" data-o="out-l" data-d="360">02<br>TRAPS</div><div class="roll out-l" data-o="out-l" data-d="420">03<br>WIRES</div>
+      <div class="roll out-l" data-o="out-l" data-d="480">04<br>NET</div><div class="roll out-l" data-o="out-l" data-d="540">05<br>DEV</div><div class="roll out-l" data-o="out-l" data-d="600" style="background:var(--c6)">06<br>AUTO</div>
+    </div>
+    <div class="abs el-b roll out-l" data-o="out-l" data-d="660" onclick="about(true)"><span>07 SUBSYS</span></div><div class="abs el-b-in roll out-l" data-o="out-l" data-d="660"></div>
+    <div class="seg roll out-b" style="left:74px;top:310px;width:70px;background:var(--c3)" data-o="out-b" data-d="720"></div>
+    <div class="seg cap roll out-b" style="left:147px;top:310px;width:30px;background:var(--c6)" data-o="out-b" data-d="780"></div>
+    <div class="abs clock roll out-r" id="clock" data-o="out-r" data-d="840">4:08 PM</div>
+    <div class="abs content fadein hidden" id="content">
+      <div class="abs strip">ALL SYSTEMS NORMAL | 192.168.0.118:9999 | 35 PORTS</div>
+      <div class="abs" style="left:0;top:40px;width:400px;color:var(--dim);text-align:center">(OPS PAGE CONTENT, AS ON THE BOARD)</div>
+    </div>
+  </div>
+  <svg class="abs logo" id="logo" viewBox="0 0 200 200" style="opacity:0"></svg>
+  <div class="abs logo-cap" id="logocap" style="opacity:0">SHADOWSENTRY S3</div>
+
+  <div class="abs about" id="about">
+    <div class="abs ab-bar"><span>SHADOWSENTRY | LOCAL SUBSYSTEM CTL</span></div>
+    <svg class="abs ab-logo" id="ablogo" viewBox="0 0 200 200"></svg>
+    <div class="abs ab-big">SUBSYSTEM INFO</div>
+    <div class="abs ab-sub">LOCAL ACCESS GRANTED<br>SUBSYS ID = SENTRY S3 / 80500FB</div>
+    <div class="abs ab-lines">
+      <b>UNIT</b> = ELECROW CROWPANEL ESP32-S3 3.5 IN<br>
+      <b>BASE</b> = SHADOWSENTRY S3 BY RDX1S (MIT)<br>
+      <b>FORK</b> = ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL<br>
+      <b>BUILD</b> = 80500FB | 2026-11-03 | IDF 5.4<br>
+      <b>NODE</b> = 192.168.0.118:9999 | UP 2 D 04 H<br>
+      <b>ACCESS CODE</b> = 03-11-2026-0118-9999<span class="ab-cur">_</span>
+    </div>
+    <div class="abs ab-btns"><div class="back" onclick="about(false)">RETURN</div><div>00-01</div><div>17-02</div><div>20-03</div><div>30-01</div><div>40-02</div><div>55-21</div></div>
+  </div>
+</div></div>
+<div class="controls">
+  <button onclick="boot()">Play boot sequence</button>
+  <button onclick="about(true)">Open SUBSYS (about)</button>
+  <h2>The pieces</h2>
+  <ul>
+    <li>Button: the bottom-left elbow becomes 07 SUBSYS. It is 70 x 34 px, a far easier touch target than a small button by the clock (the bottom band is only 10 to 14 px tall), and an elbow as a button is very LCARS. The clock stays where it is.</li>
+    <li>About screen: red on black after the First Contact manual-input panel: header bar, logo, big title, terminal lines (unit, base project and licence, fork, build, node, an "access code" built from the date and the board's address), a blinking cursor, a row of small buttons; RETURN goes back. Live values come from the board.</li>
+    <li>Logo: an original insignia (a shield with a chevron and a sentry eye), drawn in the palette. You can upload your own PNG from the dashboard; the board uses it on the boot screen and the about screen, and falls back to this one if none is uploaded.</li>
+    <li>Boot: the logo fades in, holds about 1.5 s, fades out; then the frame rolls in, each piece sliding from its edge 60 ms after the one before (about 0.9 s in all); then the page content fades in. Under 4 s in all, while the board is still bringing up Wi-Fi anyway.</li>
+    <li>Image path on the board: a PNG uploaded on the Settings page is saved to /sd/ui/logo.png and decoded once at boot into PSRAM (LVGL's PNG decoder, one sdkconfig option). Suggested sizes: 200 x 200 for the boot logo, the same file scaled down for the about screen; transparent background.</li>
+  </ul>
+</div>
+</div>
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+function insignia(svg,col,col2){const NS='http://www.w3.org/2000/svg';svg.innerHTML='';const m=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);svg.appendChild(e);return e;};
+  m('path',{d:'M100 8 L172 34 L166 112 C160 150 132 176 100 192 C68 176 40 150 34 112 L28 34 Z',fill:'none',stroke:col,'stroke-width':8,'stroke-linejoin':'round'});
+  m('path',{d:'M58 70 L100 46 L142 70 L142 88 L100 64 L58 88 Z',fill:col2});
+  m('path',{d:'M52 118 C70 96 130 96 148 118 C130 140 70 140 52 118 Z',fill:'none',stroke:col,'stroke-width':6});
+  m('circle',{cx:100,cy:118,r:12,fill:col2});
+  m('path',{d:'M84 150 L100 162 L116 150',fill:'none',stroke:col,'stroke-width':6,'stroke-linecap':'round','stroke-linejoin':'round'});}
+insignia($('#logo'),'#ff7700','#ffaa44');insignia($('#ablogo'),'#e8261c','#ff6a5e');
+function boot(){about(false);const parts=$$('#frame .roll');parts.forEach(p=>{p.style.transition='none';p.classList.add(p.dataset.o);});$('#content').classList.add('hidden');
+  $('#logo').style.opacity=0;$('#logocap').style.opacity=0;
+  setTimeout(()=>{$('#logo').style.opacity=1;$('#logocap').style.opacity=1;},100);
+  setTimeout(()=>{$('#logo').style.opacity=0;$('#logocap').style.opacity=0;},1900);
+  setTimeout(()=>{parts.forEach(p=>{p.style.transition='';setTimeout(()=>p.classList.remove(p.dataset.o),+p.dataset.d);});},2600);
+  setTimeout(()=>$('#content').classList.remove('hidden'),3700);}
+function about(on){$('#about').classList.toggle('on',on);$('#frame').style.display=on?'none':'';}
+function tick(){const d=new Date(),h=d.getHours()%12||12,ap=d.getHours()<12?'AM':'PM';$('#clock').textContent=`${h}:${String(d.getMinutes()).padStart(2,'0')} ${ap}`;}tick();setInterval(tick,1000);
+boot();
+</script>
+</body>
+</html>
