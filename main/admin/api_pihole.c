@@ -167,14 +167,15 @@ static void get_status(int sock, char *out)
            (unsigned long)s->test_req, (unsigned long)s->test_done, s->test_ok ? "true" : "false", s->test_status);
         jw_kstr(&j, "test_msg", s->test_msg, sizeof(s->test_msg));
         // The dnsmasq log: what the outbound matching rests on.
-        jw(&j, ",\"dns_log\":{");
+        // A plain field first: jw_kstr() writes its own leading comma.
+        jw(&j, ",\"dns_log\":{\"since\":%lu", (unsigned long)s->log_since);
         jw_kstr(&j, "state", s->log_state, sizeof(s->log_state));
         jw_kstr(&j, "why", s->log_why, sizeof(s->log_why));
         uint32_t cover = s->log_since > s->map_evict_newest ? s->log_since : s->map_evict_newest;
-        jw(&j, ",\"since\":%lu,\"cover_from\":%lu,\"query_logging\":%s,\"polls\":%lu,\"lines\":%lu,"
+        jw(&j, ",\"cover_from\":%lu,\"query_logging\":%s,\"polls\":%lu,\"lines\":%lu,"
                "\"queries\":%lu,\"answers\":%lu,\"missed\":%lu,\"gaps\":%lu,\"addresses\":%lu,\"evicted\":%lu,"
                "\"geo_blocked_ts\":%lu,\"poll_s\":%d,\"cover_s\":%d,\"map_max\":%d}",
-           (unsigned long)s->log_since, (unsigned long)(s->log_since ? cover : 0),
+           (unsigned long)(s->log_since ? cover : 0),
            s->query_logging < 0 ? "null" : s->query_logging ? "true" : "false",
            (unsigned long)s->log_polls, (unsigned long)s->log_lines, (unsigned long)s->log_queries,
            (unsigned long)s->log_answers, (unsigned long)s->log_missed, (unsigned long)s->log_gaps,
