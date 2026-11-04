@@ -112,7 +112,8 @@ _Static_assert(BOARD_BUZZER_LOW_MAX_US < 300, "the low part must stay under the 
 #endif
 
 // ── Front panel styles ────────────────────────────────────────────────────────
-#define BOARD_PANEL_DASHBOARD   0       // LCARS only (the dashboard is 480 x 320)
+#define BOARD_PANEL_DASHBOARD   0       // LCARS or clan (the dashboard is 480 x 320)
+#define BOARD_PANEL_STYLE       2       // the default panel_style: clan
 
 // The drift fix for an RGB panel next to flash writes: XIP from PSRAM keeps
 // the cache on while SPIFFS and NVS write, so the bounce buffers keep filling.

@@ -14,6 +14,7 @@
 #include "tripwire.h"           // with http_engine.h and trap_listen.h: the port config
 #include "settings.h"
 #include "ui_lcars.h"
+#include "ui_clan.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -204,13 +205,15 @@ static int64_t  s_fm_sum, s_fm_max;
 static bool     s_fm_full;              // the next refresh is a view's full repaint
 EXT_RAM_BSS_ATTR static const char *s_fm_what;           // what is measured: NULL the emblem's stripes
 
-// Panel style (settings panel_style): true LCARS (ui_lcars.c), false the dashboard
-EXT_RAM_BSS_ATTR static bool       s_style_lc;
-// A board without the dashboard (board.h, a screen other than 480 x 320) is LCARS only.
+// Panel style (settings panel_style): s_style_lc LCARS (ui_lcars.c), s_style_cl
+// clan (ui_clan.c), neither the dashboard
+EXT_RAM_BSS_ATTR static bool       s_style_lc, s_style_cl;
+#define STYLE_CLAN()    (settings_get()->panel_style == 2)
+// A board without the dashboard (board.h, a screen other than 480 x 320) is LCARS or clan.
 #if BOARD_PANEL_DASHBOARD
 #define STYLE_LCARS()   (settings_get()->panel_style == 1)
 #else
-#define STYLE_LCARS()   true
+#define STYLE_LCARS()   (settings_get()->panel_style != 2)
 #endif
 static lv_coord_t s_btn_y = BOARD_LCD_VRES;   // top of the shown button row (the face light stops above it)
 EXT_RAM_BSS_ATTR static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
@@ -817,7 +820,7 @@ static void ignore_mb_cb(lv_event_t *ev)
       : r == ESP_ERR_INVALID_STATE ? "The incident has closed."
                                    : "Could not save the ignore list.", NULL, true);
     lv_obj_set_width(e, UI_SX(400));
-    if (s_style_lc) lcars_style_msgbox(e);
+    if (s_style_lc || s_style_cl) lcars_style_msgbox(e);
     lv_obj_center(e);
 }
 
@@ -839,7 +842,7 @@ static void ignore_ask_cb(lv_event_t *ev)
                  "Its events are still logged. The dashboard can undo it.", who);
     }
     lv_obj_t *mb;
-    if (s_style_lc) {
+    if (s_style_lc || s_style_cl) {
         mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "IGNORE ERROR" : "IGNORE DEVICE", body, IGN_BTNS_LC, false);
         lv_obj_set_width(mb, UI_SX(360));
         lcars_style_msgbox(mb);
@@ -1053,7 +1056,8 @@ static void kpi_seed_once(void)
     int n = log_store_get_recent(r, UI_SEED_ROWS);
     memset(&s_kpi, 0, sizeof(s_kpi));
     lcars_reset();
-    for (int i = n - 1; i >= 0; i--) { kpi_add(&r[i]); lcars_event(&r[i]); }
+    clan_reset();
+    for (int i = n - 1; i >= 0; i--) { kpi_add(&r[i]); lcars_event(&r[i]); clan_event(&r[i]); }
     heap_caps_free(r);
     s_off_dirty = true;
 }
@@ -1253,6 +1257,7 @@ static void place_lc(lv_obj_t *o, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_c
 static void view_incident(alarm_cond_t c)
 {
     bool red = c == ALARM_COND_RED;
+    clan_view(c, false);
     lcars_view(c, false);
     s_btn_y = red ? RED_BTN_Y : YEL_BTN_Y;
     show(s_idle, false);
@@ -1285,6 +1290,7 @@ static void view_incident(alarm_cond_t c)
 
 static void view_armed(void)
 {
+    clan_view(ALARM_COND_GREEN, false);
     lcars_view(ALARM_COND_GREEN, false);
     s_btn_y = 320;
     s_emb = NULL;
@@ -1303,6 +1309,7 @@ static void view_lcars_alert(alarm_cond_t c)
     show(s_bar, false);
     show(s_rl_track, false);
     show(s_idle, false);
+    clan_view(c, false);
     lcars_view(c, true);
     s_emb = red ? &s_emb_lc_red : &s_emb_lc_yel;
     show(s_emb_lc_red.root, red);
@@ -1366,7 +1373,21 @@ static void view_lcars_green(void)
     show(s_bar, false);
     show(s_rl_track, false);
     show(s_idle, false);
+    clan_view(ALARM_COND_GREEN, false);
     lcars_view(ALARM_COND_GREEN, true);
+}
+
+// The clan panel, GREEN: its frame, nav and pages over everything.
+static void view_clan_green(void)
+{
+    s_emb = NULL;
+    s_btn_y = BOARD_LCD_VRES;
+    show(s_inc, false);
+    show(s_bar, false);
+    show(s_rl_track, false);
+    show(s_idle, false);
+    lcars_view(ALARM_COND_GREEN, false);
+    clan_view(ALARM_COND_GREEN, true);
 }
 
 // Once per change of condition or incident: what the panel now renders, so
@@ -1374,7 +1395,7 @@ static void view_lcars_green(void)
 static void log_view(alarm_cond_t c)
 {
     lv_obj_update_layout(lv_scr_act());
-    if (c != ALARM_COND_GREEN && s_style_lc) {
+    if (c != ALARM_COND_GREEN && (s_style_lc || s_style_cl)) {
         lv_area_t e;
         lv_obj_get_coords(s_emb->root, &e);
         ESP_LOGI(TAG, "UI state: %s #%lu, LCARS, emblem y %d..%d, buttons %s%s, rail hidden",
@@ -1383,8 +1404,9 @@ static void log_view(alarm_cond_t c)
                  lv_obj_has_flag(s_lc_ign_dev, LV_OBJ_FLAG_HIDDEN) ? "" : ", IGNORE DEVICE");
         return;
     }
-    if (c == ALARM_COND_GREEN && s_style_lc) {
-        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, LCARS panel", (unsigned long)s_alarm.id);
+    if (c == ALARM_COND_GREEN && (s_style_lc || s_style_cl)) {
+        ESP_LOGI(TAG, "UI state: GREEN, last incident #%lu, %s panel", (unsigned long)s_alarm.id,
+                 s_style_cl ? "clan" : "LCARS");
         return;
     }
     if (c == ALARM_COND_GREEN) {
@@ -1411,9 +1433,11 @@ static void apply_alarm(const alarm_info_t *a)
     alarm_cond_t was = cond_of(&s_alarm), c = cond_of(a);
     // Count updates (up to 1/s during a scan) must not reset the button label
     // or the fill mid-press: those go back to their start only on a change.
-    bool lc = STYLE_LCARS();
-    bool changed = c != was || a->id != s_alarm.id || lc != s_style_lc;
+    bool cl = STYLE_CLAN();
+    bool lc = !cl && STYLE_LCARS();
+    bool changed = c != was || a->id != s_alarm.id || lc != s_style_lc || cl != s_style_cl;
     s_style_lc = lc;
+    s_style_cl = cl;
     s_alarm = *a;
     if (changed) { hold_reset(&s_h_ack); hold_reset(&s_h_lc_ack); }
 
@@ -1434,15 +1458,16 @@ static void apply_alarm(const alarm_info_t *a)
                        : a->acked_by == ALARM_BY_DASHBOARD ? "Acknowledged on the dashboard. Resolve from the dashboard"
                                                            : "Resolve from the dashboard");
         lcars_alert_text(a);
-        if (lc) view_lcars_alert(c);
-        else    view_incident(c);
+        if (lc || cl) view_lcars_alert(c);
+        else          view_incident(c);
         if (changed && red) { lv_label_set_text(s_b_ack_lbl, TXT_ACK); lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGE"); }
     } else {
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         set_text(s_pill_lbl, COND_NAME[c]);
         runlight_set(COL_GREEN);
-        if (lc) view_lcars_green();
-        else    view_armed();
+        if (cl)      view_clan_green();
+        else if (lc) view_lcars_green();
+        else         view_armed();
     }
     refresh_age();
     s_bl_red = c == ALARM_COND_RED;
@@ -1454,7 +1479,7 @@ static void apply_alarm(const alarm_info_t *a)
         logged = true;
         lv_obj_invalidate(lv_scr_act());
         if (c != ALARM_COND_GREEN) measure_start(NULL);   // then time the stripes
-        else if (!lc) s_fm_full = true;     // LCARS: its page change measures
+        else if (!lc && !cl) s_fm_full = true;   // LCARS and clan: their page change measures
         log_view(c);
     }
 }
@@ -1522,9 +1547,9 @@ static void clock_cb(lv_timer_t *t)
     if (a.state != s_alarm.state || a.id != s_alarm.id) {
         ESP_LOGW(TAG, "Alarm state ahead of the UI queue (message dropped or late), applying it now");
         apply_alarm(&a);
-    } else if (STYLE_LCARS() != s_style_lc) {
-        ESP_LOGI(TAG, "Panel style now %s", s_style_lc ? "dashboard" : "LCARS");
-        apply_alarm(&a);                    // live: both panels are built
+    } else if (STYLE_CLAN() != s_style_cl || (!STYLE_CLAN() && STYLE_LCARS()) != s_style_lc) {
+        ESP_LOGI(TAG, "Panel style now %s", STYLE_CLAN() ? "clan" : STYLE_LCARS() ? "LCARS" : "dashboard");
+        apply_alarm(&a);                    // live: every panel is built
     }
     s_loop_max_prev = s_loop_max_us;
     s_loop_max_us = 0;
@@ -1795,6 +1820,7 @@ static void build_ui(void)
     build_dash();
     lcars_build(scr);                       // over the dashboard, hidden until chosen
     build_lcars_alert();
+    clan_build(scr);                        // over both, hidden until chosen
 
     // Running light: a dark track the full width, and the moving segment on
     // it. On the top layer, so a dialog cannot stop it. Green only.
@@ -1871,6 +1897,7 @@ static void ui_task(void *arg)
             case UMSG_EVENT:
                 kpi_add(&m.e);
                 lcars_event(&m.e);
+                clan_event(&m.e);
                 break;
             case UMSG_ALARM:    apply_alarm(&m.a);              break;
             case UMSG_NET:      lv_label_set_text(s_net, m.net); break;

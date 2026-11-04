@@ -73,6 +73,21 @@ CHECKS = [
     ("ab line", "ACCESS CODE = 03-11-2026-0118-9999_", 12, 452, 1),
     ("ab btn", "RETURN", 12, 92, 0), ("ab btn", "55-21", 12, 58, 0), ("ab btn", "00-00", 12, 58, 0),
     ("splash", "SHADOWSENTRY S3", 12, 480, 4),
+    # The clan skin, clan-panel.html (main/ui/ui_clan.c): header and nav
+    ("cl title", "YAIM VIRD", 28, 242, 3), ("cl title 9", "IRON WARD", 28, 242, 3), ("cl title 16", "NORTH WATCH 0712", 20, 242, 2),
+    ("cl sub", "SENTRY | 03 PERIMETER", 12, 242, 2), ("cl sub", "SENTRY | YELLOW ALERT", 12, 242, 2),
+    ("cl status", "STATUS", 12, 90, 0), ("cl pill", "NOMINAL", 12, 66, 0), ("cl pill", "CAUTION", 12, 66, 0),
+    ("cl pill", "HOSTILE", 12, 66, 0),
+    ("cl nav", "PERIMETER", 12, 76, 0), ("cl nav", "TACTICAL", 12, 76, 0), ("cl nav", "CONTACTS", 12, 76, 0),
+    ("cl nav", "SYSTEMS", 12, 76, 0), ("cl nav", "AUTO", 12, 76, 0),
+    # TACTICAL: the holo plate, the side plates (name x 7..73, value x 76..129), events
+    ("cl tac", "TACTICAL HOLOMAP", 12, 208, 1), ("cl legend", "FRIENDLY", 12, 64, 0), ("cl legend", "HOSTILE", 12, 64, 0),
+    ("cl legend n", "48", 14, 64, 0),
+    ("cl side", "SENSORS", 12, 67, 1), ("cl side", "SHIELDS", 12, 67, 1), ("cl side", "POWER", 12, 67, 1),
+    ("cl side v", "100 %", 14, 54, 0), ("cl side v", "128 KB", 14, 54, 0),
+    ("cl side k", "PI-HOLE BLOCKED", 12, 124, 0), ("cl side k", "PORTS WATCHED", 12, 124, 0),
+    ("cl events", "EVENTS / ALERTS", 12, 340, 1),
+    ("cl event", "40-02 RDP TRIPWIRE | 192.168.100.118 | 12:58 PM", 12, 340, 0),
 ]
 
 def parse_args(argv):

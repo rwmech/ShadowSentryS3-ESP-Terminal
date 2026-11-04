@@ -75,7 +75,8 @@ const lcars_palette_t LCARS_CERRITOS = {
 #define DATA_MS     2000                // the shown page's figures
 #define STATS_MS    60000               // sd_log_stats() for the chart and total
 
-enum { PG_OPS, PG_TRAPS, PG_WIRES, PG_NET, PG_DEV };
+enum { PG_OPS = LCARS_PG_OPS, PG_TRAPS = LCARS_PG_TRAPS, PG_WIRES = LCARS_PG_WIRES, PG_NET = LCARS_PG_NET,
+       PG_DEV = LCARS_PG_DEV };
 static const char *const PAGE_TITLE[PAGES] = { "OPS", "TRAPS", "TRIPWIRES", "NET", "DEVICES" };
 static const char *const RAIL_TXT[6] = { "01\nOPS", "02\nTRAPS", "03\nWIRES", "04\nNET", "05\nDEV", "06\nAUTO" };
 
@@ -99,23 +100,16 @@ EXT_RAM_BSS_ATTR static uint32_t  s_page_at;             // tick of the last pag
 // ── Today's figures (UI task) ─────────────────────────────────────────────────
 
 #define LC_PORTS_MAX 40
-#define LC_TRAPS     8
-#define LC_WIRES     18
-#define LC_LAST      3
-enum { GRP_TRAP, GRP_WIRE, GRP_NET };
+#define LC_TRAPS     LCARS_TRAPS
+#define LC_WIRES     LCARS_WIRES
+#define LC_LAST      LCARS_LAST
+enum { GRP_TRAP = LCARS_GRP_TRAP, GRP_WIRE = LCARS_GRP_WIRE, GRP_NET = LCARS_GRP_NET };
 
 typedef struct { uint16_t port; uint8_t grp; bool hit, lit; lv_obj_t *l; } lc_port_t;   // lit: as drawn
-typedef struct { char name[24]; uint32_t n, ts, ip; char what[64]; } lc_hit_t;
-typedef struct { char code[DESCRIBE_CODE_LEN]; char name[24]; uint32_t ip, ts; } lc_last_t;
+typedef lcars_hit_t  lc_hit_t;
+typedef lcars_last_t lc_last_t;
 
-EXT_RAM_BSS_ATTR static struct {
-    uint32_t  day;                      // local YYYY*1000+yday, 0 = clock not set
-    uint32_t  alerts, probes, scans, new_dev;
-    lc_hit_t  trap[LC_TRAPS];
-    lc_hit_t  wire[LC_WIRES];
-    lc_last_t last[LC_LAST];            // newest first
-    int       last_n;
-} s_t;
+EXT_RAM_BSS_ATTR static lcars_today_t s_t;
 
 EXT_RAM_BSS_ATTR static lc_port_t s_ports[LC_PORTS_MAX];
 EXT_RAM_BSS_ATTR static int s_nports;
@@ -969,8 +963,8 @@ static bool pihole_share(uint32_t ip, const uint8_t *mac, uint32_t *tot, uint32_
     return true;
 }
 
-#define LC_DEVS 6
-EXT_RAM_BSS_ATTR static discovery_talker_t s_talk[LC_DEVS];
+#define LC_DEVS 6                       // the DEV page's rows
+EXT_RAM_BSS_ATTR static discovery_talker_t s_talk[LCARS_TALK_MAX];   // LC_DEVS here, more for another skin
 EXT_RAM_BSS_ATTR static int s_ntalk;
 
 // ── 02 TRAPS ──────────────────────────────────────────────────────────────────
@@ -1047,7 +1041,7 @@ static void build_traps(lv_obj_t *pg)
 //               OFF (right, x 164..191)
 //   y 228..281  the selected cell's last hit, or why it is off
 
-enum { WS_ARMED, WS_HIT, WS_OFF };
+enum { WS_ARMED = LCARS_WS_ARMED, WS_HIT = LCARS_WS_HIT, WS_OFF = LCARS_WS_OFF };
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_wi_bar[LC_WIRES], *s_wi_nm[LC_WIRES], *s_wi_n[LC_WIRES], *s_wi_mark[LC_WIRES];
 EXT_RAM_BSS_ATTR static uint8_t   s_wi_st[LC_WIRES];
@@ -1068,6 +1062,12 @@ static const char *wire_off(int i)
     return mikrotik_watch_armed() ? NULL : "NOT ARMED: ARM THE BASELINE IN SETTINGS";
 }
 
+// The cell's state now (not as drawn): hit today, else off, else armed.
+static uint8_t wire_state(int i)
+{
+    return s_t.wire[i].n ? WS_HIT : wire_off(i) ? WS_OFF : WS_ARMED;
+}
+
 // The cell's colours for its state (also what an effect returns to): part 0
 // the bar, 1 the name.
 static void wire_part_style(int i, int part)
@@ -1085,8 +1085,7 @@ static void wires_refresh(bool force)
     (void)force;
     for (int i = 0; i < LC_WIRES; i++) {
         const lc_hit_t *h = &s_t.wire[i];
-        const char *off = wire_off(i);
-        uint8_t st = h->n ? WS_HIT : off ? WS_OFF : WS_ARMED;
+        uint8_t st = wire_state(i);
         char b[12];
         if (st != s_wi_st[i]) {
             s_wi_st[i] = st;
@@ -1171,6 +1170,84 @@ static void talkers_load(void)
     s_ntalk = discovery_top_talkers(s_talk, LC_DEVS);
 }
 
+// NET line i: ACCESS POINT, CLOCK, UPTIME, PI-HOLE, ROUTER, IPFIX, MICROSD,
+// CAMERA, DISCORD.
+static void net_text(int i, char *b, size_t len)
+{
+    switch (i) {
+    case 0: {
+        wifi_ap_record_t ap;
+        if (wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+            snprintf(b, len, "%02X:%02X:%02X:%02X:%02X:%02X", ap.bssid[0], ap.bssid[1], ap.bssid[2],
+                     ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+        else strlcpy(b, "NOT CONNECTED", len);
+        break;
+    }
+    case 1:
+        if (time(NULL) >= 1600000000) snprintf(b, len, "SET | %s", settings_get()->tz);
+        else                          strlcpy(b, "NOT SET (NO SNTP YET)", len);
+        break;
+    case 2: {
+        uint32_t s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+        snprintf(b, len, "%lu D %02lu H %02lu M", (unsigned long)(s / 86400), (unsigned long)(s % 86400 / 3600),
+                 (unsigned long)(s % 3600 / 60));
+        break;
+    }
+    case 3: {
+        pihole_status_t *p = heap_caps_malloc(sizeof(*p), MALLOC_CAP_SPIRAM);
+        strlcpy(b, "-", len);
+        if (!p) break;
+        pihole_get_status(p);
+        if (p->enabled) snprintf(b, len, "%s | %lu DEVICES", p->state, (unsigned long)p->devices);
+        else            strlcpy(b, "OFF", len);
+        heap_caps_free(p);
+        break;
+    }
+    case 4: {
+        mikrotik_status_t *m = heap_caps_malloc(sizeof(*m), MALLOC_CAP_SPIRAM);
+        strlcpy(b, "-", len);
+        if (!m) break;
+        mikrotik_get_status(m);
+        const char *st = m->state < sizeof(MT_STATE) / sizeof(MT_STATE[0]) ? MT_STATE[m->state] : "?";
+        if (m->state == MIKROTIK_ST_OK) snprintf(b, len, "%s | %u HOSTS", st, (unsigned)m->hosts);
+        else                            strlcpy(b, st, len);
+        heap_caps_free(m);
+        break;
+    }
+    case 5: {
+        uint32_t rec, drop;
+        router_flow_counters(&rec, &drop);
+        if (!s_ipfix_have) { s_ipfix_have = true; s_ipfix_rec = rec; s_ipfix_at = lv_tick_get(); }
+        else if (lv_tick_elaps(s_ipfix_at) >= 60000) {
+            s_ipfix_rate = (rec - s_ipfix_rec) * 60000u / lv_tick_elaps(s_ipfix_at);
+            s_ipfix_rec = rec;
+            s_ipfix_at = lv_tick_get();
+        }
+        if (!rec) strlcpy(b, "NO RECORDS YET", len);
+        else      snprintf(b, len, "%lu FLOWS / MIN", (unsigned long)s_ipfix_rate);
+        break;
+    }
+    case 6: {
+        sd_status_t sd;
+        sd_log_status(&sd);
+        if (sd.mounted) {
+            unsigned long tenths = (unsigned long)(sd.free_bytes / 100000000ULL);
+            snprintf(b, len, "%lu.%lu GB FREE", tenths / 10, tenths % 10);
+        } else strlcpy(b, "NO CARD", len);
+        break;
+    }
+    case 7: strlcpy(b, cam_ready() ? "READY" : "NOT FOUND", len); break;
+    default:
+        if (settings_get()->discord_webhook[0]) {
+            discord_status_t d;
+            discord_get_status(&d);
+            snprintf(b, len, "%lu POSTED | LAST %d", (unsigned long)d.posted, d.last_status);
+        } else strlcpy(b, "OFF", len);
+        break;
+    }
+    lcars_upper(b);
+}
+
 static void net_refresh(bool force)
 {
     char b[72];
@@ -1194,59 +1271,10 @@ static void net_refresh(bool force)
     else     gauge_set(3, "-", 0);
     gauge_set(4, "-", 0);
 
-    if (up) snprintf(b, sizeof(b), "%02X:%02X:%02X:%02X:%02X:%02X", ap.bssid[0], ap.bssid[1], ap.bssid[2],
-                     ap.bssid[3], ap.bssid[4], ap.bssid[5]);
-    else    strlcpy(b, "NOT CONNECTED", sizeof(b));
-    nl_set(0, b);
-    if (time(NULL) >= 1600000000) snprintf(b, sizeof(b), "SET | %s", settings_get()->tz);
-    else                          strlcpy(b, "NOT SET (NO SNTP YET)", sizeof(b));
-    nl_set(1, b);
-    uint32_t s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    snprintf(b, sizeof(b), "%lu D %02lu H %02lu M", (unsigned long)(s / 86400), (unsigned long)(s % 86400 / 3600),
-             (unsigned long)(s % 3600 / 60));
-    nl_set(2, b);
-    pihole_status_t *p = heap_caps_malloc(sizeof(*p), MALLOC_CAP_SPIRAM);
-    if (p) {
-        pihole_get_status(p);
-        if (p->enabled) snprintf(b, sizeof(b), "%s | %lu DEVICES", p->state, (unsigned long)p->devices);
-        else            strlcpy(b, "OFF", sizeof(b));
-        nl_set(3, b);
-        heap_caps_free(p);
+    for (int i = 0; i < LCARS_NET_LINES; i++) {
+        net_text(i, b, sizeof(b));
+        nl_set(i, b);
     }
-    mikrotik_status_t *m = heap_caps_malloc(sizeof(*m), MALLOC_CAP_SPIRAM);
-    if (m) {
-        mikrotik_get_status(m);
-        const char *st = m->state < sizeof(MT_STATE) / sizeof(MT_STATE[0]) ? MT_STATE[m->state] : "?";
-        if (m->state == MIKROTIK_ST_OK) snprintf(b, sizeof(b), "%s | %u HOSTS", st, (unsigned)m->hosts);
-        else                            strlcpy(b, st, sizeof(b));
-        nl_set(4, b);
-        heap_caps_free(m);
-    }
-    uint32_t rec, drop;
-    router_flow_counters(&rec, &drop);
-    if (!s_ipfix_have) { s_ipfix_have = true; s_ipfix_rec = rec; s_ipfix_at = lv_tick_get(); }
-    else if (lv_tick_elaps(s_ipfix_at) >= 60000) {
-        s_ipfix_rate = (rec - s_ipfix_rec) * 60000u / lv_tick_elaps(s_ipfix_at);
-        s_ipfix_rec = rec;
-        s_ipfix_at = lv_tick_get();
-    }
-    if (!rec) strlcpy(b, "NO RECORDS YET", sizeof(b));
-    else      snprintf(b, sizeof(b), "%lu FLOWS / MIN", (unsigned long)s_ipfix_rate);
-    nl_set(5, b);
-    sd_status_t sd;
-    sd_log_status(&sd);
-    if (sd.mounted) {
-        unsigned long tenths = (unsigned long)(sd.free_bytes / 100000000ULL);
-        snprintf(b, sizeof(b), "%lu.%lu GB FREE", tenths / 10, tenths % 10);
-    } else strlcpy(b, "NO CARD", sizeof(b));
-    nl_set(6, b);
-    nl_set(7, cam_ready() ? "READY" : "NOT FOUND");
-    if (settings_get()->discord_webhook[0]) {
-        discord_status_t d;
-        discord_get_status(&d);
-        snprintf(b, sizeof(b), "%lu POSTED | LAST %d", (unsigned long)d.posted, d.last_status);
-    } else strlcpy(b, "OFF", sizeof(b));
-    nl_set(8, b);
 }
 
 static void build_net(lv_obj_t *pg)
@@ -1590,7 +1618,7 @@ static const uint8_t FX_FLASH_PCT[FX_FLASHES] = { 100, 65, 35 };   // of the way
 #define FX_STEP_MAX 16
 #define FX_Q        12
 #define ANIM_MS     50
-enum { FX_TEXT, FX_BG };
+enum { FX_TEXT = LCARS_FX_TEXT, FX_BG = LCARS_FX_BG };
 enum { EF_DECAY, EF_GLOW, EF_RIPPLE, EF_TICK, EF_PULSE, EF_SWEEP, EF_WATCH, EF_SCAN, EF_N };
 
 typedef struct {
@@ -1619,6 +1647,16 @@ EXT_RAM_BSS_ATTR static uint8_t  s_wo[LC_WIRES > LC_TRAPS ? LC_WIRES : LC_TRAPS]
 EXT_RAM_BSS_ATTR static uint8_t  s_ow_st[OW_MAX], s_ow_len[OW_MAX], s_ow_n, s_ow_i, s_ow_last;   // OPS clusters
 static bool s_sn_prime = true;                  // the next sense only records
 
+// The skin the engine serves (lcars_fx_bind()): NULL the LCARS pages, else
+// another skin's objects with the senses of LCARS page s_skin_pg.
+EXT_RAM_BSS_ATTR static const lcars_fx_skin_t *s_skin;
+EXT_RAM_BSS_ATTR static int s_skin_pg;
+
+static int  fx_page(void) { return s_skin ? s_skin_pg : s_cur; }
+static bool fx_on(void)   { return s_skin ? s_skin_pg != LCARS_PG_NONE : s_green && !s_splash; }
+// The tones: the skin's, else the palette's
+#define FX_TONE(f, lc) (s_skin ? s_skin->f : LCARS_PAL->lc)
+
 static uint32_t rnd(uint32_t lo, uint32_t hi) { return lo + esp_random() % (hi - lo + 1); }
 static uint16_t jit(uint32_t ms) { return (uint16_t)(ms * rnd(100 - FX_JITTER_PCT, 100 + FX_JITTER_PCT) / 100u); }
 
@@ -1635,6 +1673,7 @@ static bool fx_busy(lv_obj_t *o)
 static lv_obj_t *fx_obj(int it, uint8_t *part)
 {
     *part = FX_TEXT;
+    if (s_skin) return s_skin->obj(it, part);
     switch (s_cur) {
     case PG_OPS:   return it < s_nports ? s_ports[it].l : NULL;
     case PG_TRAPS: {
@@ -1645,7 +1684,7 @@ static lv_obj_t *fx_obj(int it, uint8_t *part)
     }
     case PG_WIRES: if (!(it & 1)) { *part = FX_BG; return s_wi_bar[it / 2]; } return s_wi_nm[it / 2];
     case PG_NET:   return it < 9 ? s_nl_v[it] : s_nl_k[it - 9];
-    case PG_DEV:   return s_dv_open || it >= s_ntalk ? NULL : s_dv_nm[it];
+    case PG_DEV:   return s_dv_open || it >= s_ntalk || it >= LC_DEVS ? NULL : s_dv_nm[it];
     default:       return NULL;
     }
 }
@@ -1653,6 +1692,7 @@ static lv_obj_t *fx_obj(int it, uint8_t *part)
 // The item's normal colours.
 static void fx_rest(int it)
 {
+    if (s_skin) { s_skin->rest(it); return; }
     switch (s_cur) {
     case PG_OPS: {
         lc_port_t *p = &s_ports[it];
@@ -1739,22 +1779,22 @@ static uint32_t fx_shape(fx_t *f, uint8_t kind)
             f->pct[2 + 2 * k] = FX_FLASH_PCT[k];
             f->ms[2 + 2 * k] = jit(FX_FLASH_ON_MS);
         }
-        return LCARS_PAL->hi;
+        return FX_TONE(decay, hi);
     case EF_GLOW: {
-        bool slow = s_cur == PG_NET || s_cur == PG_DEV;
+        bool slow = fx_page() == PG_NET || fx_page() == PG_DEV;
         fx_hill(f, FX_GLOW_STEPS, (slow ? rnd(FX_GLOW_SLOW_MIN_MS, FX_GLOW_SLOW_MAX_MS)
                                         : rnd(FX_GLOW_MIN_MS, FX_GLOW_MAX_MS)) / FX_GLOW_STEPS, 100);
-        return LCARS_PAL->c2;
+        return FX_TONE(glow, c2);
     }
     case EF_WATCH:
         fx_hill(f, FX_GLOW_STEPS, jit(FX_WATCH_MS) / FX_GLOW_STEPS, FX_WATCH_PEAK);
-        return LCARS_PAL->hi;
+        return FX_TONE(hi, hi);
     case EF_SCAN:
         f->plen = sizeof(SCAN);
         memcpy(f->pct, SCAN, sizeof(SCAN));
         f->lag = 1;
         for (int s = 0; s < FX_STEP_MAX; s++) f->ms[s] = (uint16_t)rnd(FX_SCAN_MIN_MS, FX_SCAN_MAX_MS);
-        return LCARS_PAL->hi;
+        return FX_TONE(hi, hi);
     case EF_RIPPLE:
     case EF_SWEEP:
         f->plen = sizeof(RIPPLE);
@@ -1763,17 +1803,17 @@ static uint32_t fx_shape(fx_t *f, uint8_t kind)
         for (int s = 0; s < FX_STEP_MAX; s++)
             f->ms[s] = (uint16_t)(kind == EF_RIPPLE ? rnd(FX_RIPPLE_MIN_MS, FX_RIPPLE_MAX_MS)
                                                     : rnd(FX_SWEEP_MIN_MS, FX_SWEEP_MAX_MS));
-        return LCARS_PAL->c5;
+        return FX_TONE(ripple, c5);
     case EF_TICK:
         f->plen = 1;
         f->pct[0] = 100;
         f->ms[0] = jit(FX_TICK_MS);
-        return LCARS_PAL->c4;
+        return FX_TONE(tick, c4);
     default:                                            // EF_PULSE
         f->plen = sizeof(PULSE);
         memcpy(f->pct, PULSE, sizeof(PULSE));
         for (int s = 0; s < (int)sizeof(PULSE); s++) f->ms[s] = (uint16_t)rnd(FX_PULSE_MIN_MS, FX_PULSE_MAX_MS);
-        return LCARS_PAL->hi;
+        return FX_TONE(hi, hi);
     }
 }
 
@@ -1794,7 +1834,7 @@ static void fx_play(fx_t *f, const fxq_t *q)
         n++;
     }
     if (!n) return;
-    lv_color_t tone = lv_color_hex(fx_shape(f, q->kind)), hi = LCARS_COL(hi);
+    lv_color_t tone = lv_color_hex(fx_shape(f, q->kind)), hi = lv_color_hex(FX_TONE(hi, hi));
     for (int k = 0; k < n; k++) f->tone[k] = f->base[k].full == tone.full ? hi : tone;
     f->steps = (uint8_t)(f->plen + (n - 1) * f->lag);
     uint32_t sig = 0;
@@ -1813,7 +1853,7 @@ static void fx_cb(lv_timer_t *t)
 {
     fx_t *f = t->user_data;
     if (!f->n) { lv_timer_pause(t); return; }
-    if (!s_green || ++f->st >= f->steps) { fx_end(f); return; }
+    if (!fx_on() || ++f->st >= f->steps) { fx_end(f); return; }
     fx_paint(f);
     lv_timer_set_period(t, f->ms[f->st]);
 }
@@ -1833,7 +1873,7 @@ static void fx_stop_all(void)
 // queued again (a burst coalesces), nor anything once the queue is full.
 static void fxq_push(uint8_t kind, const int16_t *item, int n)
 {
-    if (!s_green || s_sn_prime || n <= 0 || s_q_n >= FX_Q) return;
+    if (!fx_on() || s_sn_prime || n <= 0 || s_q_n >= FX_Q) return;
     for (int k = 0; k < s_q_n; k++) if (s_q[(s_q_head + k) % FX_Q].item[0] == item[0]) return;
     fxq_t *q = &s_q[(s_q_head + s_q_n++) % FX_Q];
     q->kind = kind;
@@ -1854,8 +1894,8 @@ EXT_RAM_BSS_ATTR static struct {
     uint8_t  bssid[6];
     int8_t   rssi;
     bool     clock;
-    uint8_t  dv_mac[LC_DEVS][6];
-    uint32_t dv_pk[LC_DEVS];
+    uint8_t  dv_mac[LCARS_TALK_MAX][6];
+    uint32_t dv_pk[LCARS_TALK_MAX];
     int      dv_n;
 } s_sn;
 EXT_RAM_BSS_ATTR static pihole_status_t   s_sn_ph;     // PSRAM: large
@@ -1962,7 +2002,7 @@ static void sense_wires(void)
     const uint32_t c[7] = { r.c_login_fail, r.c_mgmt, r.c_psd, r.c_dns, r.c_dhcp, r.c_login, r.c_change };
     const int cell[7] = { WI_ROUTER0, WI_ROUTER0 + 1, WI_ROUTER0 + 2, WI_ROUTER0 + 3, WI_NEWDEV, WI_CONFIG, WI_CONFIG };
     for (int k = 0; k < 7; k++)
-        if (moved(c[k], &s_sn.rt_c[k]) && !hit[cell[k]] && s_wi_st[cell[k]] != WS_OFF) fxq_one(EF_GLOW, cell[k] * 2 + 1);
+        if (moved(c[k], &s_sn.rt_c[k]) && !hit[cell[k]] && wire_state(cell[k]) != WS_OFF) fxq_one(EF_GLOW, cell[k] * 2 + 1);
 }
 
 // NET: a cell's value and name, when its source updates.
@@ -2013,7 +2053,7 @@ static void sense_dev(void)
 
 static void fx_sense(void)
 {
-    switch (s_cur) {
+    switch (fx_page()) {
     case PG_OPS:   sense_ops();   break;
     case PG_TRAPS: sense_traps(); break;
     case PG_WIRES: sense_wires(); break;
@@ -2022,7 +2062,7 @@ static void fx_sense(void)
     default: break;
     }
     memset(s_port_ev, 0, sizeof(s_port_ev));
-    s_sn_prime = !s_green;                      // under an alert view: keep recording only
+    s_sn_prime = !fx_on();                      // under an alert view: keep recording only
 }
 
 // True if a lane is playing one of the entry's elements.
@@ -2053,13 +2093,14 @@ static void watch_shuffle(int n)
 
 static int watch_next(void)
 {
-    int n = s_cur == PG_TRAPS ? LC_TRAPS : s_cur == PG_WIRES ? LC_WIRES : 0;
+    const int pg = fx_page();
+    int n = pg == PG_TRAPS ? LC_TRAPS : pg == PG_WIRES ? LC_WIRES : 0;
     for (int tries = 0; tries < n; tries++) {
         if (s_wo_n != n || s_wo_i >= s_wo_n) watch_shuffle(n);
         int i = s_wo[s_wo_i++];
         s_wo_last = (uint8_t)i;
-        if (s_cur == PG_WIRES && s_wi_st[i] == WS_OFF) continue;    // off cells never glow
-        int it = s_cur == PG_TRAPS ? i * 4 + 1 : i * 2;
+        if (pg == PG_WIRES && wire_state(i) == WS_OFF) continue;    // off cells never glow
+        int it = pg == PG_TRAPS ? i * 4 + 1 : i * 2;
         uint8_t part;
         lv_obj_t *o = fx_obj(it, &part);
         if (o && !fx_busy(o)) return it;
@@ -2130,8 +2171,8 @@ static void fx_spawn_cb(lv_timer_t *t)
 {
     (void)t;
     if (lv_tick_elaps(s_sense_at) >= FX_SENSE_MS) { s_sense_at = lv_tick_get(); fx_sense(); }
-    if (!s_green || s_splash) return;
-    bool ops = s_cur == PG_OPS;
+    if (!fx_on()) return;
+    bool ops = fx_page() == PG_OPS;
     for (int l = 0; l < FX_LANES; l++) {                // real activity first
         fx_t *f = &s_fx[l];
         if ((ops && l == FX_WATCH_LANE) || f->n || lv_tick_elaps(f->idle_at) < f->gap) continue;
@@ -2152,7 +2193,7 @@ static void fx_spawn_cb(lv_timer_t *t)
         ops_watch(&s_fx[FX_WATCH_LANE]);
         return;
     }
-    if (s_cur != PG_TRAPS && s_cur != PG_WIRES) return;
+    if (fx_page() != PG_TRAPS && fx_page() != PG_WIRES) return;
     for (int l = 0; l < FX_LANES; l++) {                // then the watch, on a free lane
         if (s_fx[l].n) continue;
         s_watch_at = lv_tick_get();
@@ -2490,6 +2531,54 @@ void lcars_build(lv_obj_t *scr)
 
 lv_obj_t *lcars_alert_box(void) { return s_alert; }
 
+// ── For other skins ───────────────────────────────────────────────────────────
+
+const lcars_today_t *lcars_today(void)
+{
+    day_roll();
+    return &s_t;
+}
+
+int lcars_port_count(void) { return s_nports; }
+
+uint16_t lcars_port(int i, uint8_t *grp, bool *hit)
+{
+    if (i < 0 || i >= s_nports) { *grp = GRP_NET; *hit = false; return 0; }
+    *grp = s_ports[i].grp;
+    *hit = s_ports[i].hit;
+    return s_ports[i].port;
+}
+
+uint8_t lcars_wire_state(int i) { return i >= 0 && i < LC_WIRES ? wire_state(i) : WS_OFF; }
+const char *lcars_wire_off(int i) { return i >= 0 && i < LC_WIRES ? wire_off(i) : "?"; }
+
+int lcars_talkers(int max)
+{
+    if (max > LCARS_TALK_MAX) max = LCARS_TALK_MAX;
+    s_ntalk = max > 0 ? discovery_top_talkers(s_talk, max) : 0;
+    return s_ntalk;
+}
+
+const discovery_talker_t *lcars_talker(int i) { return i >= 0 && i < s_ntalk ? &s_talk[i] : NULL; }
+
+bool lcars_pihole_share(uint32_t ip, const uint8_t *mac, uint32_t *tot, uint32_t *blk)
+{
+    return pihole_share(ip, mac, tot, blk);
+}
+
+void lcars_net_text(int i, char *b, size_t len) { net_text(i, b, len); }
+
+void lcars_fx_bind(const lcars_fx_skin_t *skin, int page)
+{
+    fx_stop_all();                              // restored through the old binding
+    s_skin = skin;
+    s_skin_pg = skin ? page : LCARS_PG_NONE;
+}
+
+const lcars_fx_skin_t *lcars_fx_skin(void) { return s_skin; }
+bool lcars_fx_busy(lv_obj_t *o) { return fx_busy(o); }
+void lcars_fit(char *s, const lv_font_t *f, lv_coord_t w) { fit(s, f, w); }
+
 void lcars_view(alarm_cond_t c, bool on)
 {
     bool green = on && c == ALARM_COND_GREEN;
@@ -2500,6 +2589,7 @@ void lcars_view(alarm_cond_t c, bool on)
         s_secured_cond = ALARM_COND_GREEN;
     }
     s_prev_cond = c;
+    if (on && s_skin) lcars_fx_bind(NULL, LCARS_PG_NONE);   // the motion is the LCARS pages' again
     bool was_on = !lv_obj_has_flag(s_root, LV_OBJ_FLAG_HIDDEN);
     if (!green) {
         fx_stop_all();                          // the motion pauses under an alert view
