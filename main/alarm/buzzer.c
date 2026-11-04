@@ -19,6 +19,31 @@ static const char *TAG = "BUZZER";
 #define BUZ_TIMER    LEDC_TIMER_1
 #define BUZ_CHANNEL  LEDC_CHANNEL_1
 
+// ── Board drive (board.h) ────────────────────────────────────────────────────
+// BOARD_BUZZER_INVERT: the pin idles high and the duty is its low part (the
+// Waveshare drives a CAN transceiver's TXD: high recessive, low dominant).
+// BOARD_BUZZER_LOW_MAX_US > 0: no low part longer than this, at any pitch
+// (the TJA1051's TXD dominant time-out is 0.3 ms at the least), so the duty
+// is capped per frequency. 0: no cap (the CrowPanel's transistor).
+#ifndef BOARD_BUZZER_INVERT
+#define BOARD_BUZZER_INVERT     0
+#endif
+#ifndef BOARD_BUZZER_LOW_MAX_US
+#define BOARD_BUZZER_LOW_MAX_US 0
+#endif
+
+// The duty for a tone at hz: as asked, within the board's cap.
+static uint32_t duty_at(uint32_t hz, uint32_t duty)
+{
+#if BOARD_BUZZER_LOW_MAX_US > 0
+    uint32_t cap = (uint32_t)((uint64_t)BOARD_BUZZER_LOW_MAX_US * hz * 1024u / 1000000u);
+    if (duty > cap) duty = cap;
+#else
+    (void)hz;
+#endif
+    return duty;
+}
+
 // ── Loudness ─────────────────────────────────────────────────────────────────
 // A passive piezo's loudness follows the fundamental of the square wave. At
 // duty D the fundamental's amplitude is sin(pi * D) of the 50 % one: 20 % is
@@ -160,6 +185,7 @@ void buzzer_init(void)
         .timer_sel  = BUZ_TIMER,
         .duty       = 0,
         .hpoint     = 0,
+        .flags.output_invert = BOARD_BUZZER_INVERT,   // duty 0: the pin's idle level
     };
     if (ledc_timer_config(&t) != ESP_OK || ledc_channel_config(&c) != ESP_OK) {
         ESP_LOGE(TAG, "LEDC setup failed, buzzer disabled");
@@ -188,13 +214,14 @@ void buzzer_init(void)
 // silence. Caller holds s_lock. The timer goes back to BOARD_BUZZER_HZ.
 static void play_steps(const step_t *st, size_t n, uint32_t duty)
 {
-    bool on = false;
+    uint32_t cur = 0;                       // the duty set now
     for (size_t i = 0; i < n; i++) {
         bool want = st[i].hz != 0;
         if (want) ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, st[i].hz);
-        if (want != on) {
-            on = want;
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, on ? duty : 0);
+        uint32_t d = want ? duty_at(st[i].hz, duty) : 0;
+        if (d != cur) {
+            cur = d;
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, d);
             ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
         }
         vTaskDelay(pdMS_TO_TICKS(st[i].ms));
@@ -220,7 +247,7 @@ static bool klax_hold(int hz, int ms)
 {
     if (hz) ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZ_TIMER, hz);
     // Duty is a count, so it stays the same share at any frequency.
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, hz ? s_klax_duty : 0);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL, hz ? duty_at((uint32_t)hz, s_klax_duty) : 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZ_CHANNEL);
     while (ms > 0) {
         int step = ms < KLAX_POLL_MS ? ms : KLAX_POLL_MS;

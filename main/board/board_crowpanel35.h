@@ -73,6 +73,8 @@
 // ── Passive buzzer (MLT-8530 via S9013), needs a driven tone ──────────────────
 #define BOARD_BUZZER_GPIO   45
 #define BOARD_BUZZER_HZ     2700    // MLT-8530 resonant frequency
+#define BOARD_BUZZER_INVERT 0       // high drives the transistor; idles low
+#define BOARD_BUZZER_LOW_MAX_US 0   // no cap on the duty
 
 // ── Battery sense: VBAT through 1M/1M divider on ADC1_CH8 ─────────────────────
 #define BOARD_VBAT_ADC      9

@@ -57,7 +57,7 @@ The board is a build-time choice: `BOARD_CROWPANEL35` (the default) or `BOARD_WA
 | Backlight | PWM, brightness setting | on or off (CH422G expander) |
 | Front panel | LCARS or the dashboard | LCARS only, the same pages scaled to the screen |
 | Camera | OV2640 | none (compiled out) |
-| Buzzer | passive, GPIO 45 | none fitted; `BOARD_BUZZER_GPIO` in `config.h` for one wired by hand (none: every sound compiled out) |
+| Buzzer | passive, GPIO 45 | a passive piezo you add on the terminal block: + to CAN-H, - to CAN-L, CAN termination switch (SW2) on; the tones drive the CAN transceiver's TXD (GPIO15), idle recessive, every low part under 150 us (its TXD time-out is 0.3 ms at the least), so the duty is capped on low tones; `BOARD_BUZZER_GPIO -1` in `config.h` compiles the sounds out |
 | microSD | on the display's SPI bus | own SPI bus (11, 12, 13), CS on the expander |
 | USB | CH340C, hold BOOT and tap RESET to flash | the chip's own USB-Serial/JTAG, no buttons; also the console |
 

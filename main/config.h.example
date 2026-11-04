@@ -414,12 +414,15 @@
 //   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build
 // A board named here that differs from the env's fails the build.
 //
-// BOARD_BUZZER_GPIO (Waveshare only, default -1: no buzzer, every sound
-// compiled out): the GPIO of a passive piezo wired by hand. The 4.3B has no
-// free GPIO on a connector; GPIO6 (the RTC's unused INT line, module pad 6)
-// is the one free pin.
+// BOARD_BUZZER_GPIO (Waveshare only, default 15): the 4.3B has no free GPIO
+// on a connector, so a passive piezo goes on the terminal block across CAN-H
+// (+) and CAN-L (-), with the CAN termination switch on, and the sounds drive
+// the CAN transceiver's TXD (GPIO15) with the TXD time-out respected (see
+// main/board/board_waveshare43.h). -1: no buzzer, every sound compiled out.
+// Another pin wired by hand works too (GPIO6, the RTC's unused INT line, at
+// module pad 6, driven as on the CrowPanel).
 //#define BOARD_WAVESHARE43
-//#define BOARD_BUZZER_GPIO           6
+//#define BOARD_BUZZER_GPIO           15
 
 // ── Panel camera (OV2640) ─────────────────────────────────────────────────────
 //

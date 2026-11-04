@@ -83,14 +83,33 @@
 #define BOARD_HAS_CAMERA        0
 #define BOARD_VBAT_ADC          (-1)
 
-// ── Buzzer ────────────────────────────────────────────────────────────────────
-// No free GPIO reaches a connector on the 4.3B. -1 compiles the sounds out.
-// main/config.h may set BOARD_BUZZER_GPIO to a pin wired by hand (see
-// config.h.example).
+// ── Buzzer: a passive piezo across the CAN pair ───────────────────────────────
+// No free GPIO reaches a connector on the 4.3B, so the piezo sits on the
+// terminal block across CAN-H (P1 pin 8) and CAN-L (P1 pin 7), with the CAN
+// termination switch (SW2) on, and LEDC drives the TJA1051T/3's TXD (GPIO15;
+// the TWAI peripheral is not used). Schematic: TXD pin 1 = IO15, RXD pin 4 =
+// IO16 (left as an input), S pin 8 to GND through R96 0 R (Normal mode, never
+// silent), VCC 5 V, VIO 3V3; R61 120 R across CANH and CANL through SW2. TXD
+// high is recessive (both lines at about 2.5 V, 0 V across the piezo, which
+// the 120 R drains), low dominant (about 2 V across, CANH up and CANL down).
+// So the pin idles high (BOARD_BUZZER_INVERT: the duty is the low part), and
+// no low part lasts over BOARD_BUZZER_LOW_MAX_US: the TJA1051's TXD dominant
+// time-out t_to(dom)TXD is 0.3 ms at the least (1 typical, 5 most; NXP
+// TJA1051 data sheet rev. 9, table 8), after which it would drop the driver.
+// The duty is capped per tone (buzzer.c), so the lowest tone, 1600 Hz, gets at
+// most 24 %, and from 3400 Hz up the full 50 %. TXD has an internal pull-up,
+// so the line is recessive before the buzzer starts and after a reset.
+// main/config.h may set BOARD_BUZZER_GPIO to another pin, or -1 for none
+// (every sound compiled out).
 #ifndef BOARD_BUZZER_GPIO
-#define BOARD_BUZZER_GPIO       (-1)
+#define BOARD_BUZZER_GPIO       15
 #endif
 #define BOARD_BUZZER_HZ         2700
+#if BOARD_BUZZER_GPIO == 15
+#define BOARD_BUZZER_INVERT     1       // idle high: CAN recessive
+#define BOARD_BUZZER_LOW_MAX_US 150     // half the TJA1051's shortest TXD time-out
+_Static_assert(BOARD_BUZZER_LOW_MAX_US < 300, "the low part must stay under the TJA1051's 0.3 ms TXD time-out");
+#endif
 
 // ── Front panel styles ────────────────────────────────────────────────────────
 #define BOARD_PANEL_DASHBOARD   0       // LCARS only (the dashboard is 480 x 320)

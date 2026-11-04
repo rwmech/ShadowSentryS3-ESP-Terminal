@@ -23,6 +23,8 @@
  *   BOARD_BACKLIGHT_DIM        1: the backlight takes a PWM level, 0: on or off
  *   BOARD_BUZZER_GPIO          passive buzzer pin, -1: none (sounds compiled out)
  *   BOARD_BUZZER_HZ            the buzzer's idle LEDC frequency
+ *   BOARD_BUZZER_INVERT        1: the pin idles high, the duty is its low part
+ *   BOARD_BUZZER_LOW_MAX_US    > 0: no low part longer than this (duty capped per tone)
  *   BOARD_VBAT_ADC             battery sense ADC pin, -1: none
  *   BOARD_SD_SPI_HOST          SPI host of the microSD
  *   BOARD_SD_MOSI, _MISO, _SCLK, _CS   its pins (CS -1: held selected by the board)
