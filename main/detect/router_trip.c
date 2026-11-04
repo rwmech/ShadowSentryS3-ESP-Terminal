@@ -816,10 +816,14 @@ bool router_trip_list_tick(void)
     int st = mikrotik_rest_get("/ip/firewall/address-list?list=" ROUTER_TRIP_LIST
                                "&.proplist=.id,address,creation-time,timeout,dynamic,disabled",
                                list_cb, NULL, LIST_BYTES, &rows);
+    // time() takes a newlib lock: calling it inside the critical section aborted
+    // the board on 2026-11-04 (lock_acquire_generic, ISR-style take failed), so
+    // read the clock before entering it.
+    uint32_t now_wall = (uint32_t)time(NULL);
     portENTER_CRITICAL(&s_st_mux);
     s_st.list_checks++;
     s_st.list_status = st;
-    s_st.list_last = (uint32_t)time(NULL);
+    s_st.list_last = now_wall;
     if (st != 200 && st != -4) s_st.list_errors++;
     else s_st.list_entries = L->n_cur;
     portEXIT_CRITICAL(&s_st_mux);

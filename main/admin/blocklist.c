@@ -281,8 +281,11 @@ size_t blocklist_text(char *buf, size_t cap)
 
 void blocklist_note_fetch(bool served)
 {
+    // time() takes a newlib lock, which aborts inside a critical section when
+    // contended (the 2026-11-04 panic, in router_trip.c), so read it first.
+    uint32_t now = (uint32_t)time(NULL);
     portENTER_CRITICAL(&s_mux);
-    if (served) { s_served++; s_last = (uint32_t)time(NULL); }
+    if (served) { s_served++; s_last = now; }
     else s_refused++;
     portEXIT_CRITICAL(&s_mux);
 }
