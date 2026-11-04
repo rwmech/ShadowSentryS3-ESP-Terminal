@@ -13,6 +13,8 @@
 
 static const char *TAG = "BUZZER";
 
+#if BOARD_HAS_BUZZER
+
 // LEDC timer/channel 1; timer/channel 0 drive the backlight.
 #define BUZ_TIMER    LEDC_TIMER_1
 #define BUZ_CHANNEL  LEDC_CHANNEL_1
@@ -152,7 +154,7 @@ void buzzer_init(void)
         .clk_cfg         = LEDC_AUTO_CLK,
     };
     ledc_channel_config_t c = {
-        .gpio_num   = BOARD_BUZZER,
+        .gpio_num   = BOARD_BUZZER_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel    = BUZ_CHANNEL,
         .timer_sel  = BUZ_TIMER,
@@ -373,3 +375,24 @@ void buzzer_stop(void)
 // Every press on the glass: the tap chirp, on the buzzer task (36 ms, too long
 // to play on the UI task as the old 10 ms click did).
 void buzzer_click(void) { buzzer_chirp(BUZZER_CHIRP_TAP); }
+
+#else // !BOARD_HAS_BUZZER
+
+// ── No buzzer on this board (BOARD_BUZZER_GPIO -1): every sound is a no-op ───
+
+void buzzer_init(void)
+{
+    ESP_LOGI(TAG, "No buzzer on this board (BOARD_BUZZER_GPIO -1), sounds off");
+}
+void buzzer_alarm(void)  {}
+void buzzer_remind(void) {}
+void buzzer_test(void)   {}
+void buzzer_yellow(void) {}
+void buzzer_boot(void)   {}
+void buzzer_stop(void)   {}
+void buzzer_click(void)  {}
+void buzzer_chirp(buzzer_chirp_t k)   { (void)k; }
+void buzzer_preview(buzzer_sound_t k) { (void)k; }
+int buzzer_sound_from_key(const char *key) { (void)key; return -1; }
+
+#endif // BOARD_HAS_BUZZER

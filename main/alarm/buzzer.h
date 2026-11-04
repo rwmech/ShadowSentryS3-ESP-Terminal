@@ -7,7 +7,8 @@ extern "C" {
 #endif
 
 /*
- * Passive buzzer on BOARD_BUZZER, driven with an LEDC tone.
+ * Passive buzzer on BOARD_BUZZER_GPIO, driven with an LEDC tone (board.h; -1:
+ * no buzzer, every call below is a no-op).
  *
  * buzzer_alarm(), buzzer_remind() and buzzer_test() only queue a request and
  * return at once: the red alert klaxon (about 4.2 s) plays on the buzzer's own

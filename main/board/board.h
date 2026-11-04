@@ -1,69 +1,73 @@
 #pragma once
 
 /*
- * Elecrow CrowPanel ESP32 Terminal 3.5" (ER-DLC35020S), hardware V1.0
+ * Board selection: the hardware abstraction for the front panel, touch,
+ * buzzer, camera, battery sense and microSD.
  *
- * ESP32-S3-WROOM-1-N16R8 (16 MB quad flash, 8 MB octal PSRAM; GPIO 26-37 are
- * spent on flash/PSRAM). Pins from Elecrow's V1.0 schematic and their working
- * Arduino examples (LVGL_SPI_, A-BUZZER, A-TOUCH, A-Camera).
+ * Exactly one board is built. Choose it in main/config.h:
  *
- * Display and microSD share one SPI bus (12/13/14) with separate chip selects.
- * Touch, camera SCCB and the Crowtail I2C header share one I2C bus (2/1).
+ *   #define BOARD_CROWPANEL35     // Elecrow CrowPanel ESP32 Terminal 3.5" (default)
+ *   #define BOARD_WAVESHARE43     // Waveshare ESP32-S3-Touch-LCD-4.3B
+ *
+ * The PlatformIO envs also define it (build_src_flags), so one config.h
+ * serves every env; a config.h that names a different board than the env
+ * fails the build here. With neither defined, the CrowPanel is built.
+ *
+ * Every board file defines the same set of BOARD_* names; code outside the
+ * board files and the board-specific drivers (ui/display*.c*, camera/cam.c)
+ * uses only these:
+ *
+ *   BOARD_NAME                 the board's name on the SUBSYS screen
+ *   BOARD_LCD_HRES, _VRES      the panel in pixels, landscape
+ *   BOARD_HAS_CAMERA           1: a camera may be fitted (camera/cam.c)
+ *   BOARD_BACKLIGHT_DIM        1: the backlight takes a PWM level, 0: on or off
+ *   BOARD_BUZZER_GPIO          passive buzzer pin, -1: none (sounds compiled out)
+ *   BOARD_BUZZER_HZ            the buzzer's idle LEDC frequency
+ *   BOARD_VBAT_ADC             battery sense ADC pin, -1: none
+ *   BOARD_SD_SPI_HOST          SPI host of the microSD
+ *   BOARD_SD_MOSI, _MISO, _SCLK, _CS   its pins (CS -1: held selected by the board)
+ *   BOARD_SD_SHARES_LCD_BUS    1: the display brings the SD's SPI bus up
+ *   BOARD_I2C_PORT             the I2C port touch (and the camera) use
+ *   BOARD_PANEL_DASHBOARD      1: the dashboard panel style (ui.c) is offered
  */
 
-// The board's name on the panel's SUBSYS screen (upper case, ASCII)
-#define BOARD_NAME          "ELECROW CROWPANEL ESP32-S3 3.5 IN"
+#include "sdkconfig.h"
 
-// ── ILI9488 480x320 over SPI (SPI3_HOST) ──────────────────────────────────────
-#define BOARD_LCD_SCLK      12
-#define BOARD_LCD_MOSI      13
-#define BOARD_LCD_MISO      14
-#define BOARD_LCD_CS        3
-#define BOARD_LCD_DC        42
-#define BOARD_LCD_RST       (-1)    // tied to module EN
-#define BOARD_LCD_BL        46      // S8050 low-side switch, active high
-#define BOARD_LCD_HRES      480     // landscape, rotation 3 (Elecrow default)
-#define BOARD_LCD_VRES      320
-// Elecrow example freq_write; confirmed on the bench (self-test red fill shows).
-// Reads do NOT work: MISO reaches the panel through a 1N4148 and the ID reads
-// 0x000000, so never gate anything on panel readback.
-#define BOARD_LCD_SPI_HZ    60000000
+// config.h's checks are C11 _Static_assert; display.cpp is C++.
+#if defined(__cplusplus) && !defined(_Static_assert)
+#define _Static_assert static_assert
+#endif
+#include "config.h"
 
-// ── microSD (shares the LCD SPI bus) ──────────────────────────────────────────
-#define BOARD_SD_CS         10
+#if !defined(BOARD_CROWPANEL35) && !defined(BOARD_WAVESHARE43)
+#define BOARD_CROWPANEL35   1
+#endif
 
-// ── FT6236 capacitive touch, I2C 0x38 ─────────────────────────────────────────
-// INT is on GPIO0 (BOOT strap). It is left unconfigured and the controller is
-// polled, so a touch held during reset can't be driven into download mode.
-#define BOARD_TOUCH_SDA     2
-#define BOARD_TOUCH_SCL     1
-#define BOARD_TOUCH_ADDR    0x38
-#define BOARD_I2C_PORT      0       // I2C_NUM_0, new i2c_master driver only
+#if defined(BOARD_CROWPANEL35)
+#define BOARD_IS_CROWPANEL35    1
+#else
+#define BOARD_IS_CROWPANEL35    0
+#endif
+#if defined(BOARD_WAVESHARE43)
+#define BOARD_IS_WAVESHARE43    1
+#else
+#define BOARD_IS_WAVESHARE43    0
+#endif
 
-// ── OV2640 camera on J5 (24-pin FPC), DVP 8-bit ───────────────────────────────
-// From Elecrow's A-Camera example (camera_pins.h, CAMERA_MODEL_ELECROW) and the
-// V1.0 schematic. PWDN and RESET are tied off (no power FET), so the sensor is
-// powered whenever the board is. SCCB is the touch I2C bus above (SDA 2, SCL 1),
-// address 0x30: the camera attaches to the bus touch creates, never a second one.
-#define BOARD_CAM_XCLK      7
-#define BOARD_CAM_PCLK      17
-#define BOARD_CAM_VSYNC     4
-#define BOARD_CAM_HREF      5
-#define BOARD_CAM_D0        8
-#define BOARD_CAM_D1        47
-#define BOARD_CAM_D2        48
-#define BOARD_CAM_D3        21
-#define BOARD_CAM_D4        18
-#define BOARD_CAM_D5        16
-#define BOARD_CAM_D6        15
-#define BOARD_CAM_D7        6
-#define BOARD_CAM_PWDN      (-1)
-#define BOARD_CAM_RESET     (-1)
-#define BOARD_CAM_XCLK_HZ   20000000    // Elecrow example; LCD_CAM divides 160 MHz by 8
+_Static_assert(BOARD_IS_CROWPANEL35 + BOARD_IS_WAVESHARE43 == 1,
+               "Define exactly one of BOARD_CROWPANEL35 and BOARD_WAVESHARE43 "
+               "(main/config.h, or the PlatformIO env's build_src_flags)");
 
-// ── Passive buzzer (MLT-8530 via S9013), needs a driven tone ──────────────────
-#define BOARD_BUZZER        45
-#define BOARD_BUZZER_HZ     2700    // MLT-8530 resonant frequency
+#if BOARD_IS_WAVESHARE43
+#include "board_waveshare43.h"
+#else
+#include "board_crowpanel35.h"
+#endif
 
-// ── Battery sense: VBAT through 1M/1M divider on ADC1_CH8 ─────────────────────
-#define BOARD_VBAT_ADC      9
+_Static_assert(BOARD_LCD_HRES >= 480 && BOARD_LCD_VRES >= 320,
+               "the panel layout needs at least 480 x 320");
+_Static_assert(BOARD_BUZZER_GPIO >= -1 && BOARD_BUZZER_GPIO <= 48,
+               "BOARD_BUZZER_GPIO must be -1 (none) or a GPIO");
+_Static_assert(BOARD_HAS_CAMERA == 0 || BOARD_HAS_CAMERA == 1, "BOARD_HAS_CAMERA must be 0 or 1");
+
+#define BOARD_HAS_BUZZER    (BOARD_BUZZER_GPIO >= 0)
