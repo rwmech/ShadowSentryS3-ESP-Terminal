@@ -147,7 +147,7 @@ typedef struct {
     bool      holding;      // from press start until done, release or slide-off
 } hold_t;
 static hold_t s_h_ack;
-EXT_RAM_BSS_ATTR static hold_t s_h_lc_ack;
+EXT_RAM_BSS_ATTR static hold_t s_h_lc_ack, s_h_cl_ack;   // LCARS, clan
 
 // The LCARS alert view, in lcars_alert_box() (content coordinates):
 //   y   0..111  the emblem
@@ -450,6 +450,12 @@ static void ack_done(void)
 static void lc_ack_done(void)
 {
     lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGING...");
+    alarm_ack(ALARM_BY_PANEL);
+}
+
+static void cl_ack_done(void)
+{
+    lv_label_set_text(clan_alert()->ack_lbl, "ACKNOWLEDGED");
     alarm_ack(ALARM_BY_PANEL);
 }
 
@@ -820,7 +826,8 @@ static void ignore_mb_cb(lv_event_t *ev)
       : r == ESP_ERR_INVALID_STATE ? "The incident has closed."
                                    : "Could not save the ignore list.", NULL, true);
     lv_obj_set_width(e, UI_SX(400));
-    if (s_style_lc || s_style_cl) lcars_style_msgbox(e);
+    if (s_style_cl)      clan_style_msgbox(e);
+    else if (s_style_lc) lcars_style_msgbox(e);
     lv_obj_center(e);
 }
 
@@ -845,7 +852,8 @@ static void ignore_ask_cb(lv_event_t *ev)
     if (s_style_lc || s_style_cl) {
         mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "IGNORE ERROR" : "IGNORE DEVICE", body, IGN_BTNS_LC, false);
         lv_obj_set_width(mb, UI_SX(360));
-        lcars_style_msgbox(mb);
+        if (s_style_cl) clan_style_msgbox(mb);
+        else            lcars_style_msgbox(mb);
         lv_obj_set_size(lv_msgbox_get_btns(mb), UI_SX(320), UI_SY(40));
     } else {
         mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "Ignore error" : "Ignore device", body, IGN_BTNS, false);
@@ -1210,6 +1218,8 @@ static void dash_refresh(bool force)
 
 // Every second: during an incident, the details' last line (count, first and
 // last seen, how long it has been open). Nothing when green.
+static void also_seen(const alarm_info_t *a, char *buf, size_t len);
+
 static void refresh_age(void)
 {
     char age[24] = "";
@@ -1229,6 +1239,18 @@ static void refresh_age(void)
             else          snprintf(buf, sizeof(buf), "%lu:%02lu:%02lu", d / 3600, d % 3600 / 60, d % 60);
         } else strlcpy(buf, "-", sizeof(buf));
         set_text(s_lc_stat[1], buf);
+        if (s_style_cl) {
+            char st[160], also[48];
+            also_seen(&s_alarm, also, sizeof(also));
+            int n = snprintf(st, sizeof(st), "%lu EVENT%s | OPEN %s", (unsigned long)s_alarm.count,
+                             s_alarm.count == 1 ? "" : "S", buf);
+            if (also[0] && n > 0 && n < (int)sizeof(st))
+                snprintf(st + n, sizeof(st) - (size_t)n, " | ALSO %s", also);
+            if (cond_of(&s_alarm) == ALARM_COND_YELLOW) strlcat(st, " | RESOLVE ON THE DASHBOARD", sizeof(st));
+            lcars_upper(st);
+            fit_words(st, UI_F12, clan_alert_text_w());
+            set_text(clan_alert()->stat, st);
+        }
         return;
     }
 }
@@ -1328,40 +1350,69 @@ static void view_lcars_alert(alarm_cond_t c)
     s_btn_y = UI_SY(LCARS_CONTENT_Y + LC_BTN_Y);
 }
 
-// The LCARS alert's texts, upper case and fitted to the 400 px box.
-static void lcars_alert_text(const alarm_info_t *a)
+// The first other code the incident saw ("17-03 PROBE"), "" if none.
+static void also_seen(const alarm_info_t *a, char *buf, size_t len)
+{
+    buf[0] = '\0';
+    for (int i = 0; i < describe_code_count() && i < 64; i++) {
+        const char *nm;
+        int tier;
+        const char *code = describe_code_at(i, &nm, &tier);
+        if (!code || !(a->codes & (1ULL << i)) || !strcmp(code, a->code)) continue;
+        snprintf(buf, len, "%s %s", code, nm);
+        lcars_upper(buf);
+        return;
+    }
+}
+
+// An alert view's three lines, upper case, fitted to w px: the code and
+// name (20 px), the source (14 px), the headline's detail (12 px).
+static void alert_lines(const alarm_info_t *a, lv_obj_t *code, lv_obj_t *src, lv_obj_t *head, lv_coord_t w)
 {
     char buf[DESCRIBE_MAX + 48], ip[WIFI_MAC_STR_LEN > 16 ? WIFI_MAC_STR_LEN : 16], lbl[48];   // an IP, or the MAC
     fmt_what(a, buf, sizeof(buf));
     lcars_upper(buf);
-    fit_words(buf, UI_F20, UI_SX(LCARS_CONTENT_W));
-    set_text(s_lc_code, buf);
+    fit_words(buf, UI_F20, w);
+    set_text(code, buf);
     const char *v = wifi_manager_mac_vendor(a->src_mac);
     if (a->src_ip) fmt_ip(a->src_ip, ip, sizeof(ip));
     else           wifi_manager_format_mac(a->src_mac, ip, sizeof(ip));
     if (!discovery_label_for(a->src_ip, mac_zero(a->src_mac) ? NULL : a->src_mac, lbl, sizeof(lbl))) lbl[0] = '\0';
     snprintf(buf, sizeof(buf), "%s%s%s%s%s", ip, v[0] ? " | " : "", v, lbl[0] ? " | " : "", lbl);
     lcars_upper(buf);
-    fit_words(buf, UI_F14, UI_SX(LCARS_CONTENT_W));
-    set_text(s_lc_src, buf);
+    fit_words(buf, UI_F14, w);
+    set_text(src, buf);
     const char *bar = strstr(a->headline, " | ");
     strlcpy(buf, bar ? bar + 3 : a->headline, sizeof(buf));
-    fit_words(buf, UI_F12, UI_SX(LCARS_CONTENT_W));
-    set_text(s_lc_head, buf);
+    fit_words(buf, UI_F12, w);
+    set_text(head, buf);
+}
+
+// The LCARS alert's texts, upper case and fitted to the 400 px box.
+static void lcars_alert_text(const alarm_info_t *a)
+{
+    char buf[DESCRIBE_MAX + 48];
+    alert_lines(a, s_lc_code, s_lc_src, s_lc_head, UI_SX(LCARS_CONTENT_W));
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)a->count);
     set_text(s_lc_stat[0], buf);
-    strlcpy(buf, "-", sizeof(buf));
-    for (int i = 0; i < describe_code_count() && i < 64; i++) {
-        const char *nm;
-        int tier;
-        const char *code = describe_code_at(i, &nm, &tier);
-        if (!code || !(a->codes & (1ULL << i)) || !strcmp(code, a->code)) continue;
-        snprintf(buf, sizeof(buf), "%s %s", code, nm);
-        lcars_upper(buf);
-        fit_words(buf, UI_F14, UI_SX(129));
-        break;
-    }
+    also_seen(a, buf, sizeof(buf));
+    if (!buf[0]) strlcpy(buf, "-", sizeof(buf));
+    fit_words(buf, UI_F14, UI_SX(129));
     set_text(s_lc_stat[2], buf);
+}
+
+// The clan alert view: the banner, the details and the buttons (ui_clan.c).
+static void view_clan_alert(alarm_cond_t c)
+{
+    show(s_inc, false);
+    show(s_bar, false);
+    show(s_rl_track, false);
+    show(s_idle, false);
+    lcars_view(c, false);
+    clan_view(c, true);
+    s_emb = NULL;                           // no stripes: the glow strips breathe instead
+    bool dev = s_alarm.src_ip || !mac_zero(s_alarm.src_mac);
+    s_btn_y = clan_alert_layout(c, dev);
 }
 
 // The LCARS panel, GREEN: its frame, rail and pages over everything.
@@ -1395,7 +1446,14 @@ static void view_clan_green(void)
 static void log_view(alarm_cond_t c)
 {
     lv_obj_update_layout(lv_scr_act());
-    if (c != ALARM_COND_GREEN && (s_style_lc || s_style_cl)) {
+    if (c != ALARM_COND_GREEN && s_style_cl) {
+        ESP_LOGI(TAG, "UI state: %s #%lu, clan, banner %s, buttons %s%s, nav hidden", COND_NAME[c],
+                 (unsigned long)s_alarm.id, c == ALARM_COND_RED ? "HOSTILE CONTACT" : "CAUTION",
+                 c == ALARM_COND_RED ? "ACKNOWLEDGE, IGNORE ERROR" : "IGNORE ERROR",
+                 lv_obj_has_flag(clan_alert()->ign_dev, LV_OBJ_FLAG_HIDDEN) ? "" : ", IGNORE DEVICE");
+        return;
+    }
+    if (c != ALARM_COND_GREEN && s_style_lc) {
         lv_area_t e;
         lv_obj_get_coords(s_emb->root, &e);
         ESP_LOGI(TAG, "UI state: %s #%lu, LCARS, emblem y %d..%d, buttons %s%s, rail hidden",
@@ -1439,7 +1497,7 @@ static void apply_alarm(const alarm_info_t *a)
     s_style_lc = lc;
     s_style_cl = cl;
     s_alarm = *a;
-    if (changed) { hold_reset(&s_h_ack); hold_reset(&s_h_lc_ack); }
+    if (changed) { hold_reset(&s_h_ack); hold_reset(&s_h_lc_ack); hold_reset(&s_h_cl_ack); }
 
     if (c != ALARM_COND_GREEN) {
         bool red = c == ALARM_COND_RED;
@@ -1458,9 +1516,16 @@ static void apply_alarm(const alarm_info_t *a)
                        : a->acked_by == ALARM_BY_DASHBOARD ? "Acknowledged on the dashboard. Resolve from the dashboard"
                                                            : "Resolve from the dashboard");
         lcars_alert_text(a);
-        if (lc || cl) view_lcars_alert(c);
-        else          view_incident(c);
-        if (changed && red) { lv_label_set_text(s_b_ack_lbl, TXT_ACK); lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGE"); }
+        const clan_alert_t *ca = clan_alert();
+        alert_lines(a, ca->code, ca->src, ca->head, clan_alert_text_w());
+        if (cl)      view_clan_alert(c);
+        else if (lc) view_lcars_alert(c);
+        else         view_incident(c);
+        if (changed && red) {
+            lv_label_set_text(s_b_ack_lbl, TXT_ACK);
+            lv_label_set_text(s_lc_ack_lbl, "ACKNOWLEDGE");
+            lv_label_set_text(ca->ack_lbl, "ACKNOWLEDGE");
+        }
     } else {
         lv_obj_set_style_bg_color(s_pill, COL_GREEN, 0);
         set_text(s_pill_lbl, COND_NAME[c]);
@@ -1478,7 +1543,7 @@ static void apply_alarm(const alarm_info_t *a)
     if (changed || !logged) {
         logged = true;
         lv_obj_invalidate(lv_scr_act());
-        if (c != ALARM_COND_GREEN) measure_start(NULL);   // then time the stripes
+        if (c != ALARM_COND_GREEN) measure_start(cl ? "CLAN alert, glow strips" : NULL);   // then time the motion
         else if (!lc && !cl) s_fm_full = true;   // LCARS and clan: their page change measures
         log_view(c);
     }
@@ -1772,6 +1837,16 @@ static void build_lcars_alert(void)
     lv_obj_add_event_cb(s_lc_ign_dev, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_DEVICE);
 }
 
+// The clan alert view's actions: ACKNOWLEDGE holds 2 s (the photo at the
+// press start), the ignores ask first, as on the other panels.
+static void build_clan_alert(void)
+{
+    const clan_alert_t *w = clan_alert();
+    hold_attach(&s_h_cl_ack, w->ack, w->ack_fill, cl_ack_done, ack_press_start_cb);
+    lv_obj_add_event_cb(w->ign_err, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_ERROR);
+    lv_obj_add_event_cb(w->ign_dev, ignore_ask_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)IGN_DEVICE);
+}
+
 static void build_ui(void)
 {
     lv_obj_t *scr = lv_scr_act();
@@ -1821,6 +1896,7 @@ static void build_ui(void)
     lcars_build(scr);                       // over the dashboard, hidden until chosen
     build_lcars_alert();
     clan_build(scr);                        // over both, hidden until chosen
+    build_clan_alert();
 
     // Running light: a dark track the full width, and the moving segment on
     // it. On the top layer, so a dialog cannot stop it. Green only.

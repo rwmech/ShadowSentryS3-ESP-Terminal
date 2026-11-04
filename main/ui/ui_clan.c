@@ -26,6 +26,8 @@
 #include "ignore.h"
 #include "router_trip.h"
 #include "settings.h"
+#include "wifi_manager.h"
+#include "esp_wifi.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -1057,6 +1059,384 @@ static void sweep_step(void)
     }
 }
 
+// â”€â”€ 02 BAIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// The traps (lcars_today()->trap), one row each, y 26 + i * 28 in the plate:
+// a red marker x 8, the name x 16..139, a meter x 144..263 (hits against the
+// busiest row), hits (14 px gold, right, x 268..303), the last hit's time
+// (dim, right, x 308..359), a separator under it.
+
+#define ROW_Y       26
+#define ROW_PITCH   28
+#define BT_BAR_X    144
+#define BT_BAR_W    120
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_bt_mk[LCARS_TRAPS], *s_bt_nm[LCARS_TRAPS], *s_bt_tr[LCARS_TRAPS];
+EXT_RAM_BSS_ATTR static lv_obj_t *s_bt_fill[LCARS_TRAPS], *s_bt_n[LCARS_TRAPS], *s_bt_w[LCARS_TRAPS];
+
+static lv_obj_t *meter(lv_obj_t *row, lv_coord_t x, lv_coord_t w, lv_obj_t **fill_out)
+{
+    lv_obj_t *tr = fill(row, x, 11, w, 5, C_TRACK);
+    lv_obj_t *f = *fill_out = fill(tr, 0, 0, 0, 5, C_RED);
+    lv_obj_set_style_bg_grad_color(f, lv_color_hex(C_REDHI), 0);
+    lv_obj_set_style_bg_grad_dir(f, LV_GRAD_DIR_HOR, 0);
+    return tr;
+}
+
+static lv_obj_t *list_row(lv_obj_t *pl, int i)
+{
+    lv_obj_t *r = area(pl, 0, (lv_coord_t)(ROW_Y + i * ROW_PITCH), 368, ROW_PITCH - 2);
+    fill(r, 8, ROW_PITCH - 3, 352, 1, C_SEP);
+    return r;
+}
+
+static lv_obj_t *list_plate(lv_obj_t *pg, const char *head)
+{
+    lv_obj_t *pl = plate(pg, 0, 0, MAIN_W, MAIN_H, false, true);
+    lv_obj_t *h = text(pl, F12, C_TXT, 8, 7, 0, head);
+    lv_obj_set_style_text_letter_space(h, UI_SS(1), 0);
+    return pl;
+}
+
+static void build_bait(lv_obj_t *pg)
+{
+    lv_obj_t *pl = list_plate(pg, "BAIT | HITS TODAY | LAST");
+    const lcars_today_t *td = lcars_today();
+    for (int i = 0; i < LCARS_TRAPS; i++) {
+        lv_obj_t *r = list_row(pl, i);
+        s_bt_mk[i] = fill(r, 8, 8, 3, 10, C_RED);
+        s_bt_nm[i] = text(r, F12, C_TXT, 16, 6, 124, td->trap[i].name);
+        s_bt_tr[i] = meter(r, BT_BAR_X, BT_BAR_W, &s_bt_fill[i]);
+        s_bt_n[i] = text(r, F14, C_GOLD, 268, 4, 36, "0");
+        lv_obj_set_style_text_align(s_bt_n[i], LV_TEXT_ALIGN_RIGHT, 0);
+        s_bt_w[i] = text(r, F12, C_DIM, 308, 7, 52, "-");
+        lv_obj_set_style_text_align(s_bt_w[i], LV_TEXT_ALIGN_RIGHT, 0);
+    }
+}
+
+static void bait_refresh(bool force)
+{
+    (void)force;
+    const lcars_today_t *td = lcars_today();
+    uint32_t max = 0;
+    for (int i = 0; i < LCARS_TRAPS; i++) if (td->trap[i].n > max) max = td->trap[i].n;
+    for (int i = 0; i < LCARS_TRAPS; i++) {
+        const lcars_hit_t *h = &td->trap[i];
+        char b[12];
+        lv_coord_t w = max ? (lv_coord_t)((uint64_t)UI_SW(BT_BAR_X, BT_BAR_W) * h->n / max) : 0;   // screen px
+        if (lv_obj_get_width(s_bt_fill[i]) != w) lv_obj_set_width(s_bt_fill[i], w);
+        snprintf(b, sizeof(b), "%lu", (unsigned long)h->n);
+        set_text(s_bt_n[i], b);
+        if (h->n && h->ts) fmt_hm(h->ts, b, sizeof(b)); else strlcpy(b, "-", sizeof(b));
+        set_text(s_bt_w[i], b);
+    }
+}
+
+// â”€â”€ 03 PERIMETER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// The tripwire cells (lcars_today()->wire, lcars_wire_state()), two columns
+// x 8 and 186, nine rows y 26 + row * 25: a 4 px state bar (red hit today,
+// gold armed, dark off), the name x 10..139 (dim when off) and the hits or
+// OFF x 140..169.
+
+#define PM_ROW_PITCH 25
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_pm_bar[LCARS_WIRES], *s_pm_nm[LCARS_WIRES], *s_pm_n[LCARS_WIRES];
+EXT_RAM_BSS_ATTR static uint8_t   s_pm_st[LCARS_WIRES];
+
+static void pm_part_rest(int i, int part)
+{
+    uint8_t st = s_pm_st[i];
+    if (!part) lv_obj_set_style_bg_color(s_pm_bar[i], lv_color_hex(st == LCARS_WS_HIT ? C_REDHI
+                                         : st == LCARS_WS_OFF ? C_SEGOFF : C_GOLD), 0);
+    else       lv_obj_set_style_text_color(s_pm_nm[i], lv_color_hex(st == LCARS_WS_OFF ? C_DIM : C_TXT), 0);
+}
+
+static void build_perim(lv_obj_t *pg)
+{
+    lv_obj_t *pl = list_plate(pg, "PERIMETER | ANY TOUCH ALERTS");
+    const lcars_today_t *td = lcars_today();
+    for (int i = 0; i < LCARS_WIRES; i++) {
+        lv_obj_t *c = area(pl, (lv_coord_t)(8 + (i % 2) * 178), (lv_coord_t)(ROW_Y + (i / 2) * PM_ROW_PITCH), 172, 22);
+        s_pm_bar[i] = fill(c, 0, 2, 4, 18, C_GOLD);
+        s_pm_nm[i] = text(c, F12, C_TXT, 10, 4, 130, td->wire[i].name);
+        s_pm_n[i] = text(c, F12, C_GOLD, 140, 4, 30, "0");
+        lv_obj_set_style_text_align(s_pm_n[i], LV_TEXT_ALIGN_RIGHT, 0);
+        s_pm_st[i] = LCARS_WS_ARMED;
+    }
+}
+
+static void perim_refresh(bool force)
+{
+    const lcars_today_t *td = lcars_today();
+    for (int i = 0; i < LCARS_WIRES; i++) {
+        uint8_t st = lcars_wire_state(i);
+        char b[12];
+        if (st != s_pm_st[i] || force) {
+            s_pm_st[i] = st;
+            if (!lcars_fx_busy(s_pm_bar[i])) pm_part_rest(i, 0);
+            if (!lcars_fx_busy(s_pm_nm[i]))  pm_part_rest(i, 1);
+            lv_obj_set_style_text_color(s_pm_n[i], lv_color_hex(st == LCARS_WS_OFF ? C_DIM : C_GOLD), 0);
+        }
+        if (st == LCARS_WS_OFF) strlcpy(b, "OFF", sizeof(b));
+        else snprintf(b, sizeof(b), "%lu", (unsigned long)td->wire[i].n);
+        set_text(s_pm_n[i], b);
+    }
+}
+
+// â”€â”€ 04 SYSTEMS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// Nine stat plates, 3 x 3 (x col * 124, y row * 88, 120 x 82): the key (12 px
+// dim) and the value (14 px cyan, two lines: the first " | " becomes the
+// line break, then cut with "..."). WI-FI, CLOCK and
+// SYSLOG are this page's own; the rest are LCARS NET's lines. The motion
+// senses NET's (items 0..8 values, 9..17 names, by NET line): NET_CELL maps
+// them here (CAMERA has no cell; SYSLOG no NET line).
+
+static const char *const SYS_KEY[9] = { "WI-FI", "UPTIME", "CLOCK", "PI-HOLE", "ROUTER", "IPFIX",
+                                        "SYSLOG", "MICROSD", "DISCORD" };
+static const int8_t NET_CELL[LCARS_NET_LINES] = { 0, 2, 1, 3, 4, 5, 7, -1, 8 };   // by NET line
+EXT_RAM_BSS_ATTR static lv_obj_t *s_sy_k[9], *s_sy_v[9];
+
+static void build_sys(lv_obj_t *pg)
+{
+    for (int i = 0; i < 9; i++) {
+        lv_obj_t *p = plate(pg, (lv_coord_t)((i % 3) * 124), (lv_coord_t)((i / 3) * 88), 120, 82, false, false);
+        s_sy_k[i] = text(p, F12, C_DIM, 8, 8, 0, SYS_KEY[i]);
+        lv_obj_set_style_text_letter_space(s_sy_k[i], UI_SS(1), 0);
+        s_sy_v[i] = text(p, F14, C_HOLO, 8, 28, 0, "-");
+        lv_label_set_long_mode(s_sy_v[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_size(s_sy_v[i], UI_SW(8, 104), UI_SH(28, 44));
+    }
+}
+
+// The value on two lines: the first " | " breaks it.
+static void sys_set(int cell, char *b)
+{
+    char *bar = strstr(b, " | ");
+    if (bar) { bar[0] = '\n'; memmove(bar + 1, bar + 3, strlen(bar + 3) + 1); }
+    set_text(s_sy_v[cell], b);
+}
+
+static void sys_refresh(bool force)
+{
+    (void)force;
+    char b[72];
+    wifi_ap_record_t ap;
+    if (wifi_manager_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+        snprintf(b, sizeof(b), "%d DBM | CH %u", (int)ap.rssi, (unsigned)ap.primary);
+    else strlcpy(b, "NOT CONNECTED", sizeof(b));
+    sys_set(0, b);
+    lcars_net_text(2, b, sizeof(b));
+    sys_set(1, b);
+    if (time(NULL) >= 1600000000) { char t[12]; fmt_hm((uint32_t)time(NULL), t, sizeof(t)); snprintf(b, sizeof(b), "NTP SET | %s", t); }
+    else strlcpy(b, "NOT SET", sizeof(b));
+    sys_set(2, b);
+    static const uint8_t NET_LINE[5] = { 3, 4, 5, 6, 8 };       // PI-HOLE, ROUTER, IPFIX, MICROSD, DISCORD
+    static const uint8_t CELL[5] = { 3, 4, 5, 7, 8 };
+    for (int k = 0; k < 5; k++) { lcars_net_text(NET_LINE[k], b, sizeof(b)); sys_set(CELL[k], b); }
+    router_trip_status_t r;
+    router_trip_get_status(&r);
+    snprintf(b, sizeof(b), "%s | %lu LINES", r.live ? "LIVE" : "NOT LIVE", (unsigned long)r.received);
+    sys_set(6, b);
+}
+
+// â”€â”€ 05 CONTACTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// The busiest LAN devices (lcars_talkers(), up to 8), rows as BAIT's: the
+// name (label, else "<vendor> device"), a meter of packets an hour on a log
+// scale (1 an hour 8 %, 60 an hour 50 %, 3600 full: LCARS DEV's), the rate
+// (gold) and Pi-hole's blocked share (dim, "-" without Pi-hole data).
+
+#define CT_ROWS     LCARS_TALK_MAX
+#define CT_BAR_X    140
+#define CT_BAR_W    110
+#define CT_RATE_FULL 3600
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_ct_row[CT_ROWS], *s_ct_nm[CT_ROWS], *s_ct_fill[CT_ROWS], *s_ct_n[CT_ROWS], *s_ct_w[CT_ROWS];
+EXT_RAM_BSS_ATTR static int       s_ct_rows;
+
+static void build_cont(lv_obj_t *pg)
+{
+    lv_obj_t *pl = list_plate(pg, "CONTACTS | BUSIEST FIRST");
+    for (int i = 0; i < CT_ROWS; i++) {
+        lv_obj_t *r = s_ct_row[i] = list_row(pl, i);
+        s_ct_nm[i] = text(r, F12, C_TXT, 8, 6, 128, "");
+        meter(r, CT_BAR_X, CT_BAR_W, &s_ct_fill[i]);
+        s_ct_n[i] = text(r, F12, C_GOLD, 254, 6, 52, "");
+        lv_obj_set_style_text_align(s_ct_n[i], LV_TEXT_ALIGN_RIGHT, 0);
+        s_ct_w[i] = text(r, F12, C_DIM, 310, 6, 50, "");
+        lv_obj_set_style_text_align(s_ct_w[i], LV_TEXT_ALIGN_RIGHT, 0);
+        show(r, false);
+    }
+}
+
+static void cont_refresh(bool force)
+{
+    (void)force;
+    s_ct_rows = lcars_talkers(CT_ROWS);
+    for (int i = 0; i < CT_ROWS; i++) {
+        const discovery_talker_t *t = lcars_talker(i);
+        if (!t) { show(s_ct_row[i], false); continue; }
+        char b[96];
+        if (t->label[0])       strlcpy(b, t->label, sizeof(b));
+        else if (t->vendor[0]) snprintf(b, sizeof(b), "%s device", t->vendor);
+        else                   strlcpy(b, "unknown device", sizeof(b));
+        lcars_upper(b);
+        lcars_fit(b, F12, UI_SX(128));
+        set_text(s_ct_nm[i], b);
+        uint32_t ph = t->per_hour > CT_RATE_FULL ? CT_RATE_FULL : t->per_hour;
+        int pct = (int)(100.0f * logf(1.0f + (float)ph) / logf(1.0f + CT_RATE_FULL) + 0.5f);
+        lv_coord_t w = (lv_coord_t)(UI_SW(CT_BAR_X, CT_BAR_W) * pct / 100);
+        if (lv_obj_get_width(s_ct_fill[i]) != w) lv_obj_set_width(s_ct_fill[i], w);
+        snprintf(b, sizeof(b), "%lu/H", (unsigned long)t->per_hour);
+        set_text(s_ct_n[i], b);
+        uint32_t tot, blk;
+        if (lcars_pihole_share(t->ip, t->mac, &tot, &blk)) snprintf(b, sizeof(b), "%lu %%", (unsigned long)(blk * 100 / tot));
+        else strlcpy(b, "-", sizeof(b));
+        set_text(s_ct_w[i], b);
+        show(s_ct_row[i], true);
+    }
+}
+
+// â”€â”€ 06 INFO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// The title and the SUBSYS screen's terminal lines (ui_subsys.h): a key (12 px
+// dim) over its value (12 px, cut with "..."), y 34 + i * 36.
+
+EXT_RAM_BSS_ATTR static lv_obj_t *s_in_head, *s_in_v[SUBSYS_LINES];
+
+static void build_info(lv_obj_t *pg)
+{
+    lv_obj_t *pl = plate(pg, 0, 0, MAIN_W, MAIN_H, false, true);
+    s_in_head = text(pl, F14, C_GOLD, 10, 8, 348, "");
+    for (int i = 0; i < SUBSYS_LINES; i++) {
+        lv_obj_t *k = text(pl, F12, C_DIM, 10, (lv_coord_t)(34 + i * 36), 0, subsys_key(i));
+        lv_obj_set_style_text_letter_space(k, UI_SS(1), 0);
+        s_in_v[i] = text(pl, F12, C_TXT, 10, (lv_coord_t)(49 + i * 36), 0, "");
+        lv_label_set_long_mode(s_in_v[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_in_v[i], UI_SW(10, 348));
+    }
+}
+
+static void info_refresh(bool force)
+{
+    (void)force;
+    char b[96];
+    snprintf(b, sizeof(b), "%s | SENTRY S3", s_title_txt);
+    set_text(s_in_head, b);
+    for (int i = 0; i < SUBSYS_LINES; i++) {
+        subsys_value(i, b, sizeof(b));
+        set_text(s_in_v[i], b);
+    }
+}
+
+// â”€â”€ Alert view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// Box coordinates (the box is x 4..475, y 58..315; nav and pages hidden):
+//   y   2..67   the threat banner, x 16..455, pointed ends: HOSTILE CONTACT
+//               (RED) or CAUTION (YELLOW), 28 px, letter space 4, in the
+//               condition's colour, a diamond in each corner
+//   y  76       code and name (20 px), y 104 the source (14 px gold), y 124
+//               the headline's detail (12 px dim), y 142 events, open for,
+//               the other codes seen (12 px dim): ui.c fills them
+//   y 196..247  RED: ACKNOWLEDGE (hold 2 s, gold fill) x 4, IGNORE ERROR
+//               x 160, IGNORE DEVICE x 316, 152 wide; YELLOW: the two
+//               ignores, 230 wide
+// Motion: the header's glow strips breathe (fast_cb), nothing else.
+
+#define AL_BTN_Y    196
+#define AL_BTN_H    52
+#define AL_TXT_X    4
+#define AL_TXT_W    464
+
+EXT_RAM_BSS_ATTR static clan_alert_t s_al;
+EXT_RAM_BSS_ATTR static shape_t  *s_threat_shp;
+EXT_RAM_BSS_ATTR static lv_obj_t *s_threat, *s_threat_lbl, *s_threat_dia[4];
+EXT_RAM_BSS_ATTR static icon_t   *s_threat_ic[4];
+
+static lv_obj_t *alert_btn(const char *t, bool danger, shape_t **sh, lv_obj_t **lbl)
+{
+    shape_t *s;
+    lv_obj_t *b = shape(s_alert_box, SH_HEX_H, 0, AL_BTN_Y, 152, AL_BTN_H, false, 10,
+                        danger ? C_RED : C_BTN1, danger ? 0x6b0d10 : C_BTN2, danger ? C_GLOW : C_EDGE, &s);
+    shape_clickable(b, s, NULL, NULL);
+    lv_obj_t *l = text(b, F14, C_TXT, 0, 0, 0, t);
+    lv_obj_center(l);
+    if (lbl) *lbl = l;
+    if (sh) *sh = s;
+    show(b, false);
+    return b;
+}
+
+static lv_obj_t *alert_label(const lv_font_t *f, uint32_t c, lv_coord_t y)
+{
+    lv_obj_t *l = text(s_alert_box, f, c, AL_TXT_X, y, AL_TXT_W, "");
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    return l;
+}
+
+static void build_alert(void)
+{
+    s_threat = shape(s_alert_box, SH_HEX_H, 16, 2, 440, 66, false, 18, 0x4a0b0d, 0x2a0607, C_REDHI, &s_threat_shp);
+    s_threat_shp->edge_w = UI_SS(2);
+    s_threat_lbl = text(s_threat, F28, C_REDHI, 0, 0, 0, "HOSTILE CONTACT");
+    lv_obj_set_style_text_letter_space(s_threat_lbl, UI_SS(4), 0);
+    lv_obj_center(s_threat_lbl);
+    static const int16_t D[4][2] = { { 24, 12 }, { 406, 12 }, { 24, 44 }, { 406, 44 } };
+    for (int k = 0; k < 4; k++) {
+        s_threat_ic[k] = icon_new(IC_DIA, C_REDHI);
+        s_threat_dia[k] = icon_obj(s_threat, s_threat_ic[k], D[k][0], D[k][1], 10);
+    }
+    s_al.code = alert_label(F20, C_TXT, 76);
+    s_al.src  = alert_label(F14, C_GOLD, 104);
+    s_al.head = alert_label(F12, C_DIM, 124);
+    s_al.stat = alert_label(F12, C_DIM, 142);
+    shape_t *as;
+    s_al.ack = alert_btn("ACKNOWLEDGE", true, &as, &s_al.ack_lbl);
+    s_al.ack_fill = area_px(s_al.ack, 0, 0, 0, UI_SH(AL_BTN_Y, AL_BTN_H));
+    as->fill = s_al.ack_fill;                   // the shape draws the hold's progress
+    as->fill_col = C_GOLD;
+    s_al.ign_err = alert_btn("IGNORE ERROR", false, NULL, NULL);
+    s_al.ign_dev = alert_btn("IGNORE DEVICE", false, NULL, NULL);
+}
+
+static void al_place(lv_obj_t *o, lv_coord_t x, lv_coord_t w)
+{
+    lv_obj_set_pos(o, UI_SX(x), UI_SY(AL_BTN_Y));
+    lv_obj_set_size(o, UI_SW(x, w), UI_SH(AL_BTN_Y, AL_BTN_H));
+    show(o, true);
+}
+
+const clan_alert_t *clan_alert(void) { return &s_al; }
+
+lv_coord_t clan_alert_text_w(void) { return UI_SW(AL_TXT_X, AL_TXT_W); }
+
+lv_coord_t clan_alert_layout(alarm_cond_t c, bool dev)
+{
+    bool red = c == ALARM_COND_RED;
+    uint32_t col = red ? C_REDHI : C_AMBER;
+    s_threat_shp->edge = col;
+    s_threat_shp->top = red ? 0x4a0b0d : 0x3a2c0a;
+    s_threat_shp->bot = red ? 0x2a0607 : 0x1f1705;
+    lv_obj_invalidate(s_threat);
+    lv_obj_set_style_text_color(s_threat_lbl, lv_color_hex(col), 0);
+    set_text(s_threat_lbl, red ? "HOSTILE CONTACT" : "CAUTION");
+    lv_obj_center(s_threat_lbl);
+    for (int k = 0; k < 4; k++) icon_set(s_threat_dia[k], s_threat_ic[k], IC_DIA, col);
+    if (red) {
+        al_place(s_al.ack, 4, 152);
+        al_place(s_al.ign_err, 160, 152);
+        al_place(s_al.ign_dev, 316, 152);
+    } else {
+        show(s_al.ack, false);
+        al_place(s_al.ign_err, 4, 230);
+        al_place(s_al.ign_dev, 238, 230);
+    }
+    show(s_al.ign_dev, dev);
+    return (lv_coord_t)(UI_SY(MAIN_Y) + UI_SY(AL_BTN_Y));
+}
+
 // ── Motion: the items on the clan pages ───────────────────────────────────────
 
 static lv_obj_t *fx_obj_cb(int it, uint8_t *part)
@@ -1066,6 +1446,28 @@ static lv_obj_t *fx_obj_cb(int it, uint8_t *part)
     case CP_TAC:
         *part = LCARS_FX_BG;
         return it >= 0 && it < s_nstrip ? s_strip[it] : NULL;
+    case CP_BAIT: {                             // row * 4 + part: marker, name, bar fill, bar track
+        int r = it / 4, k = it % 4;
+        if (it < 0 || r >= LCARS_TRAPS) return NULL;
+        if (k == 1) return s_bt_nm[r];
+        *part = LCARS_FX_BG;
+        if (k == 0) return s_bt_mk[r];
+        if (k == 2) return lv_obj_get_width(s_bt_fill[r]) > 0 ? s_bt_fill[r] : NULL;
+        return s_bt_tr[r];
+    }
+    case CP_PERIM: {                            // cell * 2 + part: bar, name
+        int c = it / 2;
+        if (it < 0 || c >= LCARS_WIRES) return NULL;
+        if (!(it & 1)) { *part = LCARS_FX_BG; return s_pm_bar[c]; }
+        return s_pm_nm[c];
+    }
+    case CP_SYS: {                              // NET lines: 0..8 values, 9..17 names
+        int line = it < LCARS_NET_LINES ? it : it - LCARS_NET_LINES;
+        if (it < 0 || line >= LCARS_NET_LINES || NET_CELL[line] < 0) return NULL;
+        return it < LCARS_NET_LINES ? s_sy_v[NET_CELL[line]] : s_sy_k[NET_CELL[line]];
+    }
+    case CP_CONT:
+        return it >= 0 && it < s_ct_rows && it < CT_ROWS ? s_ct_nm[it] : NULL;
     default:
         return NULL;
     }
@@ -1075,6 +1477,24 @@ static void fx_rest_cb(int it)
 {
     switch (s_cur) {
     case CP_TAC: if (it >= 0 && it < s_nstrip) strip_rest(it); break;
+    case CP_BAIT: {
+        int r = it / 4, k = it % 4;
+        if (it < 0 || r >= LCARS_TRAPS) break;
+        if (k == 0)      lv_obj_set_style_bg_color(s_bt_mk[r], lv_color_hex(C_RED), 0);
+        else if (k == 1) lv_obj_set_style_text_color(s_bt_nm[r], lv_color_hex(C_TXT), 0);
+        else if (k == 2) lv_obj_set_style_bg_color(s_bt_fill[r], lv_color_hex(C_RED), 0);
+        else             lv_obj_set_style_bg_color(s_bt_tr[r], lv_color_hex(C_TRACK), 0);
+        break;
+    }
+    case CP_PERIM: if (it >= 0 && it / 2 < LCARS_WIRES) pm_part_rest(it / 2, it & 1); break;
+    case CP_SYS: {
+        int line = it < LCARS_NET_LINES ? it : it - LCARS_NET_LINES;
+        if (it < 0 || line >= LCARS_NET_LINES || NET_CELL[line] < 0) break;
+        if (it < LCARS_NET_LINES) lv_obj_set_style_text_color(s_sy_v[NET_CELL[line]], lv_color_hex(C_HOLO), 0);
+        else                      lv_obj_set_style_text_color(s_sy_k[NET_CELL[line]], lv_color_hex(C_DIM), 0);
+        break;
+    }
+    case CP_CONT: if (it >= 0 && it < CT_ROWS) lv_obj_set_style_text_color(s_ct_nm[it], lv_color_hex(C_TXT), 0); break;
     default: break;
     }
 }
@@ -1084,8 +1504,12 @@ static void fx_rest_cb(int it)
 static void page_refresh(bool force)
 {
     switch (s_cur) {
-    case CP_TAC: tac_refresh(force); break;
-    default: break;
+    case CP_TAC:   tac_refresh(force);   break;
+    case CP_BAIT:  bait_refresh(force);  break;
+    case CP_PERIM: perim_refresh(force); break;
+    case CP_SYS:   sys_refresh(force);   break;
+    case CP_CONT:  cont_refresh(force);  break;
+    default:       info_refresh(force);  break;
     }
 }
 
@@ -1157,7 +1581,13 @@ void clan_build(lv_obj_t *scr)
         show(s_page[i], false);
     }
     build_tac(s_page[CP_TAC]);
+    build_bait(s_page[CP_BAIT]);
+    build_perim(s_page[CP_PERIM]);
+    build_sys(s_page[CP_SYS]);
+    build_cont(s_page[CP_CONT]);
+    build_info(s_page[CP_INFO]);
     s_alert_box = area(s_root, 4, MAIN_Y, 472, MAIN_H);
+    build_alert();
     show(s_alert_box, false);
     show(s_root, false);
     lv_timer_create(fast_cb, SWEEP_MS, NULL);

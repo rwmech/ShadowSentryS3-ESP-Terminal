@@ -88,6 +88,28 @@ CHECKS = [
     ("cl side k", "PI-HOLE BLOCKED", 12, 124, 0), ("cl side k", "PORTS WATCHED", 12, 124, 0),
     ("cl events", "EVENTS / ALERTS", 12, 340, 1),
     ("cl event", "40-02 RDP TRIPWIRE | 192.168.100.118 | 12:58 PM", 12, 340, 0),
+    # BAIT (name x 16..139, hits x 268..303, last x 308..359), PERIMETER cells
+    # (name x 10..135, hits x 136..169), SYSTEMS (key and value 104 wide),
+    # CONTACTS (name 128, rate 52, share 50), INFO
+    ("cl list head", "PERIMETER | ANY TOUCH ALERTS", 12, 352, 1),
+    ("cl bait", "CAMERA RTSP 554", 12, 124, 0), ("cl bait", "SHELL SESSIONS", 12, 124, 0),
+    ("cl bait", "TELNET 23 2323", 12, 124, 0), ("cl bait n", "999", 14, 36, 0), ("cl bait last", "12:58 PM", 12, 52, 0),
+    ("cl wire", "ROUTEROS API 8728", 12, 130, 0), ("cl wire", "ROUTER LOGIN FAIL", 12, 130, 0),
+    ("cl wire", "MAC-TELNET 20561", 12, 130, 0), ("cl wire n", "OFF", 12, 30, 0),
+    ("cl sys key", "MICROSD", 12, 104, 1), ("cl sys key", "DISCORD", 12, 104, 1),
+    ("cl sys v", "-48 DBM", 14, 104, 0), ("cl sys v", "CH 11", 14, 104, 0), ("cl sys v", "NTP SET", 14, 104, 0),
+    ("cl sys v", "12:58 PM", 14, 104, 0), ("cl sys v", "2 D 04 H 12 M", 14, 104, 0), ("cl sys v", "4.2 GB FREE", 14, 104, 0),
+    ("cl cont", "GOOGLE NEST HUB", 12, 128, 0), ("cl cont n", "4410/H", 12, 52, 0), ("cl cont w", "100 %", 12, 50, 0),
+    ("cl info", "YAIM VIRD | SENTRY S3", 14, 348, 0),
+    ("cl info", "ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL", 12, 348, 0),
+    # The alert view: banner (440 less its points), lines 464, buttons 152 (230 on YELLOW) less the
+    # points at mid-height (10 px cut, 52 px tall: 136 for the 14 px line)
+    ("cl threat", "HOSTILE CONTACT", 28, 400, 4), ("cl threat", "CAUTION", 28, 400, 4),
+    ("cl alert code", "CODE 30-01 WEB LOGIN ATTEMPT", 20, 464, 0),
+    ("cl alert src", "192.168.0.75 | DELL INC. | DELL LAPTOP", 14, 464, 0),
+    ("cl alert stat", "12 EVENTS | OPEN 12:34 | ALSO 17-03 PROBE", 12, 464, 0),
+    ("cl alert btn", "ACKNOWLEDGE", 14, 136, 0), ("cl alert btn", "IGNORE DEVICE", 14, 136, 0),
+    ("cl alert btn", "ACKNOWLEDGED", 14, 136, 0),
 ]
 
 def parse_args(argv):
