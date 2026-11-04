@@ -1,6 +1,7 @@
 // Camera routes on the admin port. See api_cam.h.
 
 #include "api_cam.h"
+#include "board.h"
 #include "cam.h"
 #include "lwip/sockets.h"
 #include <stdio.h>
@@ -57,10 +58,12 @@ static void get_meta(int sock)
     cam_last_meta(&m);
     // action is [a-z0-9_-] and file is built from it and digits (cam.c), so
     // neither needs JSON escaping.
+    // fitted: the board can have a camera at all (board.h); camera: one answered.
     char body[256];
     int n = snprintf(body, sizeof(body),
-        "{\"camera\":%s,\"seq\":%lu,\"ts\":%lu,\"action\":\"%s\",\"file\":\"%s\","
+        "{\"fitted\":%s,\"camera\":%s,\"seq\":%lu,\"ts\":%lu,\"action\":\"%s\",\"file\":\"%s\","
         "\"size\":%lu,\"width\":%u,\"height\":%u}",
+        BOARD_HAS_CAMERA ? "true" : "false",
         cam_ready() ? "true" : "false", (unsigned long)m.seq, (unsigned long)m.ts,
         m.action, m.file, (unsigned long)m.size, (unsigned)m.width, (unsigned)m.height);
     if (n <= 0 || n >= (int)sizeof(body)) return;

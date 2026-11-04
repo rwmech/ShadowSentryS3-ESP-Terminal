@@ -737,6 +737,7 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       try{
         const r=await fetch('/api/snap/last.json',{cache:'no-store'});if(!r.ok)throw 0;
         const d=await r.json();
+        if(d.fitted===false){g('snap-card').hidden=true;return;}   // a board without a camera
         if(!d.seq){
           g('snap-link').hidden=true;
           g('snap-what').textContent=d.camera?'No panel press captured since boot':'Camera not detected';
@@ -910,19 +911,20 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
       <label for="st-clk">Panel clock</label><select id="st-clk"><option value="12">12-hour (3:39 PM)</option><option value="24">24-hour (15:39)</option></select>
-      <label for="st-pstyle">Panel style</label><select id="st-pstyle"><option value="1">LCARS (pages)</option><option value="0">Dashboard</option></select>
+      <label for="st-pstyle" data-needs="panel_dashboard">Panel style</label><select id="st-pstyle" data-needs="panel_dashboard"><option value="1">LCARS (pages)</option><option value="0">Dashboard</option></select>
       <label for="st-rot">Page rotation (s)</label><input type="number" id="st-rot" min="10" max="600" step="1">
       <h4>Alarm</h4>
       <label for="st-rem">Reminder interval (s)</label><input type="number" id="st-rem" min="60" max="3600" step="1">
       <label for="st-quiet">Quiet time (s)</label><input type="number" id="st-quiet" min="60" max="86400" step="1">
       <div class="hint">Silence that closes an acknowledged incident.</div>
       <h4>Panel and sounds</h4>
-      <label for="st-br">Brightness</label><div class="ctl"><input type="range" id="st-br" min="5" max="100" oninput="$('st-brv').textContent=this.value+' %'"><span id="st-brv" class="muted"></span></div>
-      <label for="st-snd">Alarm sound</label><input type="checkbox" id="st-snd">
-      <label for="st-chirp">Boot sound</label><input type="checkbox" id="st-chirp">
-      <label for="st-click">Touch click</label><input type="checkbox" id="st-click">
-      <label for="st-uivol">UI sound volume</label><select id="st-uivol"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
-      <label for="st-alvol">Alarm volume</label><select id="st-alvol"><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
+      <label for="st-br" data-needs="backlight_dim">Brightness</label><div class="ctl" data-needs="backlight_dim"><input type="range" id="st-br" min="5" max="100" oninput="$('st-brv').textContent=this.value+' %'"><span id="st-brv" class="muted"></span></div>
+      <label for="st-snd" data-needs="buzzer">Alarm sound</label><input type="checkbox" id="st-snd" data-needs="buzzer">
+      <label for="st-chirp" data-needs="buzzer">Boot sound</label><input type="checkbox" id="st-chirp" data-needs="buzzer">
+      <label for="st-click" data-needs="buzzer">Touch click</label><input type="checkbox" id="st-click" data-needs="buzzer">
+      <label for="st-uivol" data-needs="buzzer">UI sound volume</label><select id="st-uivol" data-needs="buzzer"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
+      <label for="st-alvol" data-needs="buzzer">Alarm volume</label><select id="st-alvol" data-needs="buzzer"><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select>
+      <div class="hint" id="st-board" hidden></div>
       <h4>Alert on</h4>
       <div class="alerts" id="st-alerts"></div>
       <div class="hint" style="grid-column:1/-1">Ticked types open an incident (siren, panel, Telegram, Discord). Every event is logged either way.</div>
@@ -938,9 +940,9 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <div></div>
       <div class="ctl" style="margin-top:10px">
         <button class="btn" type="submit">Save</button>
-        <button class="btn" type="button" onclick="testBuzzer()">Test buzzer</button>
-        <select id="st-snd-pick" aria-label="Sound to play"><option value="tap">Tap</option><option value="commit">Commit</option><option value="cancel">Cancel</option><option value="ack">Acknowledge</option><option value="boot">Boot beeps</option><option value="yellow">Yellow alert</option><option value="klaxon">Red alert klaxon</option></select>
-        <button class="btn" type="button" onclick="playSound()">Play</button>
+        <button class="btn" type="button" onclick="testBuzzer()" data-needs="buzzer">Test buzzer</button>
+        <select id="st-snd-pick" aria-label="Sound to play" data-needs="buzzer"><option value="tap">Tap</option><option value="commit">Commit</option><option value="cancel">Cancel</option><option value="ack">Acknowledge</option><option value="boot">Boot beeps</option><option value="yellow">Yellow alert</option><option value="klaxon">Red alert klaxon</option></select>
+        <button class="btn" type="button" onclick="playSound()" data-needs="buzzer">Play</button>
         <button class="btn btn-red" type="button" onclick="rebootDev()">Reboot</button>
       </div>
     </form>
@@ -2210,6 +2212,9 @@ async function loadSettings(){
   const m=$('st-msg');m.className='msg ok';m.replaceChildren(spinner('Loading the settings...'));
   try{
     const r=await fetch('/api/settings');if(!r.ok)throw 0;const s=await r.json();_stLast=s;
+    // The board's features (firmware's "board"): what it lacks is hidden. Older firmware sends none: all shown.
+    const bd=s.board||{};document.querySelectorAll('[data-needs]').forEach(e=>{e.hidden=bd[e.dataset.needs]===false;});
+    const bn=$('st-board');if(bd.name){const miss=[bd.buzzer===false?'no buzzer':'',bd.camera===false?'no camera':'',bd.backlight_dim===false?'backlight on or off only':''].filter(Boolean);bn.textContent='Board: '+bd.name+(bd.lcd?', '+bd.lcd:'')+(miss.length?' ('+miss.join(', ')+')':'');bn.hidden=false;}
     $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';$('st-pstyle').value=String(s.panel_style===0?0:1);$('st-rot').value=s.panel_rotate_s||30;
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
