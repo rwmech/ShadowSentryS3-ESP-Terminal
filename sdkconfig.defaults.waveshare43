@@ -1,0 +1,24 @@
+# Waveshare ESP32-S3-Touch-LCD-4.3B (BOARD_WAVESHARE43), applied on top of
+# sdkconfig.defaults by the waveshare43 envs (platformio.ini, cmake_extra_args)
+# or by hand: idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build
+# After a change here, delete sdkconfig.waveshare43, sdkconfig.waveshare43_ota and
+# .pio\build\waveshare43* (PlatformIO only watches sdkconfig.defaults).
+#
+# From Waveshare's 4.3B demo (ESP-IDF 08_lvgl_Porting and 03_SD_Test sdkconfig.defaults):
+# instructions and read-only data run from PSRAM, so a flash write (SPIFFS, NVS,
+# OTA) no longer disables the cache and the RGB panel's bounce buffers keep
+# filling from the PSRAM frame buffers (the screen-drift fix in Espressif's FAQ).
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+# The 4.3B's UART0 (GPIO 43/44) is wired to the RS-485 transceiver: the console
+# goes to the chip's own USB-Serial/JTAG, the one USB-C port (the demo's choice).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# The scaled LCARS layout's fonts (main/ui/ui_scale.h: grid 12, 14, 20, 28 px on
+# 800 x 480 are 18, 20, 30, 42); the CrowPanel's sizes stay on (the dashboard
+# panel code is built on every board, flash only).
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_30=y
+CONFIG_LV_FONT_MONTSERRAT_42=y
+# Not in the demo: if the DMA ever falls behind the panel, restart it at the next
+# VSYNC instead of leaving the picture shifted.
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y

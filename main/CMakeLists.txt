@@ -95,6 +95,7 @@ idf_component_register(
         "alarm/buzzer.c"
         "alarm/describe.c"
         "ui/display.cpp"
+        "ui/display_waveshare43.c"
         "ui/ui.c"
         "ui/ui_lcars.c"
         "ui/lv_mem_psram.c"
@@ -177,6 +178,7 @@ idf_component_register(
 
         # Front panel and buzzer (LVGL + LovyanGFX come from idf_component.yml)
         driver              # LEDC (buzzer), I2C (touch), GPIO (backlight)
+        esp_lcd             # RGB panel (ui/display_waveshare43.c, Waveshare 4.3B)
 
         # OTA
         app_update          # esp_ota_* — POST /api/ota, rollback confirmation

@@ -14,6 +14,8 @@ managed_components/
 .pio/
 sdkconfig.crowpanel35
 sdkconfig.crowpanel35_ota
+sdkconfig.waveshare43
+sdkconfig.waveshare43_ota
 tools/ota_password
 tools/__pycache__/
 main/gz/

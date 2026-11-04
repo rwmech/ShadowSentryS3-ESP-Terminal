@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "board.h"
 #include "esp_attr.h"
 #include "display.h"
 #include "alarm.h"
@@ -203,6 +204,12 @@ EXT_RAM_BSS_ATTR static const char *s_fm_what;           // what is measured: NU
 
 // Panel style (settings panel_style): true LCARS (ui_lcars.c), false the dashboard
 EXT_RAM_BSS_ATTR static bool       s_style_lc;
+// A board without the dashboard (board.h, a screen other than 480 x 320) is LCARS only.
+#if BOARD_PANEL_DASHBOARD
+#define STYLE_LCARS()   (settings_get()->panel_style == 1)
+#else
+#define STYLE_LCARS()   true
+#endif
 static lv_coord_t s_btn_y = 320;        // top of the shown button row (the face light stops above it)
 EXT_RAM_BSS_ATTR static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
 
@@ -1375,7 +1382,7 @@ static void apply_alarm(const alarm_info_t *a)
     alarm_cond_t was = cond_of(&s_alarm), c = cond_of(a);
     // Count updates (up to 1/s during a scan) must not reset the button label
     // or the fill mid-press: those go back to their start only on a change.
-    bool lc = settings_get()->panel_style == 1;
+    bool lc = STYLE_LCARS();
     bool changed = c != was || a->id != s_alarm.id || lc != s_style_lc;
     s_style_lc = lc;
     s_alarm = *a;
@@ -1486,7 +1493,7 @@ static void clock_cb(lv_timer_t *t)
     if (a.state != s_alarm.state || a.id != s_alarm.id) {
         ESP_LOGW(TAG, "Alarm state ahead of the UI queue (message dropped or late), applying it now");
         apply_alarm(&a);
-    } else if ((settings_get()->panel_style == 1) != s_style_lc) {
+    } else if (STYLE_LCARS() != s_style_lc) {
         ESP_LOGI(TAG, "Panel style now %s", s_style_lc ? "dashboard" : "LCARS");
         apply_alarm(&a);                    // live: both panels are built
     }
