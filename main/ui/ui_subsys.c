@@ -12,6 +12,7 @@
 //               buttons w 58, 4 px apart (dark red, red text), to x 471
 
 #include "ui_subsys.h"
+#include "ui_scale.h"
 #include "ui_logo.h"
 #include "board.h"
 #include "config.h"
@@ -36,9 +37,11 @@ static const char *TAG = "SUBSYS";
 #define SS_RED      0xe8261c
 #define SS_DARK     0x7a1410
 #define SS_HI       0xff6a5e
-#define F12         (&lv_font_montserrat_12)
-#define F14         (&lv_font_montserrat_14)
-#define F28         (&lv_font_montserrat_28)
+// The 480 x 320 grid's fonts and coordinates, placed through ui_scale.h;
+// measured text widths are screen pixels.
+#define F12         UI_F12
+#define F14         UI_F14
+#define F28         UI_F28
 
 #define LOGO_X      12
 #define LOGO_Y      24
@@ -78,21 +81,22 @@ static void set_text(lv_obj_t *l, const char *t)
     if (!o || strcmp(o, t)) lv_label_set_text(l, t);
 }
 
+// A box at grid x, y, w, h.
 static lv_obj_t *fill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, uint32_t c)
 {
     lv_obj_t *o = lv_obj_create(p);
     lv_obj_remove_style_all(o);
-    lv_obj_set_pos(o, x, y);
-    lv_obj_set_size(o, w, h);
+    lv_obj_set_pos(o, UI_SX(x), UI_SY(y));
+    lv_obj_set_size(o, UI_SW(x, w), UI_SH(y, h));
     lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(o, lv_color_hex(c), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     return o;
 }
 
-// A label; w > 0 cuts it at w px with "...".
-static lv_obj_t *text(lv_obj_t *p, const lv_font_t *f, uint32_t c, lv_coord_t ls,
-                      lv_coord_t x, lv_coord_t y, lv_coord_t w, const char *t)
+// A label in screen px, letter space ls (screen px); w > 0 cuts it at w px with "...".
+static lv_obj_t *text_px(lv_obj_t *p, const lv_font_t *f, uint32_t c, lv_coord_t ls,
+                         lv_coord_t x, lv_coord_t y, lv_coord_t w, const char *t)
 {
     lv_obj_t *l = lv_label_create(p);
     lv_obj_set_style_text_font(l, f, 0);
@@ -105,6 +109,13 @@ static lv_obj_t *text(lv_obj_t *p, const lv_font_t *f, uint32_t c, lv_coord_t ls
     }
     lv_obj_set_pos(l, x, y);
     return l;
+}
+
+// The same at grid x, y, width w, letter space ls.
+static lv_obj_t *text(lv_obj_t *p, const lv_font_t *f, uint32_t c, lv_coord_t ls,
+                      lv_coord_t x, lv_coord_t y, lv_coord_t w, const char *t)
+{
+    return text_px(p, f, c, UI_SS(ls), UI_SX(x), UI_SY(y), w > 0 ? UI_SW(x, w) : 0, t);
 }
 
 static void build_hash(char *b, size_t len)
@@ -165,9 +176,10 @@ static void values_update(void)
     set_text(s_id, id);
     // The cursor follows the last line's text.
     const char *t = lv_label_get_text(s_val[TERM_N - 1]);
-    lv_coord_t x = s_val_x[TERM_N - 1] + lv_txt_get_width(t, (uint32_t)strlen(t), F12, TERM_LS, LV_TEXT_FLAG_NONE) + TERM_LS;
+    const lv_coord_t ls = UI_SS(TERM_LS);                        // screen px from here
+    lv_coord_t x = s_val_x[TERM_N - 1] + lv_txt_get_width(t, (uint32_t)strlen(t), F12, ls, LV_TEXT_FLAG_NONE) + ls;
     lv_coord_t cw = lv_txt_get_width("_", 1, F12, 0, LV_TEXT_FLAG_NONE);
-    if (x > TERM_X + TERM_W - cw) x = TERM_X + TERM_W - cw;
+    if (x > UI_SX(TERM_X + TERM_W) - cw) x = UI_SX(TERM_X + TERM_W) - cw;
     lv_obj_set_x(s_cursor, x);
 }
 
@@ -184,7 +196,7 @@ static void logo_set(void)
     if (!d) return;
     lv_img_set_src(s_logo, d);
     lv_coord_t m = d->header.w > d->header.h ? d->header.w : d->header.h;
-    lv_img_set_zoom(s_logo, (uint16_t)(LV_IMG_ZOOM_NONE * LOGO_PX / m));
+    lv_img_set_zoom(s_logo, (uint16_t)(LV_IMG_ZOOM_NONE * UI_SS(LOGO_PX) / m));
     lv_obj_center(s_logo);
 }
 
@@ -218,6 +230,7 @@ void subsys_build(lv_obj_t *root, void (*back)(void))
     text(bar, F12, SS_RED, 1, 8, 0, 0, "SHADOWSENTRY | LOCAL SUBSYSTEM CTL");
 
     lv_obj_t *la = fill(s_box, LOGO_X, LOGO_Y, LOGO_PX, LOGO_PX, 0x000000);
+    lv_obj_set_size(la, UI_SS(LOGO_PX), UI_SS(LOGO_PX));       // square on any screen
     lv_obj_set_style_bg_opa(la, LV_OPA_TRANSP, 0);
     s_logo = lv_img_create(la);
     // In the screen's red: a recolour that keeps some of the logo's own shading.
@@ -231,15 +244,16 @@ void subsys_build(lv_obj_t *root, void (*back)(void))
     for (int i = 0; i < TERM_N; i++) {
         lv_coord_t y = TERM_Y + i * TERM_PITCH;
         text(s_box, F12, SS_HI, TERM_LS, TERM_X, y, 0, KEY[i]);
-        lv_coord_t kw = lv_txt_get_width(KEY[i], (uint32_t)strlen(KEY[i]), F12, TERM_LS, LV_TEXT_FLAG_NONE) + TERM_LS;
-        s_val_x[i] = TERM_X + kw;
-        s_val[i] = text(s_box, F12, SS_RED, TERM_LS, s_val_x[i], y, TERM_W - kw, "");
+        const lv_coord_t ls = UI_SS(TERM_LS);                    // screen px: the key as drawn
+        lv_coord_t kw = lv_txt_get_width(KEY[i], (uint32_t)strlen(KEY[i]), F12, ls, LV_TEXT_FLAG_NONE) + ls;
+        s_val_x[i] = UI_SX(TERM_X) + kw;
+        s_val[i] = text_px(s_box, F12, SS_RED, ls, s_val_x[i], UI_SY(y), UI_SX(TERM_X + TERM_W) - s_val_x[i], "");
     }
     s_cursor = text(s_box, F12, SS_HI, 0, TERM_X, TERM_Y + (TERM_N - 1) * TERM_PITCH, 0, "_");
 
     lv_obj_t *ret = fill(s_box, 8, BTN_Y, BTN_RET_W, BTN_H, SS_RED);
     lv_obj_add_flag(ret, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(ret, 6);             // an 18 px row: a little more to aim at
+    lv_obj_set_ext_click_area(ret, UI_SS(6));      // an 18 px row: a little more to aim at
     lv_obj_add_event_cb(ret, return_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *l = text(ret, F12, 0x000000, 0, 0, 0, 0, "RETURN");
     lv_obj_center(l);

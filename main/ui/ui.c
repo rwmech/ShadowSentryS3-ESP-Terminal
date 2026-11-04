@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "board.h"
+#include "ui_scale.h"           // the LCARS alert view is on the 480 x 320 grid
 #include "esp_attr.h"
 #include "display.h"
 #include "alarm.h"
@@ -168,6 +169,7 @@ typedef struct {
     lv_color_t col;
     lv_coord_t n, pitch, stripe_h, yt, yb, top, foot;
     lv_coord_t area_y, area_h, hw_max;          // the upper area; the lower mirrors it
+    lv_coord_t pad;                             // a stripe's clearance inside the chevron, each side
     uint32_t   roll_ms;
     int32_t    off;                             // offset last applied, -1 none
 } emblem_t;
@@ -210,7 +212,7 @@ EXT_RAM_BSS_ATTR static bool       s_style_lc;
 #else
 #define STYLE_LCARS()   true
 #endif
-static lv_coord_t s_btn_y = 320;        // top of the shown button row (the face light stops above it)
+static lv_coord_t s_btn_y = BOARD_LCD_VRES;   // top of the shown button row (the face light stops above it)
 EXT_RAM_BSS_ATTR static uint32_t   s_loop_max_us, s_loop_max_prev;   // slowest lv_timer_handler(), this and last second
 
 // ── Listeners (run on other tasks: copy and queue only) ───────────────────────
@@ -555,18 +557,19 @@ static const emblem_spec_t EMB_YELLOW = {
 // The LCARS alert view's emblems: the YELLOW geometry at h 112 in the 400 px
 // content box, no side bars; only the stripes move.
 #define LC_EMB_H 112
+// On the 480 x 320 grid: build_emblem() scales them (ui_scale.h).
 static const emblem_spec_t EMB_LC_RED = {
     .w = LCARS_CONTENT_W, .h = LC_EMB_H, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
     .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
     .title_dy = -8, .cond_dy = 14, .title_ls = 2,
-    .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
+    .f_title = UI_F28, .f_cond = UI_F14,
     .cond = "CONDITION: RED", .col_hex = 0xe00000, .roll_ms = EMB_ROLL_RED_MS,
 };
 static const emblem_spec_t EMB_LC_YELLOW = {
     .w = LCARS_CONTENT_W, .h = LC_EMB_H, .bar_h = 10, .foot = 112, .top = 52, .lw = 6,
     .stripe_h = 4, .stripe_gap = 3, .stripes = 3,
     .title_dy = -8, .cond_dy = 14, .title_ls = 2,
-    .f_title = &lv_font_montserrat_28, .f_cond = &lv_font_montserrat_14,
+    .f_title = UI_F28, .f_cond = UI_F14,
     .cond = "CONDITION: YELLOW", .col_hex = 0xf0b000, .roll_ms = EMB_ROLL_YELLOW_MS,
 };
 
@@ -585,7 +588,7 @@ static lv_obj_t *emb_pill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w,
 // The upper chevron's usable half-width at emblem y (its mirror below).
 static int32_t emb_hw(const emblem_t *e, int32_t y)
 {
-    return e->top + (int32_t)(e->foot - e->top) * (y - e->yt) / (e->yb - e->yt) - 12;
+    return e->top + (int32_t)(e->foot - e->top) * (y - e->yt) / (e->yb - e->yt) - e->pad;
 }
 
 static void emb_roll(emblem_t *e, uint32_t now)
@@ -620,8 +623,28 @@ static void roll_cb(lv_timer_t *t)
 }
 
 static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv_coord_t y,
-                         const emblem_spec_t *s)
+                         const emblem_spec_t *spec)
 {
+    // An LCARS emblem (a width given) is on the grid: placed on the screen
+    // here, the chevrons' widths with the x scale, heights with the y scale,
+    // the line width with the shape-keeping one. The dashboard's are 480 x 320.
+    emblem_spec_t sc = *spec;
+    const emblem_spec_t *s = &sc;
+    e->pad = 12;
+    if (spec->w) {
+        sc.w = UI_SX(spec->w);
+        sc.h = UI_SY(spec->h);
+        sc.bar_h = UI_SY(spec->bar_h);
+        sc.foot = UI_SX(spec->foot);
+        sc.top = UI_SX(spec->top);
+        sc.lw = UI_SS(spec->lw);
+        sc.stripe_h = UI_SY(spec->stripe_h);
+        sc.stripe_gap = UI_SY(spec->stripe_gap);
+        sc.title_dy = UI_SY(spec->title_dy);
+        sc.cond_dy = UI_SY(spec->cond_dy);
+        sc.title_ls = UI_SS(spec->title_ls);
+        e->pad = UI_SX(12);
+    }
     const lv_color_t col = lv_color_hex(s->col_hex);
     const lv_coord_t W = s->w ? s->w : 480, cx = W / 2;
     const lv_coord_t cy = s->h / 2, last = s->h - 1;
@@ -639,7 +662,7 @@ static void build_emblem(emblem_t *e, lv_point_t pts[2][4], lv_obj_t *parent, lv
     e->yb = yb;
     e->top = s->top;
     e->foot = s->foot;
-    e->area_y = yt + s->lw / 2 + 5;
+    e->area_y = yt + s->lw / 2 + (spec->w ? UI_SY(5) : 5);
     e->area_h = e->n * e->pitch - s->stripe_gap;
     e->hw_max = (lv_coord_t)emb_hw(e, e->area_y + e->area_h);
     e->off = -1;
@@ -730,7 +753,7 @@ static void lit_snap(const char *action)
 {
 #if CAM_FLASH_ENABLE
     if (cam_ready() && !s_lit) {
-        lv_coord_t h = s_btn_y < 320 ? s_btn_y - LIT_BTN_CLEAR : 320;
+        lv_coord_t h = s_btn_y < BOARD_LCD_VRES ? s_btn_y - LIT_BTN_CLEAR : BOARD_LCD_VRES;
         lv_obj_set_height(s_white, h);
         lv_obj_clear_flag(s_white, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_white);    // over a dialog too
@@ -793,7 +816,7 @@ static void ignore_mb_cb(lv_event_t *ev)
         r == ESP_ERR_NO_MEM ? "The ignore list is full (32). Remove entries on the dashboard."
       : r == ESP_ERR_INVALID_STATE ? "The incident has closed."
                                    : "Could not save the ignore list.", NULL, true);
-    lv_obj_set_width(e, 400);
+    lv_obj_set_width(e, UI_SX(400));
     if (s_style_lc) lcars_style_msgbox(e);
     lv_obj_center(e);
 }
@@ -818,9 +841,9 @@ static void ignore_ask_cb(lv_event_t *ev)
     lv_obj_t *mb;
     if (s_style_lc) {
         mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "IGNORE ERROR" : "IGNORE DEVICE", body, IGN_BTNS_LC, false);
-        lv_obj_set_width(mb, 360);
+        lv_obj_set_width(mb, UI_SX(360));
         lcars_style_msgbox(mb);
-        lv_obj_set_size(lv_msgbox_get_btns(mb), 320, 40);
+        lv_obj_set_size(lv_msgbox_get_btns(mb), UI_SX(320), UI_SY(40));
     } else {
         mb = lv_msgbox_create(NULL, kind == IGN_ERROR ? "Ignore error" : "Ignore device", body, IGN_BTNS, false);
         lv_obj_set_width(mb, 440);
@@ -1219,6 +1242,12 @@ static void place(lv_obj_t *o, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coor
     show(o, true);
 }
 
+// The same on the LCARS grid (ui_scale.h).
+static void place_lc(lv_obj_t *o, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
+{
+    place(o, UI_SX(x), UI_SY(y), UI_SW(x, w), UI_SH(y, h));
+}
+
 // The views. Each sets every widget's visibility and position itself, so no
 // path into a condition relies on what an earlier one toggled.
 static void view_incident(alarm_cond_t c)
@@ -1280,16 +1309,16 @@ static void view_lcars_alert(alarm_cond_t c)
     show(s_emb_lc_yel.root, !red);
     bool dev = s_alarm.src_ip || !mac_zero(s_alarm.src_mac);
     if (red) {
-        place(s_lc_ack, 0, LC_BTN_Y, 132, LC_BTN_H);
-        place(s_lc_ign_err, 138, LC_BTN_Y, 126, LC_BTN_H);
-        place(s_lc_ign_dev, 270, LC_BTN_Y, 130, LC_BTN_H);
+        place_lc(s_lc_ack, 0, LC_BTN_Y, 132, LC_BTN_H);
+        place_lc(s_lc_ign_err, 138, LC_BTN_Y, 126, LC_BTN_H);
+        place_lc(s_lc_ign_dev, 270, LC_BTN_Y, 130, LC_BTN_H);
     } else {
         show(s_lc_ack, false);
-        place(s_lc_ign_err, 0, LC_BTN_Y, 126, LC_BTN_H);
-        place(s_lc_ign_dev, 132, LC_BTN_Y, 130, LC_BTN_H);
+        place_lc(s_lc_ign_err, 0, LC_BTN_Y, 126, LC_BTN_H);
+        place_lc(s_lc_ign_dev, 132, LC_BTN_Y, 130, LC_BTN_H);
     }
     show(s_lc_ign_dev, dev);
-    s_btn_y = LCARS_CONTENT_Y + LC_BTN_Y;
+    s_btn_y = UI_SY(LCARS_CONTENT_Y + LC_BTN_Y);
 }
 
 // The LCARS alert's texts, upper case and fitted to the 400 px box.
@@ -1298,7 +1327,7 @@ static void lcars_alert_text(const alarm_info_t *a)
     char buf[DESCRIBE_MAX + 48], ip[WIFI_MAC_STR_LEN > 16 ? WIFI_MAC_STR_LEN : 16], lbl[48];   // an IP, or the MAC
     fmt_what(a, buf, sizeof(buf));
     lcars_upper(buf);
-    fit_words(buf, &lv_font_montserrat_20, LCARS_CONTENT_W);
+    fit_words(buf, UI_F20, UI_SX(LCARS_CONTENT_W));
     set_text(s_lc_code, buf);
     const char *v = wifi_manager_mac_vendor(a->src_mac);
     if (a->src_ip) fmt_ip(a->src_ip, ip, sizeof(ip));
@@ -1306,11 +1335,11 @@ static void lcars_alert_text(const alarm_info_t *a)
     if (!discovery_label_for(a->src_ip, mac_zero(a->src_mac) ? NULL : a->src_mac, lbl, sizeof(lbl))) lbl[0] = '\0';
     snprintf(buf, sizeof(buf), "%s%s%s%s%s", ip, v[0] ? " | " : "", v, lbl[0] ? " | " : "", lbl);
     lcars_upper(buf);
-    fit_words(buf, &lv_font_montserrat_14, LCARS_CONTENT_W);
+    fit_words(buf, UI_F14, UI_SX(LCARS_CONTENT_W));
     set_text(s_lc_src, buf);
     const char *bar = strstr(a->headline, " | ");
     strlcpy(buf, bar ? bar + 3 : a->headline, sizeof(buf));
-    fit_words(buf, &lv_font_montserrat_12, LCARS_CONTENT_W);
+    fit_words(buf, UI_F12, UI_SX(LCARS_CONTENT_W));
     set_text(s_lc_head, buf);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)a->count);
     set_text(s_lc_stat[0], buf);
@@ -1322,7 +1351,7 @@ static void lcars_alert_text(const alarm_info_t *a)
         if (!code || !(a->codes & (1ULL << i)) || !strcmp(code, a->code)) continue;
         snprintf(buf, sizeof(buf), "%s %s", code, nm);
         lcars_upper(buf);
-        fit_words(buf, &lv_font_montserrat_14, 129);
+        fit_words(buf, UI_F14, UI_SX(129));
         break;
     }
     set_text(s_lc_stat[2], buf);
@@ -1332,7 +1361,7 @@ static void lcars_alert_text(const alarm_info_t *a)
 static void view_lcars_green(void)
 {
     s_emb = NULL;
-    s_btn_y = 320;
+    s_btn_y = BOARD_LCD_VRES;
     show(s_inc, false);
     show(s_bar, false);
     show(s_rl_track, false);
@@ -1657,7 +1686,7 @@ static lv_obj_t *lc_alert_button(lv_obj_t *parent, uint32_t col, const char *tex
     lv_obj_t *b = lv_btn_create(parent);
     lv_obj_set_style_bg_color(b, lv_color_hex(col), 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
-    lv_obj_set_style_radius(b, LC_BTN_H / 2, 0);
+    lv_obj_set_style_radius(b, UI_SH(LC_BTN_Y, LC_BTN_H) / 2, 0);
     lv_obj_set_style_pad_all(b, 0, 0);
     lv_obj_set_style_clip_corner(b, true, 0);
     if (fill) {
@@ -1666,7 +1695,7 @@ static lv_obj_t *lc_alert_button(lv_obj_t *parent, uint32_t col, const char *tex
         lv_obj_set_size(*fill, 0, LV_PCT(100));
         lv_obj_align(*fill, LV_ALIGN_LEFT_MID, 0, 0);
     }
-    lv_obj_t *l = label(b, &lv_font_montserrat_14, lv_color_black());
+    lv_obj_t *l = label(b, UI_F14, lv_color_black());
     lv_label_set_text(l, text);
     lv_obj_center(l);
     if (lbl) *lbl = l;
@@ -1674,18 +1703,21 @@ static lv_obj_t *lc_alert_button(lv_obj_t *parent, uint32_t col, const char *tex
     return b;
 }
 
+// Grid coordinates in the alert box (ui_scale.h).
+static void pos_lc(lv_obj_t *o, lv_coord_t x, lv_coord_t y) { lv_obj_set_pos(o, UI_SX(x), UI_SY(y)); }
+
 static void build_lcars_alert(void)
 {
     lv_obj_t *p = lcars_alert_box();
     build_emblem(&s_emb_lc_red, s_emb_pts[2], p, 0, &EMB_LC_RED);
     build_emblem(&s_emb_lc_yel, s_emb_pts[3], p, 0, &EMB_LC_YELLOW);
-    const lv_coord_t W = LCARS_CONTENT_W;
-    s_lc_code = label(p, &lv_font_montserrat_20, LCARS_COL(c5));
-    lv_obj_set_pos(s_lc_code, 0, 114);
-    s_lc_src = label(p, &lv_font_montserrat_14, LCARS_COL(c2));
-    lv_obj_set_pos(s_lc_src, 0, 139);
-    s_lc_head = label(p, &lv_font_montserrat_12, LCARS_COL(c2));
-    lv_obj_set_pos(s_lc_head, 0, 158);
+    const lv_coord_t W = UI_SX(LCARS_CONTENT_W);
+    s_lc_code = label(p, UI_F20, LCARS_COL(c5));
+    pos_lc(s_lc_code, 0, 114);
+    s_lc_src = label(p, UI_F14, LCARS_COL(c2));
+    pos_lc(s_lc_src, 0, 139);
+    s_lc_head = label(p, UI_F12, LCARS_COL(c2));
+    pos_lc(s_lc_head, 0, 158);
     lv_obj_t *t[] = { s_lc_code, s_lc_src, s_lc_head };
     for (int i = 0; i < 3; i++) {
         lv_label_set_long_mode(t[i], LV_LABEL_LONG_CLIP);
@@ -1696,15 +1728,15 @@ static void build_lcars_alert(void)
     for (int i = 0; i < 3; i++) {
         lv_coord_t x = (lv_coord_t)(i * 135);
         lv_obj_t *bar = box(p, LCARS_COL(c3));
-        lv_obj_set_pos(bar, x, 178);
-        lv_obj_set_size(bar, 129, 3);
-        lv_obj_t *k = label(p, &lv_font_montserrat_12, LCARS_COL(c4));
+        pos_lc(bar, x, 178);
+        lv_obj_set_size(bar, UI_SW(x, 129), UI_SH(178, 3));
+        lv_obj_t *k = label(p, UI_F12, LCARS_COL(c4));
         lv_label_set_text(k, K[i]);
-        lv_obj_set_pos(k, x, 183);
-        s_lc_stat[i] = label(p, &lv_font_montserrat_14, LCARS_COL(c2));
+        pos_lc(k, x, 183);
+        s_lc_stat[i] = label(p, UI_F14, LCARS_COL(c2));
         lv_label_set_long_mode(s_lc_stat[i], LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(s_lc_stat[i], 129);
-        lv_obj_set_pos(s_lc_stat[i], x, 197);
+        lv_obj_set_width(s_lc_stat[i], UI_SW(x, 129));
+        pos_lc(s_lc_stat[i], x, 197);
     }
     lv_obj_t *fill;
     s_lc_ack = lc_alert_button(p, LCARS_PAL->accent, "ACKNOWLEDGE", &fill, &s_lc_ack_lbl);
@@ -1778,7 +1810,7 @@ static void build_ui(void)
 
     // Face light: pure white over everything, not clickable, hidden
     s_white = box(lv_layer_top(), lv_color_white());
-    lv_obj_set_size(s_white, 480, 320);
+    lv_obj_set_size(s_white, BOARD_LCD_HRES, BOARD_LCD_VRES);
     lv_obj_set_pos(s_white, 0, 0);
     lv_obj_add_flag(s_white, LV_OBJ_FLAG_HIDDEN);
 

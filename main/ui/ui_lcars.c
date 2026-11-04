@@ -1,4 +1,5 @@
 #include "ui_lcars.h"
+#include "ui_scale.h"
 #include "ui_subsys.h"
 #include "ui_logo.h"
 #include "esp_attr.h"
@@ -45,10 +46,13 @@ const lcars_palette_t LCARS_CERRITOS = {
     .hi = 0xfff3dd, .red = 0xe00000, .yellow = 0xf0b000,
 };
 
-#define F12 (&lv_font_montserrat_12)
-#define F14 (&lv_font_montserrat_14)
-#define F20 (&lv_font_montserrat_20)
-#define F28 (&lv_font_montserrat_28)
+// Fonts and coordinates are the 480 x 320 grid's (ui_scale.h): the helpers
+// below place grid values on the screen; what is measured on the screen
+// (text widths, lv_obj_get_*) stays in screen pixels and is set directly.
+#define F12 UI_F12
+#define F14 UI_F14
+#define F20 UI_F20
+#define F28 UI_F28
 #define COL_BLACK lv_color_black()
 #define DIM_OPA   185                   // 73 %: a port not hit today (was 45 %)
 
@@ -157,7 +161,7 @@ static void fmt_hm(uint32_t ts, char *buf, size_t len)
     if (settings_get()->clock_24h && strlen(buf) == 8) buf[5] = '\0';
 }
 
-// Shorten s for w pixels in font f, ending "...": at a word, unless that
+// Shorten s for w screen pixels in font f, ending "...": at a word, unless that
 // drops more than half of what fits, else mid-word. In place: the dots go
 // where at least 3 characters were.
 static void fit(char *s, const lv_font_t *f, lv_coord_t w)
@@ -187,8 +191,8 @@ static void show(lv_obj_t *o, bool on)
     else    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
-// A transparent area: no style, scrolling or touch.
-static lv_obj_t *area(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
+// A transparent area in screen pixels: no style, scrolling or touch.
+static lv_obj_t *area_px(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
 {
     lv_obj_t *o = lv_obj_create(p);
     lv_obj_remove_style_all(o);
@@ -198,14 +202,26 @@ static lv_obj_t *area(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_
     return o;
 }
 
-static lv_obj_t *fill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c)
+static lv_obj_t *fill_px(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c)
 {
-    lv_obj_t *o = area(p, x, y, w, h);
+    lv_obj_t *o = area_px(p, x, y, w, h);
     lv_obj_set_style_bg_color(o, c, 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     return o;
 }
 
+// The same on the grid (ui_scale.h).
+static lv_obj_t *area(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
+{
+    return area_px(p, UI_SX(x), UI_SY(y), UI_SW(x, w), UI_SH(y, h));
+}
+
+static lv_obj_t *fill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c)
+{
+    return fill_px(p, UI_SX(x), UI_SY(y), UI_SW(x, w), UI_SH(y, h), c);
+}
+
+// A label at grid x, y; w > 0 clips it at w grid px.
 static lv_obj_t *text(lv_obj_t *p, const lv_font_t *f, lv_color_t c, lv_coord_t x, lv_coord_t y,
                       lv_coord_t w, const char *t)
 {
@@ -215,50 +231,58 @@ static lv_obj_t *text(lv_obj_t *p, const lv_font_t *f, lv_color_t c, lv_coord_t 
     lv_label_set_text(l, t ? t : "");
     if (w > 0) {
         lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(l, w);
+        lv_obj_set_width(l, UI_SW(x, w));
     }
-    lv_obj_set_pos(l, x, y);
+    lv_obj_set_pos(l, UI_SX(x), UI_SY(y));
     return l;
 }
 
 // One rounded corner only (LVGL rounds all four): a circle of radius r in the
 // corner and two boxes, clipped by the area. TL top-left, else bottom-left.
+// Grid values; the circle keeps its shape (UI_SS).
 static lv_obj_t *corner(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
                         lv_coord_t r, lv_color_t c, bool tl)
 {
     lv_obj_t *a = area(p, x, y, w, h);
-    lv_obj_t *d = fill(a, 0, tl ? 0 : h - 2 * r, 2 * r, 2 * r, c);
+    const lv_coord_t W = UI_SW(x, w), H = UI_SH(y, h), R = UI_SS(r);
+    lv_obj_t *d = fill_px(a, 0, tl ? 0 : H - 2 * R, 2 * R, 2 * R, c);
     lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-    fill(a, r, 0, w - r, h, c);
-    fill(a, 0, tl ? r : 0, r, h - r, c);
+    fill_px(a, R, 0, W - R, H, c);
+    fill_px(a, 0, tl ? R : 0, R, H - R, c);
     return a;
 }
 
-// A bar segment with a rounded right end (radius h / 2).
+// A bar segment with a rounded right end (radius h / 2). Grid values.
 static lv_obj_t *seg(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t c, bool cap)
 {
     if (!cap) return fill(p, x, y, w, h, c);
     lv_obj_t *a = area(p, x, y, w, h);
-    lv_obj_t *d = fill(a, w - h, 0, h, h, c);
+    const lv_coord_t W = UI_SW(x, w), H = UI_SH(y, h);
+    lv_obj_t *d = fill_px(a, W - H, 0, H, H, c);
     lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-    fill(a, 0, 0, w - h / 2, h, c);
+    fill_px(a, 0, 0, W - H / 2, H, c);
     return a;
 }
 
-// The selection mark: the bottom MARK_H px of a box of width w, height h.
+// The selection mark: the bottom MARK_H px of a box (of grid width w, height h:
+// the box's own size on the screen is used, so the mark meets its edges).
 static lv_obj_t *mark(lv_obj_t *box, lv_coord_t w, lv_coord_t h)
 {
-    lv_obj_t *m = fill(box, 0, h - MARK_H, w, MARK_H, LCARS_COL(hi));
+    (void)w; (void)h;
+    const lv_coord_t W = lv_obj_get_style_width(box, LV_PART_MAIN);
+    const lv_coord_t H = lv_obj_get_style_height(box, LV_PART_MAIN), MH = UI_SS(MARK_H);
+    lv_obj_t *m = fill_px(box, 0, H - MH, W, MH, LCARS_COL(hi));
     show(m, false);
     return m;
 }
 
-// A pill with dark 12 px text, as wide as the text plus 12 px.
+// A pill with dark 12 px text, as wide as the text plus 12 grid px.
 static lv_obj_t *pill(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_color_t c, const char *t)
 {
-    lv_coord_t w = lv_txt_get_width(t, (uint32_t)strlen(t), F12, 0, LV_TEXT_FLAG_NONE) + 12;
-    lv_obj_t *o = fill(p, x, y, w, 14, c);
-    lv_obj_set_style_radius(o, 7, 0);
+    lv_coord_t w = lv_txt_get_width(t, (uint32_t)strlen(t), F12, 0, LV_TEXT_FLAG_NONE) + UI_SX(12);
+    lv_coord_t h = UI_SH(y, 14);
+    lv_obj_t *o = fill_px(p, UI_SX(x), UI_SY(y), w, h, c);
+    lv_obj_set_style_radius(o, h / 2, 0);
     lv_obj_t *l = text(o, F12, COL_BLACK, 0, 0, 0, t);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, 0);
     return o;
@@ -269,8 +293,8 @@ void lcars_style_msgbox(lv_obj_t *mb)
     lv_obj_set_style_bg_color(mb, COL_BLACK, 0);
     lv_obj_set_style_bg_opa(mb, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(mb, LCARS_COL(c4), 0);
-    lv_obj_set_style_border_width(mb, 3, 0);
-    lv_obj_set_style_radius(mb, 14, 0);
+    lv_obj_set_style_border_width(mb, UI_SS(3), 0);
+    lv_obj_set_style_radius(mb, UI_SS(14), 0);
     lv_obj_set_style_shadow_width(mb, 0, 0);
     lv_obj_set_style_text_color(mb, LCARS_COL(c2), 0);
     lv_obj_set_style_text_font(mb, F14, 0);
@@ -286,7 +310,7 @@ void lcars_style_msgbox(lv_obj_t *mb)
         lv_obj_set_style_bg_color(b, LCARS_COL(c4), LV_PART_ITEMS);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_ITEMS);
         lv_obj_set_style_text_color(b, COL_BLACK, LV_PART_ITEMS);
-        lv_obj_set_style_radius(b, 17, LV_PART_ITEMS);
+        lv_obj_set_style_radius(b, UI_SS(17), LV_PART_ITEMS);
         lv_obj_set_style_shadow_width(b, 0, LV_PART_ITEMS);
         lv_obj_set_style_border_width(b, 0, LV_PART_ITEMS);
         lv_obj_set_style_bg_color(b, LCARS_COL(accent), LV_PART_ITEMS | LV_STATE_PRESSED);
@@ -621,7 +645,7 @@ static void build_frame(void)
     sp_add(seg(s_frame, 163, 0, 22, 10, LCARS_COL(c2), false), 0, -14);
     sp_add(seg(s_frame, 188, 0, 24, 10, LCARS_COL(c4), true), 0, -14);
     s_title = text(s_frame, F14, LCARS_COL(c1), 0, 0, 0, "SHADOWSENTRY");
-    lv_obj_align(s_title, LV_ALIGN_TOP_RIGHT, -4, -1);
+    lv_obj_align(s_title, LV_ALIGN_TOP_RIGHT, UI_SX(-4), UI_SY(-1));
     sp_add(s_title, 60, 0);
 
     // Rail
@@ -636,8 +660,8 @@ static void build_frame(void)
         lv_obj_add_event_cb(b, rail_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
         lv_obj_t *l = text(b, F12, COL_BLACK, 0, 0, 0, RAIL_TXT[i]);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_style_text_line_space(l, -2, 0);
-        lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, -4, -3);
+        lv_obj_set_style_text_line_space(l, UI_SS(-2), 0);
+        lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, UI_SX(-4), UI_SY(-3));
         s_rail_mark[i] = mark(b, RAIL_W, RAIL_H);
         sp_add(b, -80, 0);
     }
@@ -652,13 +676,13 @@ static void build_frame(void)
     lv_obj_add_event_cb(e, subsys_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *l = text(e, F12, COL_BLACK, 0, 0, 0, "07\nSYS");   // "SUBSYS" ran into the rounded corner (Rob, 2026-11-03)
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_line_space(l, -2, 0);
-    lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, -(70 - 52) - 2, -3);
+    lv_obj_set_style_text_line_space(l, UI_SS(-2), 0);
+    lv_obj_align(l, LV_ALIGN_BOTTOM_RIGHT, UI_SX(-(70 - 52) - 2), UI_SY(-3));
     sp_add(e, -80, 0);
     sp_add(seg(s_frame, 74, 310, 70, 10, LCARS_COL(c3), false), 0, 14);
     sp_add(seg(s_frame, 147, 310, 30, 10, LCARS_COL(c6), true), 0, 14);
     s_clock = text(s_frame, F12, LCARS_COL(c4), 0, 0, 0, "--:--");
-    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -4, 304);
+    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, UI_SX(-4), UI_SY(304));
     sp_add(s_clock, 60, 0);
 }
 
@@ -687,9 +711,9 @@ EXT_RAM_BSS_ATTR static sd_stats_t *s_stats;             // PSRAM, about 10 KB
 static void build_ops(lv_obj_t *pg)
 {
     lv_obj_t *c = fill(pg, 0, 0, 400, 18, LCARS_COL(c4));
-    lv_obj_set_style_radius(c, 9, 0);
+    lv_obj_set_style_radius(c, UI_SH(0, 18) / 2, 0);
     s_cond = text(c, F12, COL_BLACK, 0, 0, 0, "ALL SYSTEMS NORMAL");
-    lv_obj_align(s_cond, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_align(s_cond, LV_ALIGN_RIGHT_MID, UI_SX(-10), 0);
 
     static const char *const PILL[4] = { "ALERTS", "PROBES", "SCANS", "DEVICES" };
     const uint32_t col[4] = { LCARS_PAL->c1, LCARS_PAL->c2, LCARS_PAL->accent, LCARS_PAL->c4 };
@@ -758,12 +782,13 @@ static void chart_update(void)
     }
     snprintf(b, sizeof(b), "%lu", (unsigned long)max);
     set_text(s_scale_top, b);
+    const lv_coord_t base = UI_SY(CH_Y + CH_H), full = UI_SH(CH_Y, CH_H), lo = UI_SS(2);   // screen px
     for (int i = 0; i < 24; i++) {
-        lv_coord_t h = max ? (lv_coord_t)((uint64_t)v[i] * CH_H / max) : 0;
-        if (h < 2) h = 2;
+        lv_coord_t h = max ? (lv_coord_t)((uint64_t)v[i] * full / max) : 0;
+        if (h < lo) h = lo;
         if (lv_obj_get_height(s_bar[i]) != h) {       // unchanged: no repaint
             lv_obj_set_height(s_bar[i], h);
-            lv_obj_set_y(s_bar[i], CH_Y + CH_H - h);
+            lv_obj_set_y(s_bar[i], base - h);
         }
     }
     if (now_h == s_tick_hour || time(NULL) < 1600000000) return;
@@ -771,9 +796,9 @@ static void chart_update(void)
     for (int k = 0; k < 5; k++) {
         if (k == 4) strlcpy(b, "NOW", sizeof(b));
         else fmt_hour((time_t)(now_h - 24 + 6 * (uint32_t)k) * 3600, b, sizeof(b));
-        lv_coord_t w = lv_txt_get_width(b, (uint32_t)strlen(b), F12, 0, LV_TEXT_FLAG_NONE);
-        lv_coord_t cx = (lv_coord_t)(CH_X + k * CH_W / 4);
-        lv_coord_t x = k == 0 ? CH_X : k == 4 ? CH_X + CH_W - w : cx - w / 2;
+        lv_coord_t w = lv_txt_get_width(b, (uint32_t)strlen(b), F12, 0, LV_TEXT_FLAG_NONE);   // screen px
+        lv_coord_t cx = UI_SX(CH_X + k * CH_W / 4);
+        lv_coord_t x = k == 0 ? UI_SX(CH_X) : k == 4 ? UI_SX(CH_X + CH_W) - w : cx - w / 2;
         set_text(s_tick[k], b);
         lv_obj_set_x(s_tick[k], x);
     }
@@ -786,11 +811,13 @@ static void foc_line(int i, const char *key, const char *val)
     lcars_upper(k);
     strlcpy(v, val, sizeof(v));
     lcars_upper(v);
+    // Screen px: the key's measured width, the value after it to the panel's end.
     lv_coord_t kw = lv_txt_get_width(k, (uint32_t)strlen(k), F12, 0, LV_TEXT_FLAG_NONE);
-    lv_coord_t w = 288 - kw - 4;
+    lv_coord_t x = UI_SX(12) + kw + UI_SX(4);
+    lv_coord_t w = UI_SX(12 + 288) - x;
     fit(v, F12, w);
     set_text(s_foc_k[i], k);
-    if (lv_obj_get_x(s_foc_v[i]) != 12 + kw + 4) lv_obj_set_x(s_foc_v[i], 12 + kw + 4);
+    if (lv_obj_get_x(s_foc_v[i]) != x) lv_obj_set_x(s_foc_v[i], x);
     if (lv_obj_get_width(s_foc_v[i]) != w) lv_obj_set_width(s_foc_v[i], w);
     set_text(s_foc_v[i], v);
 }
@@ -919,7 +946,7 @@ static void detail_build(detail_t *d, lv_obj_t *pg, const char *hint)
     d->h = text(pg, F12, LCARS_COL(accent), 12, 230, 388, "");
     d->v = text(pg, F12, LCARS_COL(txt), 12, 246, 0, hint);
     lv_label_set_long_mode(d->v, LV_LABEL_LONG_WRAP);
-    lv_obj_set_size(d->v, 388, 32);
+    lv_obj_set_size(d->v, UI_SW(12, 388), UI_SH(246, 32));
 }
 
 static void detail_set(detail_t *d, const lc_hit_t *h, const char *idle)
@@ -971,7 +998,7 @@ static void traps_refresh(bool force)
     for (int i = 0; i < LC_TRAPS; i++) {
         const lc_hit_t *h = &s_t.trap[i];
         char b[12];
-        lv_coord_t w = max ? (lv_coord_t)((uint64_t)TR_BAR_W * h->n / max) : 0;
+        lv_coord_t w = max ? (lv_coord_t)((uint64_t)UI_SW(TR_BAR_X, TR_BAR_W) * h->n / max) : 0;   // screen px
         if (lv_obj_get_width(s_tr_fill[i]) != w) lv_obj_set_width(s_tr_fill[i], w);
         snprintf(b, sizeof(b), "%lu", (unsigned long)h->n);
         set_text(s_tr_n[i], b);
@@ -1000,7 +1027,7 @@ static void build_traps(lv_obj_t *pg)
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
         lv_obj_t *tag = s_tr_tag[i] = fill(r, 11, 0, TR_TAG_W - 11, 22, LCARS_COL(c6));
         lv_obj_t *l = text(tag, F12, COL_BLACK, 0, 0, 0, s_t.trap[i].name);
-        lv_obj_align(l, LV_ALIGN_RIGHT_MID, -6, 0);
+        lv_obj_align(l, LV_ALIGN_RIGHT_MID, UI_SX(-6), 0);
         s_tr_mark[i] = mark(tag, TR_TAG_W - 11, 22);
         lv_obj_t *tr = s_tr_track[i] = fill(r, TR_BAR_X, 7, TR_BAR_W, 8, LCARS_COL(track));
         s_tr_fill[i] = fill(tr, 0, 0, 0, 8, LCARS_COL(c1));
@@ -1122,7 +1149,7 @@ static void gauge_set(int i, const char *v, int32_t pct)
 {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
-    lv_coord_t h = (lv_coord_t)(G_H * pct / 100);
+    lv_coord_t h = (lv_coord_t)(UI_SH(0, G_H) * pct / 100);   // screen px
     if (s_g_tgt[i] != h) {                                  // anim_cb eases the fill there
         s_g_tgt[i] = h;
         lv_obj_set_style_bg_color(s_g_fill[i], pct >= 100 ? LCARS_COL(c1) : LCARS_COL(c4), 0);
@@ -1135,7 +1162,7 @@ static void nl_set(int i, const char *v)
     char b[72];
     strlcpy(b, v, sizeof(b));
     lcars_upper(b);
-    fit(b, F12, 128);
+    fit(b, F12, UI_SX(128));
     set_text(s_nl_v[i], b);
 }
 
@@ -1268,6 +1295,9 @@ EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_row[LC_DEVS], *s_dv_nm[LC_DEVS], *s_dv_su
 #define DV_SEG_MS       80          // how often it moves
 #define DV_SEG_MIN_PXS  10          // its speed, px a second: a quiet device (DV_BAR_W in 16 s) ...
 #define DV_SEG_MAX_PXS  70          // ... to a full bar (in 2.4 s); between, in step with the fill
+// The bar and the segment in screen px (the motion runs on the screen)
+#define DV_BAR_WP       UI_SW(DV_BAR_X, DV_BAR_W)
+#define DV_SEG_WP       UI_SX(DV_SEG_W)
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_dv_fill[LC_DEVS], *s_dv_seg[LC_DEVS];
 EXT_RAM_BSS_ATTR static lv_coord_t s_dv_tgt[LC_DEVS];                        // the fill's width to ease to
@@ -1300,10 +1330,10 @@ static void dev_detail(void)
     char b[96];
     const discovery_talker_t *t = &s_dv_sel;
     dev_name(t, b, sizeof(b));
-    fit(b, F20, 400);
+    fit(b, F20, UI_SX(400));
     set_text(s_dd_nm, b);
     dev_sub(t, b, sizeof(b));
-    fit(b, F12, 400);
+    fit(b, F12, UI_SX(400));
     set_text(s_dd_sub, b);
     if (correlate_pihole_device(t->ip, t->mac, &s_dns) && s_dns.total) {
         snprintf(b, sizeof(b), "%u LOOKUPS, %u BLOCKED IN %lu MIN", (unsigned)s_dns.total, (unsigned)s_dns.blocked,
@@ -1313,8 +1343,8 @@ static void dev_detail(void)
         for (int i = s_dns.n - 1; i >= 0; i--) {             // newest first: keep the first of each
             if (s_dns.q[i].blocked) bl = s_dns.q[i].domain; else al = s_dns.q[i].domain;
         }
-        strlcpy(b, al, sizeof(b)); lcars_upper(b); fit(b, F12, 400); set_text(s_dd_v[1], b);
-        strlcpy(b, bl, sizeof(b)); lcars_upper(b); fit(b, F12, 400); set_text(s_dd_v[2], b);
+        strlcpy(b, al, sizeof(b)); lcars_upper(b); fit(b, F12, UI_SX(400)); set_text(s_dd_v[1], b);
+        strlcpy(b, bl, sizeof(b)); lcars_upper(b); fit(b, F12, UI_SX(400)); set_text(s_dd_v[2], b);
     } else {
         set_text(s_dd_v[0], "NO PI-HOLE DATA");
         set_text(s_dd_v[1], "-");
@@ -1347,10 +1377,10 @@ static void dev_refresh(bool force)
         const discovery_talker_t *t = &s_talk[i];
         char b[96];
         dev_name(t, b, sizeof(b));
-        fit(b, F14, 236);
+        fit(b, F14, UI_SX(236));
         set_text(s_dv_nm[i], b);
         dev_sub(t, b, sizeof(b));
-        fit(b, F12, 236);
+        fit(b, F12, UI_SX(236));
         set_text(s_dv_sub[i], b);
         uint32_t tot, blk;
         if (pihole_share(t->ip, t->mac, &tot, &blk)) snprintf(b, sizeof(b), "%lu %% BLOCKED", (unsigned long)(blk * 100 / tot));
@@ -1358,7 +1388,7 @@ static void dev_refresh(bool force)
         set_text(s_dv_q[i], b);
         uint32_t ph = t->per_hour > DV_RATE_FULL ? DV_RATE_FULL : t->per_hour;
         s_dv_pct[i] = (uint8_t)(100.0f * logf(1.0f + (float)ph) / logf(1.0f + DV_RATE_FULL) + 0.5f);
-        s_dv_tgt[i] = (lv_coord_t)(DV_BAR_W * s_dv_pct[i] / 100);   // anim_cb eases the fill there
+        s_dv_tgt[i] = (lv_coord_t)(DV_BAR_WP * s_dv_pct[i] / 100);  // anim_cb eases the fill there
         show(s_dv_seg[i], ph != 0);                                 // no packets, no motion
         show(s_dv_row[i], true);
     }
@@ -1404,7 +1434,7 @@ static void block_mb_cb(lv_event_t *ev)
                  why[0] ? why : r == BLOCK_FULL ? "the block list is full" : "could not save the list");
     lv_obj_t *m = lv_msgbox_create(NULL, r == BLOCK_OK || r == BLOCK_UPDATED ? "BLOCKED" : "NOT BLOCKED",
                                    body, NULL, true);
-    lv_obj_set_width(m, 360);
+    lv_obj_set_width(m, UI_SX(360));
     lcars_style_msgbox(m);
     lv_obj_center(m);
 }
@@ -1422,10 +1452,10 @@ static void dev_block_cb(lv_event_t *ev)
     snprintf(body, sizeof(body), "Block %s (%s) from the internet? The router drops it within a minute. "
              "Undo on the dashboard.", name, ip);
     lv_obj_t *mb = lv_msgbox_create(NULL, "BLOCK DEVICE", body, BLOCK_BTNS, false);
-    lv_obj_set_width(mb, 360);
+    lv_obj_set_width(mb, UI_SX(360));
     lcars_style_msgbox(mb);
     lv_obj_t *bt = lv_msgbox_get_btns(mb);
-    lv_obj_set_size(bt, 320, 40);
+    lv_obj_set_size(bt, UI_SX(320), UI_SY(40));
     lv_obj_center(mb);
     lv_obj_add_event_cb(mb, block_mb_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
@@ -1435,7 +1465,7 @@ static lv_obj_t *lc_btn(lv_obj_t *p, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
                         const char *t, lv_event_cb_t cb)
 {
     lv_obj_t *b = fill(p, x, y, w, h, c);
-    lv_obj_set_style_radius(b, h / 2, 0);
+    lv_obj_set_style_radius(b, UI_SH(y, h) / 2, 0);
     lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *l = text(b, F14, COL_BLACK, 0, 0, 0, t);
@@ -1458,7 +1488,7 @@ static void build_dev(lv_obj_t *pg)
         lv_obj_t *tr = fill(r, DV_BAR_X, DV_BAR_Y, DV_BAR_W, DV_BAR_H, LCARS_COL(track));   // clips the segment
         s_dv_fill[i] = fill(tr, 0, 0, 0, DV_BAR_H, LCARS_COL(c1));
         s_dv_seg[i] = fill(tr, -DV_SEG_W, 0, DV_SEG_W, DV_BAR_H, LCARS_COL(hi));
-        s_dv_pos[i] = (int32_t)rnd(0, DV_BAR_W) * 16;               // the rows do not travel in step
+        s_dv_pos[i] = (int32_t)rnd(0, DV_BAR_WP) * 16;              // the rows do not travel in step
         show(s_dv_seg[i], false);
         fill(r, 0, 29, 400, 1, LCARS_COL(track));
         show(r, false);
@@ -2153,9 +2183,9 @@ static void dev_bars(void)
             lv_obj_set_width(s_dv_fill[i], w + step);
         }
         if (!move || lv_obj_has_flag(s_dv_seg[i], LV_OBJ_FLAG_HIDDEN)) continue;
-        uint32_t pxs = DV_SEG_MIN_PXS + (DV_SEG_MAX_PXS - DV_SEG_MIN_PXS) * s_dv_pct[i] / 100u;
+        uint32_t pxs = (uint32_t)UI_SX(DV_SEG_MIN_PXS + (DV_SEG_MAX_PXS - DV_SEG_MIN_PXS) * s_dv_pct[i] / 100u);
         s_dv_pos[i] += (int32_t)(pxs * 16u * dt / 1000u);
-        if (s_dv_pos[i] >= DV_BAR_W * 16) s_dv_pos[i] -= (DV_BAR_W + DV_SEG_W) * 16;
+        if (s_dv_pos[i] >= DV_BAR_WP * 16) s_dv_pos[i] -= (DV_BAR_WP + DV_SEG_WP) * 16;
         lv_coord_t x = (lv_coord_t)(s_dv_pos[i] / 16);
         if (x != lv_obj_get_style_x(s_dv_seg[i], LV_PART_MAIN)) lv_obj_set_x(s_dv_seg[i], x);
     }
@@ -2172,7 +2202,7 @@ static void gauges_ease(void)
         if (!step) step = d > 0 ? 1 : -1;
         h += step;
         lv_obj_set_height(s_g_fill[i], h);
-        lv_obj_set_y(s_g_fill[i], G_H - h);
+        lv_obj_set_y(s_g_fill[i], UI_SH(0, G_H) - h);
     }
 }
 
@@ -2226,7 +2256,7 @@ static void fast_cb(lv_timer_t *t)
     (void)t;
     if (!s_green || s_splash || s_cur != PG_OPS) return;
     s_scan_x = (s_scan_x + SCAN_STEP) % CH_W;
-    lv_obj_set_x(s_scan, (lv_coord_t)(CH_X + s_scan_x));
+    lv_obj_set_x(s_scan, UI_SX(CH_X + s_scan_x));
 }
 
 static void slow_cb(lv_timer_t *t)
@@ -2279,8 +2309,8 @@ EXT_RAM_BSS_ATTR static uint32_t    s_sp_at;
 static void sp_piece_cb(void *var, int32_t v)
 {
     sp_piece_t *p = var;
-    lv_obj_set_style_translate_x(p->o, (lv_coord_t)(p->dx * (256 - v) / 256), 0);
-    lv_obj_set_style_translate_y(p->o, (lv_coord_t)(p->dy * (256 - v) / 256), 0);
+    lv_obj_set_style_translate_x(p->o, (lv_coord_t)(UI_SX(p->dx) * (256 - v) / 256), 0);
+    lv_obj_set_style_translate_y(p->o, (lv_coord_t)(UI_SY(p->dy) * (256 - v) / 256), 0);
     lv_obj_set_style_opa(p->o, (lv_opa_t)(v > 255 ? 255 : v), 0);
 }
 
@@ -2358,8 +2388,9 @@ static void sp_logo_start(void)
     const lv_img_dsc_t *d = ui_logo_get();
     if (d) {
         lv_img_set_src(s_sp_logo, d);
-        lv_coord_t y = SP_LOGO_FOOT_Y - (lv_coord_t)d->header.h;
-        lv_obj_set_pos(s_sp_logo, (480 - (lv_coord_t)d->header.w) / 2, y < 0 ? 0 : y);
+        // Native size (a zoomed bitmap would blur), its foot on the grid's line.
+        lv_coord_t y = UI_SY(SP_LOGO_FOOT_Y) - (lv_coord_t)d->header.h;
+        lv_obj_set_pos(s_sp_logo, (BOARD_LCD_HRES - (lv_coord_t)d->header.w) / 2, y < 0 ? 0 : y);
         show(s_sp_logo, true);
     }
     show(s_sp_cap, true);
@@ -2411,7 +2442,7 @@ static void build_splash(void)
     show(s_sp_logo, false);
     s_sp_cap = text(s_root, F12, LCARS_COL(c4), 0, SP_CAP_Y, 480, "SHADOWSENTRY S3");
     lv_obj_set_style_text_align(s_sp_cap, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_letter_space(s_sp_cap, 4, 0);
+    lv_obj_set_style_text_letter_space(s_sp_cap, UI_SS(4), 0);
     show(s_sp_cap, false);
     // A quarter of the content each, over the pages and the alert box.
     for (int k = 0; k < SP_BANDS; k++) {
