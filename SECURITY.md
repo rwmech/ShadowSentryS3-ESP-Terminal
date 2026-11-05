@@ -19,6 +19,8 @@ Security fixes are applied to the latest release and the `main` branch.
 | 1.x     | ✅        |
 | < 1.0   | ❌        |
 
+This repository is a fork (the CrowPanel 3.5" and Waveshare 4.3B terminal edition). Its releases are tagged `terminal-1.x...`; fixes go to the newest `terminal-1.x` tag and the fork's `main` branch. A problem in code only the fork has (the front panel, the router and Pi-hole clients, the extra traps and routes) belongs in a [private security advisory on the fork](https://github.com/rwmech/ShadowSentryS3-ESP-Terminal/security/advisories/new); one in upstream's code, in upstream's (below).
+
 ## Reporting a vulnerability
 
 If you discover a vulnerability in ShadowSentry S3 itself (for example, a way to
@@ -43,3 +45,9 @@ will be released and the reporter credited (unless anonymity is requested).
   your Wi-Fi credentials, Telegram token, and admin password into the firmware.
 - The admin panel and WebSocket feed are intended for a trusted LAN, not the
   public internet.
+- Fork: there are no prebuilt images, because a build embeds the values in
+  `main/config.h`. Do not share your `firmware.bin`. The OTA password file
+  `tools/ota_password` is git-ignored as well.
+- Fork: the Pi-hole and MikroTik clients are read only. Give them an app
+  password (Pi-hole) and a read-only user limited to the board's address
+  (RouterOS); over plain `http://` those credentials cross the LAN in the clear.

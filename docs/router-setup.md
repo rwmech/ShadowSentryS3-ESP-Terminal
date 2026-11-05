@@ -1,5 +1,7 @@
 # MikroTik router setup for ShadowSentry S3
 
+This is the record of one installation, with that network's addresses, interfaces and existing rules. For your own router start from `tools/routeros/*.rsc` (each line to change is marked EDIT) and the README's "Router setup", and use this page as a worked example.
+
 What was configured on the router (MechRouter, CCR1036-8G-2S+, RouterOS 7.25) on 2026-11-03, why, and how to check it. The rollback for every part is in `docs\router-rollback.md`.
 
 The sentry is 192.168.0.118 (admin port 9999). The router is 192.168.0.1 on bridge1. The Pi-hole is 192.168.0.103. The admin PCs are 192.168.0.75 and 192.168.0.156.
@@ -85,12 +87,12 @@ The router reports to the sentry over syslog. Mangle rules log and list offender
 
 - What trips:
   - a port scan seen by the router (55-24)
-  - a non-admin host on the router's management ports, including disabled services (55-23)
-  - DNS to anything but the Pi-hole or the router (55-26)
-  - logins and failed logins (55-21, 55-10)
-  - configuration changes (55-22)
-  - new DHCP leases (60-02)
-- The mangle rules run before NAT. So a device that asks 8.8.8.8 trips 55-26 even though the redirect in section 2 hands the lookup to the Pi-hole: the alert means the device tried, not that it got through. Google and Android devices do this routinely.
+  - a non-admin host on the router's management ports, including disabled services (55-25)
+  - DNS to anything but the Pi-hole or the router (55-26; 55-28 for port 53 while the redirect switch is on, below)
+  - failed logins (55-21) and logins (55-22) from an address that is not an admin; router integrity's 55-10 login events are held back while syslog is live
+  - configuration changes by a non-admin address, a scheduler or a script (55-23)
+  - new DHCP leases from a MAC never seen before (60-02)
+- The mangle rules run before NAT. So a device that asks 8.8.8.8 on port 53 trips the DNS rule even though the redirect in section 2 hands the lookup to the Pi-hole: the line means the device tried, not that it got through. Google and Android devices do this routinely. With the sentry's Settings switch "The router redirects port 53 to the Pi-hole" on (the default, `ROUTER_DNS_REDIRECT` 1), such a line is Code 55-28, SEV3: logged, no incident, no Discord post. DNS over TLS (TCP 853) cannot be redirected and stays 55-26, SEV2, as does port 53 with the switch off.
 - Check:
   - on the router: `/ip firewall mangle print where comment~"shadowsentry"` (6 rules) and `/system logging print` (5 rules with action shadowsentry)
   - on the sentry: `GET /api/router/status`, where syslog shows `live` true and `received` climbing
