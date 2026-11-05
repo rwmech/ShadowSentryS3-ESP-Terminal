@@ -1,0 +1,45 @@
+# Fork addition: build check. Builds every board's USB env from
+# main/config.h.example (no real Wi-Fi, passwords or tokens) on every push to
+# main, every terminal-* tag and every pull request, so the README's build
+# guide is known to work. Nothing is published: no images are attached.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['terminal-*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [crowpanel35, waveshare43]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Config from the template
+        run: cp main/config.h.example main/config.h
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Sizes
+        run: ls -l .pio/build/${{ matrix.env }}/firmware.bin
