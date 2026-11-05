@@ -1,3 +1,5 @@
+> Note (English): this is upstream's Ukrainian translation, kept as it is. This fork's documentation (the CrowPanel 3.5" and Waveshare 4.3B boards, the build guide and every fork feature) is in [README.md](README.md), section "This fork".
+
 <div align="center">
 
 # ShadowSentry S3

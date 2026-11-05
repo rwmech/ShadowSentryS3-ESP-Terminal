@@ -25,43 +25,267 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ---
 
-## This fork: Elecrow ESP Terminal 3.5" edition
+## This fork: ShadowSentry S3 Terminal (CrowPanel 3.5" and Waveshare 4.3B)
 
-This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap, the alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, tripwires on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, MikroTik decoys (Winbox, the RouterOS API, the bandwidth-test server, MNDP and MAC-Telnet), log-only LAN discovery listeners with a seen-devices table, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports, and the NVR page is also served on the alternate HTTP ports. It also builds for the Waveshare ESP32-S3-Touch-LCD-4.3B (800 x 480), see [Supported boards](#supported-boards).
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that turns the honeypot into a desk terminal with a touch screen. It runs on two ESP32-S3 boards: the Elecrow CrowPanel ESP32 Terminal 3.5" (model ER-DLC35020S, "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera") and the Waveshare ESP32-S3-Touch-LCD-4.3B (800 x 480).
 
-### Hardware (board revision V1.0)
+On top of upstream's traps and monitors, which behave as before, it adds: a front panel in three styles, an incident alarm with RED / YELLOW / GREEN conditions and alert codes, port scan, probe and ARP sweep detection, an ADB trap, alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, tripwires on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, MikroTik decoys, log-only LAN discovery listeners with a seen-devices table, an ignore list, hidden admin ports, a microSD event log with summary metrics, a device page with analysis, optional Pi-hole and MikroTik router integration (syslog tripwires, IPFIX flows, a block list the router pulls), Discord and WhatsApp alerts, runtime settings, over-the-air updates and crash records.
 
-| | |
-|---|---|
-| Module | ESP32-S3-WROOM-1-N16R8: 16 MB quad flash, 8 MB octal PSRAM |
-| Display | 3.5" ILI9488, 480x320, SPI (SCLK 12, MOSI 13, MISO 14, CS 3, DC 42, backlight 46) |
-| Touch | FT6236 capacitive, I2C 0x38 (SDA 2, SCL 1) |
-| microSD | on the display's SPI bus, CS 10 |
-| Camera | OV2640 on J5 (24-pin FPC): XCLK 7, PCLK 17, VSYNC 4, HREF 5, D0-D7 8, 47, 48, 21, 18, 16, 15, 6; SCCB on the touch I2C bus, 0x30; no PWDN or RESET |
-| Buzzer | passive, GPIO 45 |
-| USB | CH340C serial bridge; V1.0 has no auto-reset wiring |
+There are no prebuilt firmware images: the image would carry your Wi-Fi password and admin password, so you build your own. [Build and flash](#build-and-flash) below walks through it from a fresh computer. The changes in this release are listed in [`docs/release-notes/terminal-1.0.0.md`](docs/release-notes/terminal-1.0.0.md).
 
-Pin map: [`main/board/board_crowpanel35.h`](main/board/board_crowpanel35.h). The I2S microphone is not used.
+Contents of this section:
+
+- [Supported boards](#supported-boards), and the hardware of each
+- [Build and flash](#build-and-flash): tools, configuration, first flash, first boot, updates over Wi-Fi, troubleshooting
+- [Traps and ports](#traps-and-ports)
+- [What this fork adds](#what-this-fork-adds): front panel, sounds, alarm, traps, detection, storage, dashboard, notifications, Pi-hole and router, camera, reliability
+- [Alert codes](#alert-codes)
+- [Fork API](#fork-api-admin-port-basic-auth)
+- [MikroTik](#mikrotik) and [Router setup](#router-setup)
+- [Modding guide](#modding-guide): the project tree, how-to recipes and the coding rules
+- [Pulling upstream updates](#pulling-upstream-updates)
 
 ### Supported boards
 
-The board is a build-time choice: `BOARD_CROWPANEL35` (the default) or `BOARD_WAVESHARE43` in `main/config.h`, or simply the PlatformIO env. Everything board-specific sits behind [`main/board/board.h`](main/board/board.h), which picks one board file.
+The board is chosen when you build. With PlatformIO you just pick the env: `crowpanel35` or `waveshare43` for a USB flash, `crowpanel35_ota` or `waveshare43_ota` for an update over Wi-Fi. Each env defines `BOARD_CROWPANEL35` or `BOARD_WAVESHARE43` for you. With `idf.py` you define one of them in `main/config.h` (none defined means the CrowPanel). A `config.h` that names a different board than the env fails the build with a clear message. Everything board-specific sits behind [`main/board/board.h`](main/board/board.h), which picks one board file.
 
 | | Elecrow CrowPanel ESP32 Terminal 3.5" | Waveshare ESP32-S3-Touch-LCD-4.3B |
 |---|---|---|
 | PlatformIO envs | `crowpanel35`, `crowpanel35_ota` | `waveshare43`, `waveshare43_ota` |
 | Board file | [`board_crowpanel35.h`](main/board/board_crowpanel35.h) | [`board_waveshare43.h`](main/board/board_waveshare43.h) |
-| Module | ESP32-S3-WROOM-1-N16R8 | ESP32-S3-WROOM-1-N16R8 |
-| Display | 3.5" ILI9488 480 x 320, SPI, LovyanGFX | 4.3" IPS 800 x 480, 16-bit RGB565 parallel, `esp_lcd_panel_rgb`, two PSRAM frame buffers |
-| Touch | FT6236, I2C 0x38 | GT911, I2C 0x5D (SDA 8, SCL 9, INT 4) |
-| Backlight | PWM, brightness setting | on or off (CH422G expander) |
-| Front panel | LCARS (default), clan or the dashboard | clan (default) or LCARS, laid out on the same grid and scaled to the screen |
-| Camera | OV2640 | none (compiled out) |
-| Buzzer | passive, GPIO 45 | a passive piezo you add on the terminal block: + to CAN-H, - to CAN-L, CAN termination switch (SW2) on; the tones drive the CAN transceiver's TXD (GPIO15), idle recessive, every low part under 150 us (its TXD time-out is 0.3 ms at the least), so the duty is capped on low tones; `BOARD_BUZZER_GPIO -1` in `config.h` compiles the sounds out |
-| microSD | on the display's SPI bus | own SPI bus (11, 12, 13), CS on the expander |
-| USB | CH340C, hold BOOT and tap RESET to flash | the chip's own USB-Serial/JTAG, no buttons; also the console |
+| Module | ESP32-S3-WROOM-1-N16R8 (16 MB flash, 8 MB PSRAM) | ESP32-S3-WROOM-1-N16R8 (16 MB flash, 8 MB PSRAM) |
+| Display | 3.5" ILI9488 480 x 320, SPI, driven through LovyanGFX | 4.3" IPS 800 x 480, 16-bit RGB565 parallel, `esp_lcd_panel_rgb`, two PSRAM frame buffers |
+| Touch | FT6236, I2C 0x38 | GT911, I2C 0x5D |
+| Backlight | PWM, the Brightness setting (5 to 100 %) | on or off only (a CH422G expander pin enables the boost converter), always on |
+| Front panel styles | LCARS (default), clan or the dashboard | clan (default) or LCARS, laid out on the same 480 x 320 grid and scaled to the screen |
+| Camera | OV2640 (optional, on the J5 connector) | none (compiled out) |
+| Buzzer | passive, built in | none built in: add a passive piezo on the terminal block (see below), or build with `BOARD_BUZZER_GPIO -1` and every sound is compiled out |
+| microSD | on the display's SPI bus | its own SPI bus, chip select on the expander |
+| Battery sense | ADC on GPIO 9 | none |
+| USB | CH340C serial bridge with no auto-reset: hold BOOT and tap RESET to flash | the chip's own USB-Serial/JTAG: no buttons; also the console |
 
-The Waveshare's extra sdkconfig lines are in [`sdkconfig.defaults.waveshare43`](sdkconfig.defaults.waveshare43): XIP from PSRAM, so flash writes do not stall the RGB panel's scan-out (Espressif's fix for a drifting picture), and the console on USB-Serial/JTAG, since the 4.3B's UART0 pins drive its RS-485 transceiver. With `idf.py`, define the board in `config.h` and build with `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build`. The LCARS layout is drawn on a 480 x 320 grid and placed on the screen by [`main/ui/ui_scale.h`](main/ui/ui_scale.h) (1.67 across, 1.5 down; fonts 12, 14, 20 and 28 become 18, 20, 30 and 42), so the CrowPanel's layout is unchanged pixel for pixel and the 4.3" shows the same pages in sharp, larger type. The Settings page hides what a board lacks (`board` in `GET /api/settings`).
+What differs in use:
+
+- Camera: only the CrowPanel has one. On the Waveshare the dashboard hides the "Last panel action" card (`fitted` false in `/api/snap/last.json`).
+- Dashboard panel style: CrowPanel only, since it is laid out pixel by pixel for 480 x 320. On the Waveshare a stored style 0 is shown as LCARS and the Settings page does not offer it.
+- Brightness: the Waveshare's backlight cannot dim, so the Settings page hides the Brightness slider there. The RED alert's forced full backlight works on both.
+- Buzzer: built into the CrowPanel. The 4.3B has no free GPIO on any connector, so its tones drive the CAN transceiver's TXD pin (GPIO15) and a piezo across the CAN pair turns them into sound. The Settings page hides the sound settings when a board reports no buzzer.
+- Text size: on the 4.3B the LCARS and clan pages use the next font sizes up (12, 14, 20 and 28 px become 18, 20, 30 and 42 px) through [`main/ui/ui_scale.h`](main/ui/ui_scale.h), so the same pages read larger and sharper. The CrowPanel layout is unchanged.
+- `GET /api/settings` reports what the board has (`board`: `name`, `lcd`, `camera`, `buzzer`, `backlight_dim`, `panel_dashboard`), and the dashboard hides what the board lacks.
+- The plain Waveshare ESP32-S3-Touch-LCD-4.3 (two USB-C ports, no terminal block) has the same LCD, touch, expander and microSD pins in Waveshare's schematics, but it has not been tested with this firmware. Its CAN pins differ, so the buzzer arrangement below does not apply to it; Waveshare's 4.3 schematic shows GPIO6 free on its "Sensor AD" header, which `BOARD_BUZZER_GPIO 6` would use (unchecked on hardware).
+
+#### Hardware: Elecrow CrowPanel ESP32 Terminal 3.5" (board revision V1.0)
+
+| | |
+|---|---|
+| Module | ESP32-S3-WROOM-1-N16R8: 16 MB quad flash, 8 MB octal PSRAM (GPIO 26 to 37 are used by them) |
+| Display | 3.5" ILI9488, 480x320, SPI at 60 MHz (SCLK 12, MOSI 13, MISO 14, CS 3, DC 42, backlight 46). Reading the panel back does not work on this board (a diode on MISO), so nothing depends on it |
+| Touch | FT6236 capacitive, I2C 0x38 (SDA 2, SCL 1). Its interrupt line is GPIO0, the BOOT strap, so touch is polled and the pin left alone |
+| microSD | on the display's SPI bus, CS 10, mounted after the display has set the bus up |
+| Camera | OV2640 on J5 (24-pin FPC): XCLK 7, PCLK 17, VSYNC 4, HREF 5, D0-D7 8, 47, 48, 21, 18, 16, 15, 6; SCCB on the touch I2C bus, 0x30; no PWDN or RESET |
+| Buzzer | passive, GPIO 45, resonant at about 2.7 kHz |
+| Battery | sensed on ADC GPIO 9 through a 1 M / 1 M divider |
+| USB | CH340C serial bridge; V1.0 has no auto-reset wiring, so a USB flash needs BOOT and RESET by hand |
+
+Pin map: [`main/board/board_crowpanel35.h`](main/board/board_crowpanel35.h). The I2S microphone is not used.
+
+#### Hardware: Waveshare ESP32-S3-Touch-LCD-4.3B
+
+| | |
+|---|---|
+| Module | ESP32-S3-WROOM-1-N16R8: 16 MB quad flash, 8 MB octal PSRAM |
+| Display | 4.3" IPS 800 x 480, RGB565 over a 16-bit parallel bus (no SPI set-up commands), pixel clock 14 MHz (about 34 frames a second), HSYNC 46, VSYNC 3, DE 5, PCLK 7, data on GPIO 14, 38, 18, 17, 10, 39, 0, 45, 48, 47, 21, 1, 2, 42, 41, 40 |
+| I2C | SDA 8, SCL 9 at 400 kHz, shared by the GT911, the CH422G expander, the PCF85063 RTC (not used) and the terminal block's SDA and SCL |
+| Touch | GT911, address 0x5D, interrupt GPIO 4, reset on the expander |
+| Expander | CH422G: backlight enable, LCD reset, touch reset and the microSD chip select. The isolated inputs DI0 / DI1 and outputs DO0 / DO1 are left off |
+| microSD | SPI2: MOSI 11, SCK 12, MISO 13; chip select held on the expander |
+| Buzzer | none fitted; see wiring below (`BOARD_BUZZER_GPIO` 15, the CAN transceiver's TXD) |
+| USB | one USB-C port to the chip's own USB-Serial/JTAG; the console is there too, because UART0's pins drive the RS-485 transceiver |
+
+Pin map: [`main/board/board_waveshare43.h`](main/board/board_waveshare43.h). Its extra sdkconfig lines are in [`sdkconfig.defaults.waveshare43`](sdkconfig.defaults.waveshare43): code and read-only data run from PSRAM (`CONFIG_SPIRAM_XIP_FROM_PSRAM`), so a flash write (settings, the flash log, an OTA) does not stop the RGB panel's scan-out (Espressif's fix for a drifting picture), and the console goes to USB-Serial/JTAG. The board file refuses to build without them.
+
+Wiring a buzzer on the 4.3B (optional):
+
+- Use a passive piezo (a 2-pin piezo disc or a passive piezo buzzer, not an active buzzer and not a magnetic one).
+- Piezo + to CAN-H (terminal block pin 8), piezo - to CAN-L (pin 7).
+- Turn the CAN termination switch (SW2) on. Its 120 ohm resistor drains the piezo between pulses.
+- How it works: the firmware drives the CAN transceiver's TXD (GPIO15) with the tone. The pin rests high (CAN recessive, no voltage across the piezo), and every low part is kept under 150 us, because the TJA1051 transceiver releases the bus after a dominant phase of 0.3 ms at the least. That caps the duty on the lowest tones (the klaxon's 1600 Hz at 24 %), so they are a little quieter.
+- Without a piezo, leave it: the tones just drive an empty CAN pair. To compile every sound out, add `#define BOARD_BUZZER_GPIO -1` to `main/config.h`. Another pin wired by hand also works (GPIO6, the RTC's unused interrupt line, reachable only at the module's pad 6).
+
+### Build and flash
+
+No prior ESP32 experience is needed. You install PlatformIO (a build tool that downloads the ESP-IDF framework and the compiler for you), fill in one configuration file, build, and flash the board once over USB. After that, updates go over Wi-Fi.
+
+What you need:
+
+- One of the two boards, and a USB-C cable that carries data (some cables only charge).
+- A computer with Windows 10 or 11, macOS or Linux, and an internet connection for the first build.
+- A 2.4 GHz Wi-Fi network with WPA2 or WPA3 (the ESP32-S3 has no 5 GHz radio; open networks are refused by design).
+- A microSD card, FAT32 or exFAT (optional, but the event log, the summary metrics, the vendor database, the panel logo and the photos live on it). The firmware never formats a card.
+- Time: the first build takes 10 to 25 minutes on a typical PC, plus the downloads. Later builds take a minute or two.
+
+#### 1. Install the tools
+
+Pick one of the two ways. Both give you the `pio` command.
+
+Option A, Visual Studio Code with the PlatformIO extension (easiest):
+
+1. Install Visual Studio Code from https://code.visualstudio.com/.
+2. Open it, go to the Extensions view, search for "PlatformIO IDE" and install it. Wait until it says PlatformIO Core is installed, then restart VS Code when asked.
+3. To get a terminal where `pio` works: click the PlatformIO icon in the left bar, then Quick Access, Miscellaneous, "PlatformIO Core CLI". Every `pio` command below goes there. The same tasks (Build, Upload, Monitor) are also buttons under Project Tasks.
+
+Option B, PlatformIO Core on its own (command line only):
+
+1. Install Python 3 (Windows: from https://www.python.org/, tick "Add python.exe to PATH"; macOS and Linux usually have it).
+2. Run `python -m pip install -U platformio` (on macOS and Linux it may be `python3`).
+3. Check it with `pio --version`.
+
+You also need git:
+
+- Windows: Git for Windows from https://git-scm.com/.
+- macOS: run `xcode-select --install` in Terminal.
+- Linux: your package manager, for example `sudo apt install git`.
+
+Serial drivers and permissions:
+
+- CrowPanel (CH340C chip): Windows 10 and 11 usually install the driver by themselves when you plug the board in. If no new COM port appears, or on a Mac where no new `/dev/cu.*` port appears, install the CH340 / CH34x driver from the chip maker, WCH.
+- Waveshare (the chip's own USB): no driver needed.
+- Linux: add yourself to the serial group (`sudo usermod -a -G dialout $USER`, then log out and back in) and install PlatformIO's udev rules (https://docs.platformio.org/en/latest/core/installation/udev-rules.html).
+
+#### 2. Get the code
+
+```bash
+git clone https://github.com/rwmech/ShadowSentryS3-ESP-Terminal.git
+cd ShadowSentryS3-ESP-Terminal
+git checkout terminal-1.0.0-crowpanel35-waveshare43   # optional: this exact release; leave it out for the newest code
+```
+
+In VS Code: File, Open Folder, and pick the `ShadowSentryS3-ESP-Terminal` folder. PlatformIO finds `platformio.ini` and sets the project up.
+
+#### 3. Configure
+
+Copy the template, then open the copy in any text editor:
+
+```bash
+cp main/config.h.example main/config.h          # macOS, Linux, Git Bash
+copy main\config.h.example main\config.h        # Windows Command Prompt
+```
+
+`main/config.h` is git-ignored: it holds your passwords and is never committed. Every option in it has a comment above it. You must set:
+
+- `WIFI_SSID` and `WIFI_PASSWORD`: your 2.4 GHz network.
+- `ADMIN_PASSWORD`: the dashboard password (user name `admin`), at least 8 characters; the build stops if it is shorter.
+
+Worth a look:
+
+- `DISPLAY_TZ`: your time zone as a POSIX TZ string, for example `"CET-1CEST,M3.5.0,M10.5.0/3"` or `"EST5EDT,M3.2.0,M11.1.0"` (the Settings page has presets too).
+- `DEVICE_HOSTNAME` and `MDNS_HOSTNAME`: the name the board shows to your router and on mDNS (default "Hikvision-NVR" and `hikvision-nvr.local`, the honeypot's cover story).
+- `ADMIN_PORT` (default 9999): the dashboard's port.
+- The board: nothing to do with PlatformIO, the env sets it. On the Waveshare without a piezo you may add `#define BOARD_BUZZER_GPIO -1`.
+
+Optional, and all of them can also be set later on the dashboard's Settings page:
+
+- Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (how to get them is in upstream's [Getting a Telegram Bot Token](#getting-a-telegram-bot-token)).
+- Discord: `DISCORD_WEBHOOK_URL`, `DISCORD_MIN_TIER`.
+- WhatsApp through CallMeBot: `WHATSAPP_PHONE`, `WHATSAPP_APIKEY`.
+- Pi-hole v6: `PIHOLE_URL`, `PIHOLE_APP_PASSWORD`.
+- MikroTik router: `MIKROTIK_URL`, `MIKROTIK_USER`, `MIKROTIK_PASSWORD`, and for the router feeds `ROUTER_ADMIN_IPS` and `ROUTER_NEVER_BLOCK` (see [MikroTik](#mikrotik) and [Router setup](#router-setup)).
+- Trap and tripwire ports: any port option set to 0 turns that listener off.
+
+The values in `config.h` are the first-boot defaults. Once you save a setting on the Settings page it is kept in the board's NVS and wins over `config.h` from then on, also across updates.
+
+#### 4. Build
+
+```bash
+pio run -e crowpanel35      # Elecrow CrowPanel 3.5"
+pio run -e waveshare43      # Waveshare 4.3B
+```
+
+The first build downloads the ESP-IDF framework, the compiler and the libraries (mDNS, wolfSSH, LVGL, LovyanGFX, esp32-camera), then compiles about 1500 files. It ends with `SUCCESS`. The image is `.pio/build/<env>/firmware.bin`.
+
+#### 5. Flash over USB (once)
+
+First tell PlatformIO which serial port the board is on: open `platformio.ini` and change `upload_port` and `monitor_port` in the env you use (`[env:crowpanel35]` or `[env:waveshare43]`) to your port (see the table below).
+
+| OS | Where to find the port |
+|---|---|
+| any | `pio device list` before and after plugging the board in: the new entry is the board |
+| Windows | Device Manager, Ports (COM & LPT): a new `COMn` (the CrowPanel shows as a CH340 port) |
+| macOS | `ls /dev/cu.*`: the CrowPanel is `/dev/cu.usbserial-...` or `/dev/cu.wchusbserial...`, the Waveshare `/dev/cu.usbmodem...` |
+| Linux | `ls /dev/ttyUSB* /dev/ttyACM*`: the CrowPanel is usually `/dev/ttyUSB0`, the Waveshare `/dev/ttyACM0` |
+
+Elecrow CrowPanel 3.5":
+
+1. Plug the board in.
+2. Put it in download mode: hold BOOT, press and release RESET, then release BOOT. The screen stops; that is expected.
+3. Run `pio run -e crowpanel35 -t upload`.
+4. When the upload finishes, the board restarts into the new firmware by itself.
+
+Waveshare 4.3B:
+
+1. Plug the board in. No buttons are needed: the chip's USB resets it into its loader.
+2. The first time only, on a board fresh from the factory, clear Waveshare's demo: `pio run -e waveshare43 -t erase`.
+3. Run `pio run -e waveshare43 -t upload`.
+
+If a CrowPanel ran other firmware before (upstream's included: its partition table differs), erase it once first: download mode, `pio run -e crowpanel35 -t erase`, download mode again, then upload. An erase clears the saved settings and the flash event log; the microSD card is not touched.
+
+To watch the console: `pio device monitor -e crowpanel35` (or `-e waveshare43`), 115200 baud, Ctrl+C to quit. On the CrowPanel the monitor holds DTR and RTS low, so opening it does not reset the board.
+
+#### 6. First boot
+
+- The board plays three short beeps (if it has a buzzer), shows its boot splash on the LCARS style, and joins your Wi-Fi.
+- Its address is on the panel: on LCARS in the strip at the top of the OPS page ("ALL SYSTEMS NORMAL | 192.168.1.50:9999 | N PORTS", with "NO WI-FI" in place of the address until it has one), on clan on the INFO page (the NODE line), on the dashboard style in the status bar. The console prints `Admin panel → http://<address>:9999` too, and your router's device list shows it as `Hikvision-NVR` (`DEVICE_HOSTNAME`).
+- Open `http://<address>:9999` in a browser on the same network, or `http://hikvision-nvr.local:9999` (mDNS; works on most computers and phones). Log in as `admin` with your `ADMIN_PASSWORD`. The dashboard is plain HTTP: keep it on your LAN.
+- Then on the Settings page: check the time zone, the panel style and the sounds, and change the admin password if you like. If you do, put the new password into `tools/ota_password` (one line, git-ignored) so updates over Wi-Fi keep working.
+- Optional: build and upload the MAC vendor database (see [MAC vendor database](#lan-discovery-and-vendor-names)).
+- If the saved Wi-Fi from the Settings page ever gets no address within 90 s at boot, the board falls back to the network in `config.h`.
+
+#### Updates over Wi-Fi (OTA)
+
+After the first USB flash you never need the cable or the buttons again.
+
+1. In `platformio.ini`, set `upload_port` in `[env:crowpanel35_ota]` or `[env:waveshare43_ota]` to the board's address (an IP, or its `.local` name if your computer resolves mDNS).
+2. Run `pio run -e crowpanel35_ota -t upload` (or `-e waveshare43_ota`). It builds and then runs [`tools/ota_upload.py`](tools/ota_upload.py).
+3. The board writes the image into its other app slot and restarts into it. The new image has to reach Wi-Fi to confirm itself; if it does not, the bootloader goes back to the previous one.
+
+Notes:
+
+- `ota_upload.py` reads `ADMIN_PORT` from `main/config.h`, and the password from `tools/ota_password` when that file exists, else `ADMIN_PASSWORD` from `main/config.h`. The password is never on a command line or in an environment variable. It POSTs the image to `/api/ota` with Basic auth and the `X-ShadowSentry` header, and waits up to 10 minutes.
+- By hand: `python tools/ota_upload.py .pio/build/crowpanel35_ota/firmware.bin <address>` (use the Python that has PlatformIO, or any Python 3).
+- The `_ota` env builds the same firmware as the USB env, in its own folder, so its first build is a full one.
+- An OTA cannot change the partition table (two 6 MB app slots and a 2 MB file system, [`partitions.csv`](partitions.csv)). A change to it needs a USB flash.
+
+#### Building with idf.py instead
+
+The fork keeps upstream's ESP-IDF build working, so `idf.py` is an alternative to PlatformIO.
+
+- Use ESP-IDF 5.4. PlatformIO's `espressif32@6.10.0` platform builds with 5.4.0; the CMake check accepts 5.2 or later, but only 5.4 is built and tested.
+- Install it as Espressif describes (upstream's [Installing ESP-IDF](#installing-esp-idf) shows the commands), then open the ESP-IDF terminal (`. ./export.sh`, or the ESP-IDF Command Prompt on Windows).
+- In `main/config.h`, define the board: `#define BOARD_WAVESHARE43` for the 4.3B (nothing for the CrowPanel).
+- CrowPanel: `idf.py build`, put the board in download mode (hold BOOT, tap RESET), `idf.py -p <port> flash`, then press RESET (the CH340C cannot reset the board).
+- Waveshare 4.3B: `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build`, then `idf.py -p <port> flash monitor`.
+- When you switch boards, delete `sdkconfig` and the `build` folder first: the generated `sdkconfig` keeps the previous board's options.
+- The component manager downloads the libraries listed in `main/idf_component.yml` on the first build (LovyanGFX comes from GitHub, so git must be installed).
+
+#### Troubleshooting the build
+
+- Changed `main/config.h` but the board behaves as before: PlatformIO's incremental build can miss files that see `config.h` only through another header. Delete `.pio/build/<env>` and build again.
+- Changed `sdkconfig.defaults` or `sdkconfig.defaults.waveshare43`: delete the generated `sdkconfig.<env>` files (for example `sdkconfig.crowpanel35` and `sdkconfig.crowpanel35_ota`) and `.pio/build/<env>`, then build. PlatformIO does not regenerate them on its own.
+- Every build recompiles everything after you add or remove a source file: PlatformIO hashes the list of source files, and a new list starts a full rebuild. Create new files before a build, not during one.
+- `internal compiler error: Segmentation fault` in `esp_lcd_panel_rgb.c`: a compiler crash seen now and then on Windows. Run the same build again. It happened more often from Git Bash than from PowerShell or the VS Code PlatformIO terminal.
+- `Define exactly one of BOARD_CROWPANEL35 and BOARD_WAVESHARE43`: your `config.h` names a different board than the env. Remove the define (PlatformIO sets it) or use the matching env.
+- `BOARD_WAVESHARE43 needs sdkconfig.defaults.waveshare43`: a Waveshare build without its sdkconfig lines. Use the `waveshare43` env, or the `idf.py -D SDKCONFIG_DEFAULTS=...` command above, with a fresh `sdkconfig`.
+- CrowPanel upload says "Failed to connect" or "No serial data received": the board is not in download mode. Hold BOOT, tap RESET, release BOOT, and upload again. Also close any serial monitor (it holds the port), try a different cable, or lower `upload_speed` (921600) in `platformio.ini`.
+- Waveshare upload cannot connect: close the serial monitor and try again. If firmware crashes so early that the USB port keeps disappearing, put the chip into its ROM loader by hand: if your board has BOOT and RESET buttons, hold BOOT while you press RESET (Waveshare's wiki for the board shows where they are), then upload.
+- 4.3B picture shifted sideways, or columns wrapping in from the other edge: the panel's scan-out fell behind. Make sure you built the `waveshare43` env. The pixel clock is `BOARD_LCD_PCLK_HZ` in `main/board/board_waveshare43.h`, 14 MHz (Waveshare's demo uses 16 MHz, which showed exactly this with the clan panel); a lower value gives fewer frames a second.
+- The board never shows an address: it is 2.4 GHz only; check `WIFI_SSID` and `WIFI_PASSWORD`, and look for `Hikvision-NVR` in your router's device list.
+- Locked out of the dashboard by the admin allowlist: open the serial console and type `admin-allow clear`, then Enter.
+- OTA answers 401: the admin password was changed on the Settings page; put it in `tools/ota_password`. 403 "POST needs an X-ShadowSentry header": an old `ota_upload.py`; use the one in this repository.
+- `SPIFFS: mount failed`, or odd behaviour after other firmware: erase the flash once (step 5) and flash again.
+
+#### Continuous integration
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds the `crowpanel35` and `waveshare43` envs from `main/config.h.example` on every push and tag, to show the tree builds for both boards. It publishes no firmware images.
 
 ### Traps and ports
 
@@ -86,10 +310,15 @@ The Waveshare's extra sdkconfig lines are in [`sdkconfig.defaults.waveshare43`](
 | UDP 5678 | MikroTik MNDP neighbour discovery, listen only, never announces (fork) | Tripwire | `TRIPWIRE_MNDP_PORT`, `TRIPWIRE_MT_WHITELIST` |
 | UDP 20561 | MikroTik MAC-Telnet and MAC-Winbox, listen only (fork) | Tripwire | `TRIPWIRE_MACTELNET_PORT` |
 | UDP 1900, 3702, 5355, 137, 9999, 20002, 56700, 987, 9302, 67 | LAN discovery listeners, log only, never answer (fork) | Discovery | `DISCOVERY_ENABLE`, `DISCOVERY_DHCP` |
+| UDP 514 | the MikroTik router's syslog, copied off the Wi-Fi input with no socket, from the router only (fork) | Router | `ROUTER_SYSLOG_ENABLE`, `ROUTER_SYSLOG_PORT` |
+| UDP 4739 | the router's IPFIX / NetFlow v9 flows, same copy, from the router only (fork) | none (device page) | `ROUTER_IPFIX_ENABLE`, `ROUTER_IPFIX_PORT` |
+| 9999, 9998 | the admin dashboard and its WebSocket feed (upstream), hidden from scans with an admin allowlist (fork) | | `ADMIN_PORT`, `ADMIN_WS_PORT` |
 
 The fork's ports follow a ranking of what reaches a home LAN most often: unauthenticated ADB (infected Android TV boxes and residential-proxy apps hunt for it), then Telnet and SSH bruteforce on the alternate ports. Each port option takes 0 to disable it; `main/honeypot/trap_listen.h` has defaults for a `config.h` written before these options. The alternate ports run on the existing Telnet and SSH tasks through `select()` (no extra stack, one wolfSSH context), so each service serves one session at a time across its two ports, as upstream does on one port. An event from an alternate port ends in "(port N)".
 
 ### What this fork adds
+
+#### Front panel
 
 - Panel style (Settings, Panel style; `DISPLAY_PANEL_STYLE` in `config.h` for the first boot, else the board's default): LCARS (1, the CrowPanel's default), clan (2, the Waveshare 4.3B's default) or the dashboard below (0, CrowPanel only). The switch is live: all are built at boot, and the panel changes within a second of a save, no reboot.
 - Clan panel (`main/ui/ui_clan.c`, spec `docs/mockups/clan-panel.html`), a clan-command look: weathered gunmetal plates on a tiled 64 x 64 metal texture (`main/ui/ui_clan_tex.c`, made by `tools/make_clan_texture.py`), crimson glow strips, cyan holo panels, segmented red and gold bars. The emblem is an original sigil drawn with LVGL lines (no franchise crest or helmet art). It shows the same data as LCARS and uses the same page motion, in red, gold and cyan:
@@ -98,7 +327,7 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - TACTICAL: a holo radar with a sweep line (one step every 100 ms, a turn in 4 s) and a blip per LAN device from the discovery table at a place hashed from its MAC: FRIENDLY (`ROUTER_ADMIN_IPS`, cyan triangles), NEUTRAL (amber), HOSTILE (today's SEV1 and SEV2 sources, red; also those not in the table); a blip brightens as the sweep passes. SENSORS (ports watched, a strip of one cell per port lit when hit today), SHIELDS (Pi-hole's blocked share over the six busiest devices), POWER (free internal RAM, 100 KB full), and the last three events
   - BAIT: the traps, with hits today and the last hit. PERIMETER: every tripwire cell, red when hit today, gold armed, dark off. SYSTEMS: Wi-Fi, uptime, clock, Pi-hole, router, IPFIX, syslog, microSD, Discord. CONTACTS: the eight busiest devices, their packet rate and blocked share. INFO: the about lines (unit, base, fork, build, node, access code)
   - RED and YELLOW: the nav and pages go, the alert view shows the HOSTILE CONTACT (red) or CAUTION (amber) banner, the code, source, headline, event count and how long it has been open, then ACKNOWLEDGE (RED; hold 2 s, the panel photo at the press start) and IGNORE ERROR and IGNORE DEVICE (each asks first). Only the header's glow strips move
-- LCARS panel (`main/ui/ui_lcars.c`, spec `docs/mockups/lcars-panel.html`), in the Cerritos palette of Star Trek: Lower Decks (oranges and creams on black, no white; the dark tones lifted so every text colour reads at 6:1 or better on black), Montserrat 12 to 28 only, upper case:
+- LCARS panel (`main/ui/ui_lcars.c`, spec `docs/mockups/lcars-panel.html`), in the Cerritos palette of Star Trek: Lower Decks (oranges and creams on black, no white; the dark tones lifted so every text colour reads at 6:1 or better on black), Montserrat 12 to 28 only (18 to 42 on the 4.3B), upper case:
   - frame: the top and bottom elbows and bar segments, the title right-aligned at the top ("SHADOWSENTRY | 01 OPS"), the clock in the bottom band (the Panel clock setting's format, no seconds)
   - rail: 01 OPS, 02 TRAPS, 03 WIRES, 04 NET, 05 DEV and 06 AUTO. In AUTO the pages rotate every 30 s (the Settings page's "Page rotation (s)", 10 to 600, live) and only 06 is marked; touching 01 to 05 turns AUTO off and holds that page (its button is marked: a near-white warm line along its bottom edge); 06 turns AUTO back on or off
   - 01 OPS: a condition strip ("ALL SYSTEMS NORMAL", or "SECURED FROM RED ALERT" for a minute after an incident closes) with the board's IP and admin port and the number of ports watched; four tiles (alerts today and the all-time event total, probes today, port scans today, LAN devices and new ones today); events per hour over 24 h from the summary metrics, with a scan line stepping 3 px across every 33 ms; a focus panel changing every 5 s (the last three events, Pi-hole, the router and its syslog, the busiest trap, tripwire and decoy today); and the port table, every port the board listens on, built from the port settings (traps, tripwires and decoys, the discovery listeners, the router syslog and IPFIX copies), zero-padded, in its page's rail colour, dimmed to 73 % until hit today; a port lights only when it sees something: an event on it holds bright for half a second and then flashes three times, dimmer each time; discovery packets, router syslog lines and IPFIX records glow it softly; several ports at once ripple through them and their neighbours, in up to two sections; meanwhile a watch pass shows the panel watching every listener: every 1.5 to 3.5 s a cluster of 2 to 5 neighbouring ports glows or ripples softly, in a shuffled order over the whole table, the trap and tripwire ports twice as often as the NET ones (which see traffic anyway). Two effects can play at once, on different ports
@@ -112,22 +341,28 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - 07 SYS (the bottom-left elbow, labelled SYS so it clears the rounded corner; spec `docs/mockups/about-boot.html`): an about screen after the First Contact manual-input panel, red on black, in GREEN only (touching it stops AUTO, as 01 to 05 do): the logo at 96 px, "SUBSYSTEM INFO", "LOCAL ACCESS GRANTED", the subsystem ID with the build's git hash, and terminal lines read live from the board (unit, base project and licence, fork, build hash, date and IDF version, IP, admin port and uptime, and an "access code" from the date, the address's last octet and the admin port) ending in a blinking cursor; RETURN goes back to the page you were on, six small buttons show the newest alert codes (decoration). Any alert closes it. The git hash comes from `tools/build_id.py`, which PlatformIO runs on every build (`main/gz/build_id.h`), since the app description's version is only taken when CMake configures
   - boot splash, at every boot and on a switch to the LCARS style: the logo and "SHADOWSENTRY S3" fade in, hold 1.5 s and fade out, the frame rolls in piece by piece from its edges (elbows, bars, title, the rail buttons, clock; 60 ms apart, about 1.1 s), then the page fades in a quarter at a time. Any alert cuts it short and shows the alert view at once
   - panel logo: the Settings page's Panel logo card shows the current one and uploads a PNG (at most 200 KB and 240 x 240 px, transparent background; 200 x 200 suits the splash) to the microSD card as `/ui/logo.png` (`POST /api/ui/logo`, `GET /api/ui/logo` returns the card's or the built-in one, with `X-Logo-Source`). The board decodes it once, the first time the LCARS panel shows after boot, into PSRAM with LVGL's PNG decoder (lodepng); a missing, oversized or broken file falls back to the built-in insignia (`docs/mockups/shadowsentry-logo-200.png`, embedded as PNG). A new upload shows from the next boot
-- Front panel (LVGL 8 + LovyanGFX, using Elecrow's own panel config), laid out for status and control rather than a scrolling log, in a bright palette (white and light grey text, saturated accents, slate cards) because the ILI9488 has no gamma tuning:
+- Dashboard style (panel style 0, CrowPanel only; LVGL 8 + LovyanGFX, using Elecrow's own panel config), laid out for status and control rather than a scrolling log, in a bright palette (white and light grey text, saturated accents, slate cards) because the ILI9488 has no gamma tuning:
   - status bar: name, IP : port, clock, and a GREEN / YELLOW / RED condition pill. The clock and the incident times follow the Panel clock setting: 12-hour (default) shows "3:39 PM" in the status bar (no seconds, which would run into the IP) and "3:39:12 PM" for incident times; 24-hour shows "15:39:12" in both. `DISPLAY_CLOCK_24H` in `config.h` sets the first-boot default
   - running light (GREEN): a 3 px bar under the status bar with a bright segment sweeping left to right every 2 s. The UI task drives it, so if the panel ever freezes the light stops: moving means alive. During an incident the alert emblem's rolling stripes take its place
   - GREEN: summary metrics only, no log, in the style of the Pi-hole dashboard (dark rounded cards, big numbers, thin frequency bars). Four tiles: alerts, probes and port scans today, and LAN devices seen. "Top offenders today": the five sources with the most alerts (SEV1 and SEV2) today, each with its discovery label or MAC vendor, IP, count and a bar against the top one. "LAN talkers": the five devices sending the most discovery traffic, each with its label or vendor, IP, packets an hour and one to five activity lights (under 30, 100, 300 and 600 an hour, then five; green, amber from three, red from four), and a bar. A footer line: ports listening, uptime, microSD free space, Wi-Fi RSSI. Tiles and offenders update on a change (checked every 2 s), talkers and the footer once a minute, and only changed text is redrawn
   - RED (unacknowledged): the whole screen goes black with a red alert emblem across the top, after the Starfleet alert graphic and drawn natively from LVGL lines, pills and labels: a rounded chevron above and below a central band, stacked stripes inside each, and "ALERT" over "CONDITION: RED" in the band. Under it the details: "Code 17-01 ARP sweep", the source IP and vendor, the headline's detail (wrapped at words over up to two lines), and the event count, first and last seen and how long it has been open. Then three buttons: ACKNOWLEDGE (2 s hold), IGNORE ERROR, IGNORE DEVICE. The backlight is forced to 100 %. The only motion is in the emblem's stripes: they roll toward the centre band (the upper ones down, the lower ones up) and loop, fading out at the band, a stripe from the top to the band in 1 s (2 s on YELLOW). The text and the chevron outlines stay still, and a frame repaints only the two stripe areas
   - YELLOW (acknowledged, or a SEV2 incident): the status bar stays, a smaller amber emblem ("ALERT / CONDITION: YELLOW"), the same details, IGNORE ERROR and IGNORE DEVICE, and a line "Resolve from the dashboard" that also says who acknowledged. There is no resolve on the panel
-  - headlines: every event gets an alert code (see Alert codes below) and one line, for example "Code 17-02 Port scan | 192.168.0.75: 1000 ports in 3 s", "Code 20-02 Telnet login | 192.168.0.75: attempt as root" or "Code 30-02 Web dotfile | 192.168.0.75: /.env on port 8080" (`main/alarm/describe.c`). The same line leads on the dashboard's feed, attack table and Logs table, in Discord's incident and event-log posts, Telegram and WhatsApp, and in the microSD lines (`"headline"`, with `"tier"` and `"code"`)
+  - headlines: every event gets an alert code (see Alert codes below) and one line, for example "Code 17-02 Port scan | 192.168.1.20: 1000 ports in 3 s", "Code 20-02 Telnet login | 192.168.1.20: attempt as root" or "Code 30-02 Web dotfile | 192.168.1.20: /.env on port 8080" (`main/alarm/describe.c`). The same line leads on the dashboard's feed, attack table and Logs table, in Discord's incident and event-log posts, Telegram and WhatsApp, and in the microSD lines (`"headline"`, with `"tier"` and `"code"`)
   - hold to confirm: ACKNOWLEDGE takes a 2 s hold. A fill grows across the button as you hold; letting go or sliding off early empties it with no action, and completing it plays the acknowledgement tone
-  - IGNORE ERROR and IGNORE DEVICE each ask first, naming exactly what will be ignored ("Ignore Code 17-01 ARP sweep from 192.168.0.75 (ASUSTek)?", "Ignore all alerts from 192.168.0.75 (ASUSTek)?"), and say the dashboard can undo it. Confirming calls `alarm_ignore_error()` (this code from this source) or `alarm_ignore_device()` (every code from it), which add the entry and resolve the incident (a later event whose code is not ignored opens a new one)
-  - backlight brightness is a setting
-- Sounds: at every boot, three short rising computer beeps (2500, 2900, 3300 Hz; 45, 45 and 100 ms with 50 ms gaps, 290 ms), queued to the buzzer task so boot does not wait. They replace the startup melody. The boot sound can be switched off in Settings.
+  - IGNORE ERROR and IGNORE DEVICE each ask first, naming exactly what will be ignored ("Ignore Code 17-01 ARP sweep from 192.168.1.20 (ASUSTek)?", "Ignore all alerts from 192.168.1.20 (ASUSTek)?"), and say the dashboard can undo it. Confirming calls `alarm_ignore_error()` (this code from this source) or `alarm_ignore_device()` (every code from it), which add the entry and resolve the incident (a later event whose code is not ignored opens a new one)
+  - backlight brightness is a setting (CrowPanel; the 4.3B's backlight is on or off only)
+
+#### Sounds
+
+- Boot: at every boot, three short rising computer beeps (2500, 2900, 3300 Hz; 45, 45 and 100 ms with 50 ms gaps, 290 ms), queued to the buzzer task so boot does not wait. They replace the startup melody. The boot sound can be switched off in Settings.
 - Alert and console sounds, synthesised on the passive piezo (square wave, LEDC), after the Star Trek red alert and LCARS panel sounds (by ear from descriptions, no audio files):
   - red alert klaxon, for a RED incident and its reminders, after the TNG red alert: a rising whoop from 1600 to 3000 Hz in 1150 ms (46 steps of 25 ms), cut off at the top, 350 ms quiet, three times, 4.15 s in all. The sweep rises through the piezo's 2.7 kHz resonance, so it swells to its loudest at the top. Timing from a published description (rise about 1.15 s, off 0.35 s); the pitch is placed for the piezo, since the sample MP3s could not be decoded. Acknowledging cuts it short within 25 ms
   - YELLOW attention call, once when a YELLOW incident opens: one short soft whoop, 2000 to 2800 Hz in 250 ms, at a quarter of the klaxon's duty
   - console chirps, TNG / LCARS style (designed from descriptions; the thelcars.com samples could not be decoded): a tap on any press (2600 then 3200 Hz, 18 ms each), the commit sound when a dialog is confirmed (2600, 3000, 3400 Hz; 30, 30, 75 ms with 15 ms gaps), a cancel (3200 Hz 35 ms, 15 ms quiet, 2400 Hz 55 ms), and the acknowledgement tone when a hold completes (3000 Hz 50 ms, 30 ms quiet, 3400 Hz 110 ms). They play on the buzzer task, never during the klaxon, at the UI sound volume, and follow the touch click setting; the klaxon and the attention call follow the alarm sound setting. The Settings page has a sound picker and Play, to hear each one at the current volumes
-- Volume: the buzzer's loudness is the LEDC duty of its square wave (the fundamental is sin(pi x duty) of the 50 % one). Settings has "UI sound volume" for the chirps and the boot beeps (Off, Low 3 % about -20 dB, Medium 8 % about -12 dB, High 20 % about -5 dB; default Low) and "Alarm volume" for the klaxon and the yellow call (Low 8 % / 3 %, Medium 20 % / 6.25 %, High 50 % / 12.5 %; default High, the old loudness). The alarm has no Off level: switch the alarm sound off for silence. Both apply at once; defaults `UI_VOLUME_DEFAULT` and `ALARM_VOLUME_DEFAULT` in `main\config.h`.
+- Volume: the buzzer's loudness is the LEDC duty of its square wave (the fundamental is sin(pi x duty) of the 50 % one). Settings has "UI sound volume" for the chirps and the boot beeps (Off, Low 3 % about -20 dB, Medium 8 % about -12 dB, High 20 % about -5 dB; default Low) and "Alarm volume" for the klaxon and the yellow call (Low 8 % / 3 %, Medium 20 % / 6.25 %, High 50 % / 12.5 %; default High, the old loudness). The alarm has no Off level: switch the alarm sound off for silence. Both apply at once; defaults `UI_VOLUME_DEFAULT` and `ALARM_VOLUME_DEFAULT` in `main/config.h`. On the 4.3B's CAN-pair piezo the lowest tones are capped below these duties (see Supported boards).
+
+#### Incident alarm
+
 - Incident alarm, with three conditions kept by the firmware and echoed 1:1 to the panel, the dashboard (`/api/status` and the WebSocket push) and the alerts:
   - GREEN: no open incident.
   - RED: an open incident with a SEV1 event, unacknowledged. The red alert klaxon (above), then the klaxon again every minute until someone acknowledges it, by holding the button on the panel or clicking Acknowledge on the dashboard. Acknowledging cuts the klaxon short and turns the incident YELLOW.
@@ -135,6 +370,9 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - In YELLOW the same source stays quiet. A SEV1 event from a new source, or from the same source after 10 quiet minutes, opens a new RED incident; a SEV1 event from the same source in a YELLOW incident nobody acknowledged turns it RED in place. A SEV2 event from a new source opens a new YELLOW one.
   - Resolve (Resolve on the dashboard, `POST /api/alarm/resolve`; not on the panel) goes to GREEN from RED or YELLOW at once, so the next event alarms again. It deletes nothing: the logs, metrics and the panel's last-incident summary all stay. A YELLOW incident also goes GREEN by itself after the quiet time without events; a RED one never does.
   - The incident survives a reboot: RED keeps reminding, YELLOW stays YELLOW and its quiet time starts again. The reminder interval (default 60 s), quiet time and alarm sound are settings.
+
+#### Traps, tripwires and MikroTik decoys
+
 - ADB trap on 5555 (`main/honeypot/adb_trap.c`, protocol handling ported from [Glutton](https://github.com/mushorg/glutton), MIT, see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)): it answers the CNXN handshake as an Android 6 TV box with auth off (`device::ro.product.name=p281;ro.product.model=MBOX;...`) and logs, as ADB events:
   - the connection with the client's banner (alert)
   - every OPEN: `shell:<cmd>` and `exec:<cmd>` get canned output for recon commands (`id`, `whoami`, `uname -m`, `getprop ...`, a plain `echo`) and silence for everything else; `shell:` gives an interactive prompt and every line is logged; anything else (`tcp:`, `localabstract:`, `reverse:`, ...) is refused and logged, so the honeypot never forwards a connection (alert)
@@ -149,7 +387,7 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - Per connection: accept, send the banner if the service speaks first (VNC `RFB 003.008`; MySQL a 5.7 handshake with no TLS offered, so a client sends its login packet), wait up to 3 s for the client's first bytes, read at most 64, log one Tripwire event and close. No protocol or credential parsing, no second round trip, 5 s per connection, one connection at a time across all the tripwire ports.
   - The event reads `<service> on <port>: <first bytes in hex>` (`no data` if the client sent nothing), trimmed to the 128-byte payload; the console prints all 64 bytes. The microSD attack line gets `"service"` (`RDP`, `VNC`, `SMB`, `Redis`, `MySQL`, `MSSQL`, `JetDirect`, and for the MikroTik decoys below `Winbox`, `RouterOS API`, `Bandwidth test`, `MNDP`, `MAC-Telnet`).
   - Rate limit: one event per source and service per 30 s. Further connections in that window are accepted, printed on the console and counted, and the next event says how many (`RDP on 3389 (+4 held): ...`).
-  - Each tripwire port is also a trap port for the probe detector. One internal 3 KB task stack (it writes SPIFFS); its high-water is printed at each new low.
+  - Each tripwire port is also a trap port for the probe detector. One internal 4 KB task stack (it writes SPIFFS); its high-water is printed at each new low.
 - MikroTik decoys (logged by the tripwire task, same rate limit and event type; `main/honeypot/mt_decoy.c` reads the protocols, bounded, and never sends; written from MikroTik's API manual, btest-opensource's protocol notes (MIT) and, consulted only, Wireshark's MNDP dissector and MAC-Telnet (both GPL), see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)). They use MikroTik-specific ports only: the FTP, SSH, Telnet and HTTP traps on 21, 22, 23 and 80 keep presenting their own devices, since one box answering as a Hikvision NVR on 80 and a RouterOS router on 22 would give the honeypot away. On a home LAN an internet scanner cannot reach the board, so a hit means a LAN host is looking for routers to attack, as Glupteba-infected PCs do with their own gateway.
   - Winbox, TCP 8291 (`TRIPWIRE_WINBOX_PORT`): the client speaks first; the decoy stays silent, logs the first frame (its first 64 bytes in hex, and its length: the bytes of the first burst, counted up to 2048) and closes. `Winbox on 8291: frame 41 B: <hex>`, headline "Code 40-10 Winbox | <ip>: Winbox connection, first frame 41 bytes".
   - RouterOS API, TCP 8728 (`TRIPWIRE_ROSAPI_PORT`): silent. The first sentence's length-prefixed words are read per MikroTik's API manual (at most 8 words in the first 64 bytes); only the command word and the `=name=` value are copied out. The password word is skipped without being copied, so it is never logged, stored or printed, and no hex of this port's bytes is kept anywhere. `RouterOS API on 8728: /login as admin, 38 B`; the user name also goes in the event's user field.
@@ -157,25 +395,34 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - MNDP, UDP 5678 (`TRIPWIRE_MNDP_PORT`): passive, never announces. A solicitation (the 4-byte request Winbox and mactelnet broadcast to find neighbours) or an announcement (identity, version and board read from its type-length-value records) is an event, unless the sender's MAC is the gateway's (looked up by itself from the default gateway and the ARP cache, every 60 s), one of the router's own interface MACs (read with `/rest/interface` when the MikroTik client below is on, at its first poll and hourly) or on `TRIPWIRE_MT_WHITELIST`, or the datagram's IP source is the gateway's: RouterOS announces from each interface's own MAC, which need not be the one ARP gives for the gateway. For the first 60 s after boot MNDP and MAC-Telnet datagrams wait in the ring until the gateway's MAC and the router's MACs are known, so the router's first announcement is not taken for a stranger's. A real MikroTik router announces itself every 60 s; the first whitelisted datagram is said once on the console and the rest are counted. SEV2, so a YELLOW at most: Winbox on a PC sends discovery too. One event per source per 5 minutes, since Winbox repeats its scan.
   - MAC-Telnet, UDP 20561 (`TRIPWIRE_MACTELNET_PORT`): these sessions are layer 2 by name, but mactelnet broadcasts its packets at the IP layer, so the board receives them through lwIP. A packet whose header names the board's MAC is an event (session start, data, ping, ...), unless it comes from a whitelisted MAC as for MNDP (the gateway's IP alone does not count here); sessions for other MACs are counted only.
   - No sockets and no file descriptors: lwIP's sockets and the open files share the 64 descriptors of `FD_SETSIZE`, and both are fully budgeted. The TCP decoys are raw lwIP pcbs (callbacks on the tcpip thread doing bounded work only: at most 64 bytes copied, the API words read there so only the command and user name leave the callback, a fixed-size result posted with no wait; at most 2 connections at once, the rest aborted; each closed after 3 s without data or 5 s in all). The UDP decoys have no socket: the station interface's input wrapper (the one the ARP sweep detector uses) copies each datagram to 5678 or 20561 that is for the board (its address or a broadcast) into an 8-slot ring in PSRAM, up to 512 bytes each, with the frame's source MAC. Without a socket, a unicast datagram to these ports gets lwIP's ICMP port unreachable, as any closed port does; broadcasts get nothing. The tripwire task reads the queue and the ring every 250 ms and logs as for the other tripwires (its internal stack writes the flash ring, which the discovery task's PSRAM stack cannot).
+
+#### LAN discovery and vendor names
+
 - LAN discovery listeners (`main/detect/discovery.c`, `DISCOVERY_ENABLE`, default on), to see which devices on the LAN scan or discover the others (an LG TV opening Photo & Video or Home Dashboard, phone apps, Home Assistant, Windows) and with what. Log only: these sockets never send, so nothing in the house sees them or changes behaviour.
   - SSDP on UDP 1900 (joins 239.255.255.250): M-SEARCH with ST, MAN, MX and USER-AGENT, NOTIFY with NT, NTS, SERVER and LOCATION. WS-Discovery on 3702 (same group): the action (Probe, Hello, Resolve), Types, Scopes and XAddrs, read with bounded string scans, no XML parser. LLMNR on 5355 (joins 224.0.0.252): the queried names and types, queries only. NBNS on 137 (broadcast): the queried name; a registration's name is the sender's own NetBIOS name. Kasa on 9999 and 20002, LIFX on 56700, PlayStation on 987 and 9302: the size and first 16 bytes in hex, plus Kasa's XOR-encoded JSON on 9999, LIFX's message type and a PlayStation request's first line. DHCP on 67 (client broadcasts, receive only; the board's own client is on 68): the hostname (option 12), vendor class (60) and parameter request list (55) as a fingerprint (`DISCOVERY_DHCP` 0 leaves 67 alone). UDP 9999 coexists with the admin panel on TCP 9999.
   - mDNS (5353) has no socket: the espressif/mdns component owns 5353 on a raw lwIP pcb without `SO_REUSEADDR`, so a second socket cannot bind, and one that won the race would take `.local` away from the board. Instead the station interface's input wrapper (the one the ARP sweep detector uses) copies each mDNS query (to 224.0.0.251, or unicast to the board; responses skipped) into an 8-slot ring in PSRAM, at most 512 bytes each, dropped and counted when the ring is full. The discovery task reads the questions (names and types, up to 8) with the same bounded DNS name reader as LLMNR. The mdns component is untouched and still answers for `.local`. IPv4 only.
   - Source MACs come from that same wrapper, which notes the sender's MAC for UDP to these ports; DHCP uses the packet's client MAC; otherwise the ARP cache.
   - Seen devices: up to 64, keyed by MAC, least recently seen evicted, in PSRAM. Each has the IP, first and last seen, the protocols with a packet count each, the best label so far, the DHCP or NetBIOS hostname and the last 4 distinct query strings. Labels, best first: a known string in an SSDP USER-AGENT or SERVER, a DHCP hostname or vendor class (LG webOS, Samsung, Roku, Sonos, Philips Hue, Fire TV, Xbox, PlayStation, Chromecast, Windows, Android), then a raw hostname, a raw vendor class or SERVER string, and the MAC vendor last. A locally administered MAC (phones randomise theirs) is marked "random MAC".
   - Logging: a `{"kind":"discovery"}` line on the card (and the console) only for a new device, a new protocol, a new label or hostname, or a query string that device never sent before (the last 32 distinct ones per device are remembered), at most 20 at once then one every 3 s. Once an hour each device that sent anything gets one `{"kind":"discovery_summary"}` line with its packet count per protocol and how many new queries it made. Nothing is written per packet; a chatty LAN costs well under 1 MB a day.
-  - Discord: discovery does not post event by event, and by default not at all (it is SEV3; see Discord alerts, Tiers, below). With Discord set to post everything, every 30 minutes, and only when something new was seen, one message "LAN devices seen (last 30 min)" lists each device with news, newest first: its label (marked "(new)" if first seen), its IP (or MAC before it has one), and what it did in plain words, for example `LG TV (webOS) 192.168.0.50: looking for media servers (DLNA); DHCP request, hostname LGwebOSTV`. At most 20 lines within Discord's 2000 characters, each cut at a word boundary, then "+N more on the Devices tab". The words come from a table in flash (SSDP search targets such as DIAL, DLNA, Roku, WeMo and the router; announcements; Kasa, LIFX and PlayStation probes; NetBIOS and LLMNR names, WPAD called out; DHCP type, hostname and vendor class; WS-Discovery printers, scanners and ONVIF cameras; mDNS services such as Chromecast, AirPlay, Spotify Connect, HomeKit and printers); anything else is shown shortened.
+  - Discord: discovery does not post event by event, and by default not at all (it is SEV3; see Discord alerts, Tiers, below). With Discord set to post everything, every 30 minutes, and only when something new was seen, one message "LAN devices seen (last 30 min)" lists each device with news, newest first: its label (marked "(new)" if first seen), its IP (or MAC before it has one), and what it did in plain words, for example `LG TV (webOS) 192.168.1.30: looking for media servers (DLNA); DHCP request, hostname LGwebOSTV`. At most 20 lines within Discord's 2000 characters, each cut at a word boundary, then "+N more on the Devices tab". The words come from a table in flash (SSDP search targets such as DIAL, DLNA, Roku, WeMo and the router; announcements; Kasa, LIFX and PlayStation probes; NetBIOS and LLMNR names, WPAD called out; DHCP type, hostname and vendor class; WS-Discovery printers, scanners and ONVIF cameras; mDNS services such as Chromecast, AirPlay, Spotify Connect, HomeKit and printers); anything else is shown shortened.
   - Discovery events stay out of the 200-entry flash ring, so they never push real attacks out of it, the dashboard's attack list and feed, or the panel's last events. They are not counted in the summary metrics (`stats.bin`) either; the Devices tab has its own counts.
   - Discovery is background noise, so its Alert on switch is off by default: it opens no incident unless switched on (then it goes straight to the incident logic and Telegram, as other types do). A mask saved by older firmware does not switch it on (settings remember how many types the saved mask knew).
-  - Every datagram is hostile: every length and offset is checked, DNS names follow at most 8 compression pointers and only backwards, strings are cut to printable ASCII on the way in and escaped on the way out. The task never touches flash, so its 3.5 KB stack is in PSRAM; its high-water is printed at each new low.
+  - Every datagram is hostile: every length and offset is checked, DNS names follow at most 8 compression pointers and only backwards, strings are cut to printable ASCII on the way in and escaped on the way out. The task never touches flash, so its 4 KB stack is in PSRAM; its high-water is printed at each new low.
 - MAC vendor database (`main/storage/oui.c`): vendor names for every MAC the board shows (panel, dashboard, Discord, the Devices tab), from the IEEE Registration Authority's public registry (MA-L, MA-M, MA-S and IAB), kept on the microSD card as `/sd/oui.bin`.
   - Build it on a PC: `python tools/make_oui.py --download` (or give it the four CSVs saved from standards-oui.ieee.org). It writes a sorted binary (prefix, prefix length, an offset into a deduplicated table of names cut to 40 characters) and prints its size and record count. Upload it with `python tools/oui_upload.py oui.bin <board IP>` or the Settings page's "Update vendor database" (file picker and progress); the Settings page shows whether it is present, the record count and the build date.
   - `POST /api/oui` takes the raw file (at most 4 MB) into PSRAM, checks the header against its length and hands it to the microSD writer, which writes `/sd/oui.bin.tmp` and renames it.
   - Lookups search the 36-bit, then 28-bit, then 24-bit prefix, reading only what each step needs, and keep the last 64 results in PSRAM. Only the discovery task and the admin task read the card; everywhere else (traps, panel, Discord) gets the cached name or the compact built-in list, and a miss is resolved in the background. A randomised (locally administered) MAC is shown as "randomized (private)" and never looked up. Without the file the compact built-in list answers, as before.
+
+#### Fake shell
+
 - Fake shell input (upstream's `main/honeypot/fake_shell.c`, shared by Telnet and SSH), made sturdier; the command output is upstream's:
   - Idle limit 120 s in the shell (`FAKE_SHELL_IDLE_S`; the login prompts keep 30 s), then bash's TMOUT message "timed out waiting for input: auto-logout" and the close. Before, the 30 s login timeout also applied in the shell, so a pause of 30 s closed the session with no message.
   - Session cap 600 s (`FAKE_SHELL_SESSION_S`, checked as bytes arrive, so an idle wait can add up to 120 s) and 64 KB received (`FAKE_SHELL_MAX_INPUT`).
   - A bare LF ends a line, so netcat and other LF-only clients get a prompt for an empty line (only an LF straight after a CR is swallowed now). Ctrl-C drops the line and prints `^C`. Escape sequences (`ESC [ ... final`, `ESC O x`: arrow and function keys) are dropped. A line longer than 255 bytes is dropped whole up to its newline, not cut down and run.
   - The console's "shell session ended" line says why (logout, closed, idle, session cap, byte cap, command cap) and how many bytes came in.
+
+#### Detection, alert switches and the ignore list
+
 - Recon detection (`main/detect/detect.c`), so a scan raises an alert before any trap sees a login:
   - an lwIP IPv4 input hook sees every inbound TCP SYN (plus FIN, NULL and Xmas probes) and UDP datagram to the board, open port or not. It only queues (source, port, protocol); the gateway and replies to the board's own DNS, DHCP, NTP and mDNS are skipped.
   - Port scan: 5 distinct ports from one source within 10 s (both settings) raise one "Port scan" event with the port count, lowest to highest port, protocol and sample ports. Nothing more while it continues; after 60 s of quiet a summary follows ("Scan ended: N ports total", with the trap ports it found).
@@ -185,11 +432,17 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - The Logs page shows the detector's counters since boot (scans, probes, sweeps, packets queued and dropped, admin SYNs hidden, ARP tap on or off).
 - Alert on: one switch per attack type on the Settings page decides whether that type opens an incident (siren, panel, Telegram, Discord). Every event is logged either way (flash ring, microSD, dashboard).
 - Ignore list: up to 32 entries, each an IP and/or a MAC (DHCP moves IPs) and an optional alert code, with a note and the time added, in NVS. An entry matches on either address; with a code it ignores only that code from the device (say 17-01, the ARP sweep a PC makes when it wakes), without one the whole device. Lists saved by older firmware are migrated as whole-device entries. Ignored events are still logged, flagged "ignored" (`"ignored":true` on the microSD line, a chip in the dashboard tables), and never open an incident or alert. View, add and remove (with a confirm) on the Settings page; the panel can add. Ignore error and Ignore device (`POST /api/alarm/ignore`) add the open incident's source with its code, or with none, and resolve the incident, whatever else it saw; a later event whose code is not ignored opens a new one.
-- Hidden admin ports: with an admin allowlist set (up to 8 IPv4s, Settings), the IPv4 hook drops SYNs to 9999 and 9998 from anyone else, so a scan shows them filtered rather than giving the honeypot away. Those dropped SYNs still count toward port scan detection. An empty list means open, as before. The dashboard refuses a list that does not include the address you are saving it from. Locked out anyway (a new DHCP lease, say)? Open the USB serial console (115200, `pio device monitor -e crowpanel35`) and type `admin-allow clear` then Enter: the list is emptied in NVS and the ports open at once. `admin-allow` alone prints the list.
+- Hidden admin ports: with an admin allowlist set (up to 8 IPv4s, Settings), the IPv4 hook drops SYNs to 9999 and 9998 from anyone else, so a scan shows them filtered rather than giving the honeypot away. Those dropped SYNs still count toward port scan detection. An empty list means open, as before. The dashboard refuses a list that does not include the address you are saving it from. Locked out anyway (a new DHCP lease, say)? Open the USB serial console (115200, `pio device monitor -e crowpanel35`, or `-e waveshare43`) and type `admin-allow clear` then Enter: the list is emptied in NVS and the ports open at once. `admin-allow` alone prints the list.
+
+#### Storage
+
 - microSD event log: every attack, alarm transition and boot is appended as one JSON line to `/sd/log/YYYY-MM-DD.jsonl` (device local date; `nosync.jsonl` before the clock is set). A writer task drains a queue, so the traps never touch FAT. The card must be FAT32 or exFAT; the firmware never formats it.
 - Summary metrics, kept from every attack and saved to `/sd/stats.bin` once a minute (and before a reboot or OTA): total and per-type counts, 24 hourly and 30 daily buckets, the top 64 sources and top 32 credential pairs (each with the traps that saw it, the last port on each, and the newest try; stats.bin v3, migrated from v1 and v2, whose pairs keep their counts but show no trap). Top-N counts are upper bounds for entries that were evicted and came back.
+
+#### Dashboard and device page
+
 - Dashboard tabs: Dashboard (upstream, plus the condition banner), Logs, Devices and Settings.
-  - Condition banner, under the header on every tab, the panel's condition 1:1. It follows `/api/status` (every 5 s) and the WebSocket alarm push, so it changes the second the panel does. RED: "ALERT / CONDITION: RED" in a large red band with a chevron emblem; YELLOW: a smaller amber band; GREEN: a slim green "Condition green" line. Red and yellow show the code and headline, the source (IP, vendor and MAC), the event count, first and last, and who acknowledged it. Buttons: ACKNOWLEDGE (red only), RESOLVE (red or yellow; the dashboard is the only place to resolve), IGNORE ERROR (this code from this device) and IGNORE DEVICE (every alert from it), each ignore behind a confirm that names exactly what goes on the ignore list. OPEN ON DEVICE PAGE (red, yellow, and the green "incident #N resolved" line) opens the source's device page in a new window, `/device?mac=..&ip=..&at=<newest event>&code=<code>` (by IP alone without a MAC); the page reads back to that time and opens that code's message there, with its labelled fields, Copy details and the raw line. With firmware that sends no condition, state 1 reads as red and 2 as yellow, RESOLVE falls back to the re-arm route and IGNORE DEVICE to the ignore list; IGNORE ERROR needs a code, so it is hidden.
+  - Condition banner, under the header on every tab, the panel's condition 1:1. It follows `/api/status` (every 5 s) and the WebSocket alarm push, so it changes the second the panel does. RED: "ALERT / CONDITION: RED" in a large red band with a chevron emblem; YELLOW: a smaller amber band; GREEN: a slim green "All systems normal" line. Red and yellow show the code and headline, the source (IP, vendor and MAC), the event count, first and last, and who acknowledged it. Buttons: ACKNOWLEDGE (red only), RESOLVE (red or yellow; the dashboard is the only place to resolve), IGNORE ERROR (this code from this device) and IGNORE DEVICE (every alert from it), each ignore behind a confirm that names exactly what goes on the ignore list. OPEN ON DEVICE PAGE (red, yellow, and the green "incident #N resolved" line) opens the source's device page in a new window, `/device?mac=..&ip=..&at=<newest event>&code=<code>` (by IP alone without a MAC); the page reads back to that time and opens that code's message there, with its labelled fields, Copy details and the raw line. With firmware that sends no condition, state 1 reads as red and 2 as yellow, RESOLVE falls back to the re-arm route and IGNORE DEVICE to the ignore list; IGNORE ERROR needs a code, so it is hidden.
   - Error codes: every event, incident and log line from firmware with codes shows "Code NN-NN" before its headline, in the feed, the attack table, the event popup, the Logs table (a Code column and a code filter) and the Devices tab. The names and tiers come from `GET /api/codes` (the table in `main/alarm/describe.c`), so the page needs no copy of it. A headline is at most 95 characters; one that would run longer is cut at a word and ends in "...". The banner's buttons show the state the firmware answers with at once.
   - Event popup: the title is "Code NN-NN <name>" with the tier (Info, Probe or Alert); without a code it is the type name, and "attack" only for the alert tier, so a TV announcing itself reads "Discovery event". Copy details copies a plain-text report of every row the popup shows (code, headline, tier, time, protocol, source, location, MAC, vendor, credentials, payload, alerting state, counts), with the labels aligned. The Source IP row has a button that copies `ip:port`, the trap port the event hit (from the event, else the type's port). The dashboard is plain http, where browsers withhold `navigator.clipboard`, so both copy through a hidden text area (`document.execCommand('copy')`) and say "Copy failed" if that fails too.
   - Devices: the seen-devices table, newest first, refreshed every 10 s: label (and where it came from, and the hostname), IP, MAC and vendor (and "random MAC"), protocols with packet counts, last seen, the last queries; above it, which listeners are open.
@@ -209,7 +462,10 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
     - Discovery lines are hidden unless "Show discovery" is ticked (remembered in the browser), and consecutive identical ones collapse into one row with xN and the time range. Username and Password columns appear only when a row on screen has one; Details takes the rest of the width and wraps. Vendor and MAC share one column as "vendor (mac)".
   - Readability: base text 15 px, tables 14 to 15 px, small text 13 px, text near white (#f1f5f9) and secondary text #cbd5e1; monospace only for IPs and MACs; tables scroll sideways on a narrow screen instead of shrinking.
   - Ignore list (Settings): a Code column ("All alerts" for a whole-device entry), and the Add row has a code list: "All alerts from this device", then every code with its name.
-  - Settings: admin password, Wi-Fi, Telegram, Discord, WhatsApp, Pi-hole (collapsed, optional), MikroTik, timezone (POSIX TZ, with presets), the panel clock (12-hour or 24-hour), alarm timings, brightness and the three sounds, the Alert on switches, the scan and sweep thresholds, the admin allowlist, plus Save, Reboot and Test buzzer (Discord and WhatsApp each have a Send test button), and below them the ignore list. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot, the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
+  - Settings: admin password, Wi-Fi, Telegram, Discord (webhook, "Post the event log", "Post to Discord" tiers), WhatsApp, Pi-hole (collapsed, optional), MikroTik (and "Arm router baseline"), the router switch "The router redirects port 53 to the Pi-hole", timezone (POSIX TZ, with presets), the panel clock (12-hour or 24-hour), Panel style, Panel title (clan), Page rotation (s), alarm timings, brightness, the three sound switches, UI sound volume and Alarm volume with a sound picker and Play, the Alert on switches, the scan and sweep thresholds, the admin allowlist, plus Save, Reboot and Test buzzer (Discord, WhatsApp, Pi-hole and MikroTik each have a test button), the Panel logo, Vendor database and Crashes cards, and below them the ignore list. Settings the board does not have (brightness on the 4.3B, the sounds without a buzzer, the dashboard style) are hidden. Settings live in NVS over the `config.h` defaults and survive OTA. Wi-Fi and Telegram apply after a reboot (and WhatsApp when it was not set at boot), the rest at once. If a Wi-Fi network saved here gets no IP within 90 s at boot, the board drops it and comes back on the `config.h` network.
+
+#### Notifications
+
 - Discord alerts, to a channel webhook (`main/admin/discord.c`):
   - Incidents, each titled with the code first ("Code 17-02 Port scan: incident #12 opened, RED"): an embed when one opens (red for RED, amber for YELLOW: the headline, source IP, MAC and vendor, attack type, the event's username and payload, the device's IP and name) or escalates to RED, a reminder every alarm reminder interval while it is RED (orange: events so far, how long it has been open), one when it is acknowledged (amber, YELLOW, saying whether from the panel or the dashboard) and one when it goes GREEN (green: event count and duration, and whether it was resolved, and where, or closed by the quiet time). Count-only updates never post.
   - Event log (the Discord twin of the microSD log), on by default: events are folded by source IP, attack type and a short summary (shell: the command's first word, so 110 runs of `ls` post once as `ran ls x110`; credential traps: user:pass; HTTP: method and path; otherwise the first 40 characters), and posted every 15 s as lines in a code block. A line that has posted waits 5 minutes before its next post, which shows only the new count (`+40 more`); a line idle for 10 minutes is forgotten. At most 32 lines per post, the rest follow in the next one.
@@ -225,10 +481,14 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - Set it up: follow the activation steps on CallMeBot's page to get an apikey for your number, then enter the number (international format, country code first, e.g. `+34123123123`) and the apikey in Settings, WhatsApp (or set `WHATSAPP_PHONE` and `WHATSAPP_APIKEY` in `main/config.h`), Save, then Send test. Both set means on; it applies at once. "Clear apikey" turns it off.
   - The apikey is a secret: it is never logged or returned by the API (only `whatsapp_apikey_set`), and the request URL that carries it is never logged.
   - Not implemented: Meta's official [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api), the heavier alternative (a Meta business account, a registered sender number, approved message templates for business-initiated messages, and access tokens to manage).
+- Telegram (upstream's per-event alerts): each message now starts with the event's code and headline in bold.
+
+#### Pi-hole and the MikroTik router
+
 - Pi-hole device data, optional (`main/admin/pihole.c`): with a [Pi-hole v6](https://docs.pi-hole.net/api/) on the LAN, the board reads what Pi-hole knows about each device and adds it to the device reporting. Read only: nothing on the Pi-hole is changed. Without a Pi-hole, leave it unset: it stays off, with no task, no memory used and no traffic, and the Devices tab looks as before.
   - What it adds: per device, Pi-hole's names for it, its addresses and vendor, first seen and last query, its DNS query and blocked counts over Pi-hole's in-memory window (24 h by default), and the top 10 domains of its last 100 queries, each with how many of them Pi-hole allowed and blocked. The Devices tab shows the Pi-hole name and query count columns when Pi-hole knows a device, and a Pi-hole box in the device's analysis; `/api/devices` entries gain a `"pihole"` object, and `GET /api/pihole/device?mac=..&ip=..` gives the same object for one device. A device whose own label is only its MAC vendor (or nothing) takes Pi-hole's name as its label ("from Pi-hole's name for it"), on the panel too.
-  - Set it up: in Pi-hole, Settings, Web interface / API, switch to Expert, "Configure app password", copy the password and enable it. On the dashboard, Settings, Pi-hole: the URL without `/admin` (for example `http://ph.local` or `http://192.168.0.2`), the app password, Save, then Test connection, then tick "Read device data from Pi-hole" and Save. Or set `PIHOLE_URL` and `PIHOLE_APP_PASSWORD` in `main/config.h`, which turns it on by default. It applies at once, no reboot.
-  - Security: over `http://` the app password crosses the LAN in the clear on every login, so use an app password (it can read everything but cannot change Pi-hole's configuration), never the admin one. `https://` works with Pi-hole's self-signed certificate only with its SHA-256 fingerprint pinned in Settings; verification is never turned off. Test connection shows the server's fingerprint when it does not match, to check against `openssl s_client -connect ph.local:443 </dev/null | openssl x509 -noout -fingerprint -sha256` and paste. If Pi-hole renews its certificate, paste the new one. The password is never logged or returned by the API (only `pihole_password_set`), nor is the session ID.
+  - Set it up: in Pi-hole, Settings, Web interface / API, switch to Expert, "Configure app password", copy the password and enable it. On the dashboard, Settings, Pi-hole: the URL without `/admin` (for example `http://192.168.1.2`; an IP address is safest, since a `.local` name needs mDNS to answer), the app password, Save, then Test connection, then tick "Read device data from Pi-hole" and Save. Or set `PIHOLE_URL` and `PIHOLE_APP_PASSWORD` in `main/config.h`, which turns it on by default. It applies at once, no reboot.
+  - Security: over `http://` the app password crosses the LAN in the clear on every login, so use an app password (it can read everything but cannot change Pi-hole's configuration), never the admin one. `https://` works with Pi-hole's self-signed certificate only with its SHA-256 fingerprint pinned in Settings; verification is never turned off. Test connection shows the server's fingerprint when it does not match, to check against `openssl s_client -connect <pihole-ip>:443 </dev/null | openssl x509 -noout -fingerprint -sha256` and paste. If Pi-hole renews its certificate, paste the new one. The password is never logged or returned by the API (only `pihole_password_set`), nor is the session ID.
   - How: one login (`POST /api/auth`), its session reused until it expires (one of Pi-hole's 16 session seats, freed with `DELETE /api/auth` on a settings change or when turned off); every 10 minutes `/api/network/devices`, `/api/stats/top_clients` (twice: all and blocked) and `/api/queries?client_ip=` for up to 16 of the devices the board knows (the Devices table and recent attackers), in turn; on demand from the device page, at most once per 30 s. Between syncs, every 10 s, the new lines of Pi-hole's DNS log (`GET /api/logs/dnsmasq?nextID=`, at most 64 KB a read; FTL keeps its last 512 lines, so a board that falls behind skips ahead and counts the gap): the "reply" and "cached" lines give each answer address, kept under the name the client asked for (the first name of a CNAME chain), and the "query" lines give who asked. Up to 4096 addresses in PSRAM, the least recently answered dropped first. It needs Pi-hole's query logging on (Settings, DNS, Log DNS queries; the board checks `/api/config/dns/queryLogging`); with it off, or an FTL without the endpoint, `/api/pihole/status` `dns_log` and the device page say so and nothing is called out. `.local` names resolve by mDNS. A failure backs off from 1 to 30 minutes, keeps the last good data with its time, and shows once in the Settings section and `/api/pihole/status`, never as an alert or on Discord. A Pi-hole v5 is detected and reported as not supported.
 - MikroTik router as a second pair of eyes (`main/admin/mikrotik.c`, `main/detect/correlate.c`), read only, over the RouterOS v7 [REST API](https://help.mikrotik.com/docs/spaces/ROS/pages/47579162/REST+API). Off until a URL, user and password are set (no task, no RAM). Setup below, under "MikroTik".
   - Every 5 minutes, one request at a time: DHCP leases (`/rest/ip/dhcp-server/lease`: `mac-address`, `address`, `active-address`, `host-name`, `client-id`, `status`, `last-seen`), ARP (`/rest/ip/arp`), the bridge host table (`/rest/interface/bridge/host`: `on-interface` is the switch port) and whichever Wi-Fi registration table the router has (`/rest/interface/wifi/registration-table`, `/rest/interface/wireless/registration-table`, `/rest/caps-man/registration-table`: AP and signal). At the first poll and then hourly, `/rest/interface` (`mac-address`): the router's own MACs, for the MNDP and MAC-Telnet whitelist (`own_macs` in `GET /api/mikrotik/status`). Cached by MAC; when the router stops answering, the last good cache is served with its "as of" time and the client backs off quietly (30 s doubling to 30 min).
@@ -242,7 +502,7 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - Script source: diffed only if this user can read it; if the reply leaves it out, scripts are compared on name, owner and policy, and the status says so.
   - NVS keeps only a digest per menu and the arm time (the partition is 16 KB); the per-record baseline is in PSRAM. After a reboot each menu is compared with its armed digest, and a mismatch is reported once, without record detail, until you re-arm.
   - The router's own entry on the Devices tab (and `GET /api/device/intel` for its address) shows the integrity state.
-- Router tripwires, the router's own log as a sensor (`main/detect/router_trip.c`, Rob's choice "Syslog + list check"): the router sends logins, failed logins, configuration changes, DHCP leases and three firewall tripwires to the board over UDP syslog (setup below, under "Router setup"). The rules on the router only log and add to an address list: nothing is dropped and admin access is untouched.
+- Router tripwires, the router's own log as a sensor (`main/detect/router_trip.c`): the router sends logins, failed logins, configuration changes, DHCP leases and three firewall tripwires to the board over UDP syslog (setup below, under "Router setup"). The rules on the router only log and add to an address list: nothing is dropped and admin access is untouched.
   - No socket: datagrams to UDP 514 on the board's address are copied off the Wi-Fi input into a PSRAM ring, and only when they come from the router's address (`ROUTER_SYSLOG_SRC`, else the MikroTik URL's host) with the gateway's MAC; those are then consumed, so the router gets no port-unreachable back. Anything else sent to that port is treated as before (a closed port).
   - Codes 55-21 to 55-28 (table below), each with the offender as the source (not the router), so the incident, the device page and the ignore list name the device. The source's MAC comes from the board's ARP table, else from the MikroTik client's host cache (ARP, DHCP leases, bridge hosts), so the vendor shows for devices the board never talked to. Admins (`ROUTER_ADMIN_IPS` and the admin allowlist) are logged, not alerted, except a burst of 3 failed logins in 5 minutes. The board's own read-only REST login is ignored. One event per code and source per 5 minutes (DNS bypass per hour), repeats counted into the next.
   - Every classified line is also a `router_log` line on the card (Logs page, kind "router_log"; at most 30 a minute). A DHCP assignment from a MAC the MikroTik client has never seen raises 60-02 once, whichever of syslog and the 5-minute lease poll sees it first.
@@ -250,20 +510,30 @@ The fork's ports follow a ranking of what reaches a home LAN most often: unauthe
   - List check: every 15 s the board reads the router's `shadowsentry-trip` address list over the read-only REST login (GET only). A new entry whose address raised no syslog tripwire in the last day raises 55-27 (syslog lost or not set up); the first read only learns.
   - While syslog is live, router integrity's 55-10 login events (from polling `/log` and `/user/active`) are not raised, so a login is not reported twice.
   - Line formats parsed (RouterOS 7.24 manual's Log page and the 7.26 page's syslog section): "login failure for user U from A via S", "user U logged in from A via S", "&lt;item&gt; changed|added|removed|moved by &lt;actor&gt;" (actor "admin", "scheduler:..." or "&lt;client&gt;/&lt;service&gt;:&lt;user&gt;@&lt;address&gt;"), "&lt;server&gt; assigned &lt;ip&gt; for &lt;MAC&gt; &lt;host&gt;", and firewall lines with the SS-TRIP- prefix. The user name and the DHCP host name are attacker text: the source is taken from the last " from &lt;IPv4&gt; via" (and RouterOS's `src=` field when present), each kind is matched only at the start of the message and, when the topics are sent (tripwires.rsc turns them on), only under its own topic.
-- Router flows (`main/detect/router_flow.c`, Rob's choice "Router IPFIX"): the router's traffic-flow on its WAN port sends IPFIX (or NetFlow v9) to UDP 4739 on the board, so every outbound flow shows per device, including the short ones the connection table snapshot misses. Same no-socket copy as syslog (from the router's address and the gateway's MAC only, a full datagram per PSRAM slot), templates parsed and kept in a table of 16, every length checked. At most 200 records a second (`ROUTER_IPFIX_RATE`), the rest dropped and counted. Kept per device (32 devices, 64 outside destinations each, the least recently seen evicted, idle ones dropped after a day): bytes and packets each way, flows, first and last seen. On the device page they join the router's connections in `/api/device/intel` (`mikrotik.conn.dst[]`, each row's `source` is `conntrack`, `ipfix` or `both`; IPFIX rows carry a `flow` object), with names from the router's DNS cache, GeoIP and the same flags. Setup in `tools/routeros/flow.rsc` (below, "Router setup").
-- Block list the router pulls (`main/admin/blocklist.c`, Rob's choice "Router pulls list"): Block on the device page adds `dst <ip>` (LAN traffic to that address is dropped) or `src <ip>` (the device's traffic through the router, so the internet and other subnets, is dropped; it can still reach devices on its own LAN segment, as bridged traffic does not pass the IP firewall). A scheduler on the router fetches `/routeros/block.txt` every minute, checks every line itself and syncs two address lists for two forward-chain drop rules (`tools/routeros/blocklist.rsc`), so a block takes effect within about a minute. The board never writes to the router; its router login stays read-only.
+- Router flows (`main/detect/router_flow.c`): the router's traffic-flow on its WAN port sends IPFIX (or NetFlow v9) to UDP 4739 on the board, so every outbound flow shows per device, including the short ones the connection table snapshot misses. Same no-socket copy as syslog (from the router's address and the gateway's MAC only, a full datagram per PSRAM slot), templates parsed and kept in a table of 16, every length checked. At most 200 records a second (`ROUTER_IPFIX_RATE`), the rest dropped and counted. Kept per device (32 devices, 64 outside destinations each, the least recently seen evicted, idle ones dropped after a day): bytes and packets each way, flows, first and last seen. On the device page they join the router's connections in `/api/device/intel` (`mikrotik.conn.dst[]`, each row's `source` is `conntrack`, `ipfix` or `both`; IPFIX rows carry a `flow` object), with names from the router's DNS cache, GeoIP and the same flags. Setup in `tools/routeros/flow.rsc` (below, "Router setup").
+- Block list the router pulls (`main/admin/blocklist.c`): Block on the device page adds `dst <ip>` (LAN traffic to that address is dropped) or `src <ip>` (the device's traffic through the router, so the internet and other subnets, is dropped; it can still reach devices on its own LAN segment, as bridged traffic does not pass the IP firewall). A scheduler on the router fetches `/routeros/block.txt` every minute, checks every line itself and syncs two address lists for two forward-chain drop rules (`tools/routeros/blocklist.rsc`), so a block takes effect within about a minute. The board never writes to the router; its router login stays read-only.
   - Damage limits, should the board be taken over: at most 64 entries; the never-block list (this board, the gateway and router, the Pi-hole, `ROUTER_ADMIN_IPS`, the admin allowlist, `ROUTER_NEVER_BLOCK`, 0/8, 127/8, multicast and broadcast) is refused here with 409 and checked again on the router against its own lists and its own addresses; the router only fetches data (never a script) and caps it at 64; the drop rules are in the forward chain, so the router's management is never touched, and the dst rule skips the admin PCs.
   - `/routeros/block.txt` is the only path without Basic auth: answered only to the router's address whose ARP entry is the gateway's MAC, anyone else gets 404. With an admin allowlist set, the router's address may still open the admin port (only that port, not the WebSocket). Every add and remove is a `block` line on the card (Logs page) and a Discord notice. Stored in NVS (52 B an entry, 3.3 KB at most).
-- Panel-press camera: the OV2640 faces whoever stands at the screen. A press on the panel's ACKNOWLEDGE button (action `ack`), or a confirmed IGNORE ERROR or IGNORE DEVICE (action `ignore`), takes a photo (640x480 JPEG, Elecrow's sensor settings; 320x240 if the sensor will only start at Elecrow's own size) at the moment the press starts, not when the hold completes, so a press let go early is photographed too. The screen does not change for the photo. An optional face light (`CAM_FLASH_ENABLE` 1 in `config.h`, default 0) first turns the screen white above the button row (the emblem and the details; the buttons stay visible and a hold on ACKNOWLEDGE carries on in sight) and the backlight full on; the camera then drops frames for `CAM_FLASH_SETTLE_MS` (500) while its exposure settles on that light, captures, and the white comes down, in under a second. It is saved as `/sd/snap/YYYY-MM-DD_HH-MM-SS_<action>.jpg` (through the SD writer task) with a `snap` line in the day log (shown on the Logs page, kind "snap"), and the last one is kept in PSRAM for the dashboard's "Last panel action" card (thumbnail, action, time; refreshed on every alarm state change and every 30 s). At most one photo a second. Without a camera the board logs it once and runs as before. The camera's SCCB runs on the new `i2c_master` driver and attaches to the bus touch already owns (touch polling pauses for the second or so the sensor takes to start, and both run at 100 kHz), so the legacy I2C driver (which would abort IDF 5.4 at boot) is never linked.
-- Telegram (upstream's per-event alerts): each message now starts with the event's code and headline in bold.
+
+#### Camera (CrowPanel only)
+
+- Panel-press camera: the OV2640 faces whoever stands at the screen. A press on the panel's ACKNOWLEDGE button (action `ack`), or a confirmed IGNORE ERROR or IGNORE DEVICE (action `ignore`), takes a photo (640x480 JPEG, Elecrow's sensor settings; 320x240 if the sensor will only start at Elecrow's own size) at the moment the press starts, not when the hold completes, so a press let go early is photographed too. The screen does not change for the photo. An optional face light (`CAM_FLASH_ENABLE` 1 in `config.h`, default 0) first turns the screen white above the button row (the emblem and the details; the buttons stay visible and a hold on ACKNOWLEDGE carries on in sight) and the backlight full on; the camera then drops frames for `CAM_FLASH_SETTLE_MS` (500) while its exposure settles on that light, captures, and the white comes down, in under a second. It is saved as `/sd/snap/YYYY-MM-DD_HH-MM-SS_<action>.jpg` (through the SD writer task) with a `snap` line in the day log (shown on the Logs page, kind "snap"), and the last one is kept in PSRAM for the dashboard's "Last panel action" card (thumbnail, action, time; refreshed on every alarm state change and every 30 s). At most one photo a second. Without a camera the board logs it once and runs as before. The camera's SCCB runs on the new `i2c_master` driver and attaches to the bus touch already owns (touch polling pauses for the second or so the sensor takes to start, and both run at 100 kHz), so the legacy I2C driver (which would abort IDF 5.4 at boot) is never linked. On the development board the sensor was not detected in the last tests, so the photo path is untested with a working camera.
+
+#### Reliability: updates, crashes, Wi-Fi and memory
+
 - OTA updates: two 6 MB app slots and `POST /api/ota` on the admin panel (same Basic auth). A new image has to reach Wi-Fi to confirm itself, otherwise the bootloader rolls back.
 - Crash capture (`main/storage/crash.c`), for a board with no serial console:
   - At a panic (a fault, `abort()`, an assert, a stack overflow, the interrupt watchdog, or the task watchdog when it is set to panic) a wrapper around IDF's `esp_panic_handler()` (`-Wl,--wrap`) copies the cause and its text, the faulting PC and exception registers, up to 16 backtrace PCs, the task on each core, the uptime and wall clock, free heap (internal and total) and the internal minimum, the firmware version and the ELF SHA256 prefix into a record in RTC memory with a magic and a CRC-32, then hands over to IDF's handler as before. Nothing in that path allocates, locks or touches flash.
   - On the next boot, after a panic or watchdog reset, the record becomes a report: a one-line JSON summary in `/spiffs/crash.log` (the last 20, at most 8 KB), the full text in `/spiffs/crash_last.txt`, and once the card and the clock are ready (SNTP waited for up to 60 s) `/sd/crash/YYYY-MM-DD_HH-MM-SS.txt` (`up<seconds>s_<n>.txt` without a clock) plus a `crash` line in the day log. A watchdog reset with no record (a hardware watchdog, or a hung handler) is logged with its reset reason only.
   - `GET /api/crashes`, `last_crash` in `/api/status`, a Crashes card on the Settings page, and the boot "online" message adds "Crash: <cause> in task <task> at PC 0x...".
-  - Decode on a PC: `python tools/decode_crash.py <report, summary line or saved /api/crashes> <firmware.elf>` runs addr2line over the PCs and prints function:file:line for each. Given a folder instead of an ELF it picks the ELF whose SHA256 matches the record. `python tools/archive_elf.py` copies `.pio/build/crowpanel35_ota/firmware.elf` to `builds/<git short hash>/` beside the repository after a build, so every image that went to the board can be decoded later.
+  - Decode on a PC: `python tools/decode_crash.py <report, summary line or saved /api/crashes> <firmware.elf>` runs addr2line over the PCs and prints function:file:line for each. Given a folder instead of an ELF it picks the ELF whose SHA256 matches the record. `python tools/archive_elf.py [env]` (default `crowpanel35_ota`) copies `.pio/build/<env>/firmware.elf` to `builds/<git short hash>/` beside the repository after a build, so every image that went to the board can be decoded later.
 - Wi-Fi (`main/wifi_manager.c`, `main/wifi_roam.c`): the station joins the strongest AP for the SSID (all-channel scan, sorted by signal) and accepts 802.11k/v steering from the AP (`CONFIG_ESP_WIFI_11KV_SUPPORT`, RRM and BTM on). If the signal stays below -75 dBm for 60 s it scans, and moves to a BSSID of the same SSID at least 8 dB stronger, at most once every 5 minutes (`WIFI_ROAM_*` in `config.h`). Each BSSID change is logged and written to the card as a `wifi` line; `/api/status` has `wifi` (SSID, BSSID, channel, RSSI, roam count). The Wi-Fi threat monitor does not count a roam's own disconnect, or a failed reconnect within 20 s of it, as a deauth.
-- Memory: the large buffers, Wi-Fi/lwIP and mbedTLS allocate from PSRAM, keeping internal RAM free for the display.
+- Memory, PSRAM first: Wi-Fi needs internal RAM for its buffers, and every slowdown of the board's network during development tracked a shortage of it, so the fork keeps internal RAM free (about 58 KB after boot on the CrowPanel, measured over `/api/status` `internal_after_boot`):
+  - large buffers, tables and queues are PSRAM allocations; Wi-Fi, lwIP and mbedTLS allocate from PSRAM (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`, `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`)
+  - the static data of lwIP and the Wi-Fi libraries, and the fork's zero-initialised statics (`EXT_RAM_BSS_ATTR`), live in PSRAM (`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`), about 25 KB of internal RAM back
+  - LVGL's objects and styles are allocated in PSRAM (`main/ui/lv_mem_psram.c`), and so are cJSON's nodes
+  - tasks that never touch flash, NVS or SPIFFS (GeoIP, Telegram, Discord, the WebSocket server, the buzzer, discovery, Pi-hole, the router feeds, mDNS) run on PSRAM stacks
+  - `GET /api/tasks` shows each task's CPU share and stack high-water, and `/api/status` the internal heap now, at its lowest and after boot, for a board without a console
 
 ### Alert codes
 
@@ -330,7 +600,7 @@ Every event carries a two-part console code, "Code CC-NN": the category, then th
 
 "00-00" marks an event no code covers (an attack type added later); it counts as SEV2.
 
-This table is sorted by code. `GET /api/codes` lists the same 55 codes in the order of `describe.c`'s table, where new codes are appended so the existing ones keep their position.
+This table is sorted by code. `GET /api/codes` lists the same 56 codes in the order of `describe.c`'s table, where new codes are appended so the existing ones keep their position.
 
 ### Fork API (admin port, Basic auth)
 
@@ -339,11 +609,13 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | Method | Path | |
 |---|---|---|
 | `GET` | `/api/status` | upstream's uptime, heap and RSSI, plus `reset_reason` (e.g. "software restart (OTA update)"), `internal_free`, `internal_min` and `internal_after_boot` (internal heap once every task is up), and `alarm`: `state` (0 idle, 1 active, 2 acked), `cond` (`green`, `yellow`, `red`), `code`, `headline`, `id`, `ip` (u32), `mac`, `vendor`, `type`, `count`, `first`, `last`, `acked_by` and `resolved_by` (`""`, `panel`, `dashboard`). The WebSocket pushes the same object as `{"alarm":{...}}` on every change. `last_crash` (`ts`, `cause`, `pc`, `task`) once a crash has been recorded, and `wifi` (`ssid`, `bssid`, `channel`, `rssi`, `roams`) |
+| `GET` | `/api/attacks` | upstream's attack list and statistics; each entry also carries `code`, `headline`, `tier` and `ign` (on the ignore list at the time it is served). The WebSocket on `ADMIN_WS_PORT` (9998, `/ws`) pushes new entries in the same shape |
+| `POST` | `/api/clear` | upstream's: clear the flash event log |
 | `GET` | `/api/crashes` | `{"crashes":[...],"count","latest_this_boot","latest"}`: the summaries in `/spiffs/crash.log`, oldest first (`ts` of the crash, 0 if the clock was not set, `boot_ts`, `record`, `reset`, `cause`, `detail`, `exc`, `task`, `task0`, `task1`, `fw`, `elf`, `core`, `up_s`, `pc`, `excvaddr`, `bt`, `bt_corrupt`, `bt_more`, `nested`, `heap_int`, `heap_total`, `heap_int_min`), and the newest full report as text |
 | `GET` | `/api/tasks` | per-task CPU share over one second (`cpu_pct`, of both cores together) and since boot, priority, core and stack high-water; holds the admin task about 1 s |
 | `GET` | `/api/codes` | the alert code table: `{"codes":[{"code","name","tier"}]}` |
 | `GET` | `/api/settings` | settings; secrets only as `*_set` flags; also `alert_mask` (bit per type), `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow` (array), `client_ip`, and `board` (`name`, `lcd`, `camera`, `buzzer`, `backlight_dim`, `panel_dashboard`: what the board has) |
-| `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone (`"discord_webhook_clear":true` clears the webhook, `"discord_min_tier"` 1 to 3 sets the Discord tiers, `"whatsapp_apikey_clear":true` the WhatsApp apikey, `"pihole_password_clear":true` the Pi-hole password; Pi-hole also takes `pihole_url`, `pihole_password`, `pihole_tls_sha256`, `pihole_enabled`); `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
+| `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone (`"discord_webhook_clear":true` clears the webhook, `"discord_min_tier"` 1 to 3 sets the Discord tiers, `"whatsapp_apikey_clear":true` the WhatsApp apikey, `"pihole_password_clear":true` the Pi-hole password; Pi-hole also takes `pihole_url`, `pihole_password`, `pihole_tls_sha256`, `pihole_enabled`); `{"ok":true,"reboot":bool}` or 400 `{"error":...}`. The fields: `admin_password`, `wifi_ssid`, `wifi_password`, `wifi_open`, `tg_token`, `tg_chat_id`, `tz`, `alarm_remind_s`, `alarm_quiet_s`, `brightness`, `alarm_sound`, `boot_chirp`, `touch_click`, `ui_volume`, `alarm_volume`, `clock_24h`, `panel_style`, `panel_title`, `panel_rotate_s`, `discord_webhook`, `discord_webhook_clear`, `discord_log_events`, `discord_min_tier`, `alert_mask`, `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow`, `whatsapp_phone`, `whatsapp_apikey`, `whatsapp_apikey_clear`, `pihole_url`, `pihole_password`, `pihole_password_clear`, `pihole_tls_sha256`, `pihole_enabled`, `mikrotik_url`, `mikrotik_user`, `mikrotik_password`, `mikrotik_password_clear`, `mikrotik_cert_sha256`, `mikrotik_enabled`, `router_dns_redirect` |
 | `POST` | `/api/reboot` | 204, restart after 500 ms |
 | `GET` | `/api/ignore` | `{"max":32,"entries":[{"index","ip","mac","vendor","code","code_name","note","ts"}]}`; `code` "" means the whole device |
 | `POST` | `/api/ignore` | `{"action":"add","ip":"..","mac":"..","code":"17-01","note":".."}` (one of ip, mac; `code` optional, "" or absent for the whole device, else a code from `/api/codes`) or `{"action":"remove","index":N,"ip":"..","mac":".."}` (ip and mac, and code if given, as listed; 409 if the list changed); answers with the list |
@@ -382,36 +654,42 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `POST` | `/api/block/remove` | `{"ip","kind"}`: 200 with the list; 404 when it was not on it |
 | `GET` | `/routeros/block.txt` | no auth, the router only (its address with the gateway's MAC, else 404): `text/plain`, one `dst a.b.c.d` or `src a.b.c.d` line per entry, nothing else |
 | `POST` | `/api/mikrotik/integrity/arm` | arm or re-arm the baseline from the router's current state (one pass, about 30 s); 409 when off |
-| `POST` | `/api/ota` | raw app image |
+| `GET` | `/api/ui/logo` | the panel logo as `image/png`: the card's `/ui/logo.png` when it checks out, else the built-in one; `X-Logo-Source: card` or `built-in` |
+| `POST` | `/api/ui/logo` | a PNG body (Content-Length at most 200 KB, at most 240 x 240 px), written to the card as `/ui/logo.png`, shown from the next boot; `{"ok":true,"width","height","size"}`, 400 not a fitting PNG, 411 no length, 413 too big, 503 no card, no memory or the writer busy |
+| `POST` | `/api/debug/panel` | debug, not in the dashboard: `{"paused":bool}` pauses or resumes the panel's LVGL loop; answers the new state |
+| `POST` | `/api/debug/promisc` | debug: `{"on":bool}` switches the Wi-Fi monitor's promiscuous mode |
+| `POST` | `/api/debug/hooks` | debug: `{"on":bool}` switches the IPv4 input hook and the ARP tap (scan, probe and sweep detection) |
+| `POST` | `/api/debug/crash` | debug: `{"type":"abort"}`, `"fault"` (a store to address 0x10) or `"wdt"` (interrupts masked until the interrupt watchdog fires): answers 202, then crashes the board on purpose, to test the crash records |
+| `POST` | `/api/ota` | raw app image (what `tools/ota_upload.py` sends) |
 
 ### MikroTik
 
-Read only, from a user that can only read and only from the board's address. RouterOS 7.24 commands (Rob's router: CCR1036-8G-2S+, RouterOS 7.24.5):
+Read only, from a user that can only read and only from the board's address. RouterOS 7.24 commands (the examples use 192.168.1.1 for the router and 192.168.1.50 for the board; use your own):
 
 ```
 /user group add name=shadowsentry policy=read,api,rest-api,!write,!policy,!sensitive,!password,!reboot,!sniff,!test,!ftp,!ssh,!telnet,!winbox,!web,!local,!romon
-/user add name=shadowsentry group=shadowsentry address=192.168.0.118/32 password=...
+/user add name=shadowsentry group=shadowsentry address=192.168.1.50/32 password=...
 ```
 
 - The group: `read` to print, `api` and `rest-api` because the REST server logs in to the API with the user's credentials, so it needs both ([REST API, 7.25](https://manual.mikrotik.com/docs/7.25/developer-guides/rest-api/)). A `!` revokes a policy and any policy not listed is revoked anyway, so the `!` list is belt and braces. Without `sensitive`, secrets stay hidden from this user.
 - `address=` limits the login to the board. REST honours it from RouterOS 7.12; before that a REST login worked from any address (CVE-2023-41570).
 - By version: REST exists since 7.1beta4 over `www-ssl` only, and over plain `www` since 7.9. 7.26beta4 fixes REST logins for users with `rest-api` but without `api`, so from 7.26 `api` may no longer be needed; on 7.24 keep both. I could not find the release that added the `rest-api` policy itself.
-- Plain HTTP (`www`, `MIKROTIK_URL "http://192.168.0.1:8080"` on Rob's router): Basic auth sends the user and password in the clear on the LAN, readable by anything that can sniff it. Fine with this read-only, address-restricted user on a trusted LAN; otherwise use `www-ssl`. Also consider `/ip/service/set www available-from=192.168.0.118/32,<your admin PC>`.
+- Plain HTTP (`www`, for example `MIKROTIK_URL "http://192.168.1.1:8080"`): Basic auth sends the user and password in the clear on the LAN, readable by anything that can sniff it. Fine with this read-only, address-restricted user on a trusted LAN; otherwise use `www-ssl`. Also consider `/ip/service/set www available-from=192.168.1.50/32,<your admin PC>`.
 - HTTPS (`www-ssl`) with a self-signed certificate:
 
 ```
-/certificate/add name=shadowsentry-https common-name=192.168.0.1 subject-alt-name=IP:192.168.0.1 days-valid=3650 key-usage=digital-signature,key-encipherment,tls-server
+/certificate/add name=shadowsentry-https common-name=192.168.1.1 subject-alt-name=IP:192.168.1.1 days-valid=3650 key-usage=digital-signature,key-encipherment,tls-server
 /certificate/sign shadowsentry-https
 /ip/service/set www-ssl certificate=shadowsentry-https disabled=no tls-version=only-1.2
 ```
 
-- Then `MIKROTIK_URL "https://192.168.0.1"`. The board checks the certificate by its SHA-256 fingerprint: `MIKROTIK_CERT_SHA256` (or the pin field in Settings) if set, else the first certificate it sees is recorded in NVS and shown in Settings ("trust on first use"; that first connection already carries the password). A different certificate is refused (state `cert_mismatch`, with the new fingerprint shown) until you pin it or press "Forget recorded certificate". Verification is never switched off. mbedTLS also checks the key usage, so a certificate without `digital-signature` and `tls-server` fails the handshake (shown as `unreachable`). To read the fingerprint yourself: `openssl s_client -connect 192.168.0.1:443 </dev/null | openssl x509 -noout -fingerprint -sha256`.
+- Then `MIKROTIK_URL "https://192.168.1.1"`. The board checks the certificate by its SHA-256 fingerprint: `MIKROTIK_CERT_SHA256` (or the pin field in Settings) if set, else the first certificate it sees is recorded in NVS and shown in Settings ("trust on first use"; that first connection already carries the password). A different certificate is refused (state `cert_mismatch`, with the new fingerprint shown) until you pin it or press "Forget recorded certificate". Verification is never switched off. mbedTLS also checks the key usage, so a certificate without `digital-signature` and `tls-server` fails the handshake (shown as `unreachable`). To read the fingerprint yourself: `openssl s_client -connect 192.168.1.1:443 </dev/null | openssl x509 -noout -fingerprint -sha256`.
 - `main/config.h`: `MIKROTIK_URL` (`http://host[:port]` or `https://host[:port]`, no path), `MIKROTIK_USER`, `MIKROTIK_PASSWORD` (empty user or password means off), `MIKROTIK_CERT_SHA256` (64 hex digits, colons allowed, https only). Settings, MikroTik, holds the same plus a "Use the router" switch and Test connection; it applies at once, no reboot. The password is never logged or returned by the API.
 - Nothing is written to the router: the client only sends GET.
 
 ### Router setup
 
-The router sends to the board; the board never writes to the router (its REST user stays read-only). The RouterOS side is in `tools/routeros/`, written against the RouterOS 7.24 CLI reference (pages cited in each file) and not yet run on a router: read it before pasting.
+The router sends to the board; the board never writes to the router (its REST user stays read-only). The RouterOS side is in `tools/routeros/`, written against the RouterOS 7.24 CLI reference (pages cited in each file) and applied by hand on one RouterOS 7.25 router; other versions are unchecked, so read each file before pasting. [`docs/router-setup.md`](docs/router-setup.md) is the worked set-up from that installation (with its own addresses, a port 53 redirect to the Pi-hole and VLANs), and [`docs/router-rollback.md`](docs/router-rollback.md) undoes each part.
 
 - `tools/routeros/tripwires.rsc`: the syslog action and logging rules, the `shadowsentry-admin` and `shadowsentry-dns` address lists, and a mangle chain `shadowsentry-trip` with three tripwires (psd, management ports from a non-admin host, DNS to anything but the Pi-hole), each `add-src-to-address-list` with `log=yes` and a `SS-TRIP-` prefix. Edit the lines marked EDIT: your admin PC, the sentry's and the Pi-hole's addresses, the router's LAN address (`src-address=` on the logging action), the LAN interface list, the management ports. The file ends with the commands that remove it again.
 - `tools/routeros/flow.rsc`: traffic-flow on the WAN port (EDIT `interfaces=`), active timeout 1 minute, a target at the board's UDP 4739 in IPFIX (EDIT the board's and the router's addresses), and the IPFIX fields the board reads. The manual's traffic-flow page says hardware-offloaded traffic is not seen; it does not say whether FastTracked connections are, so check `ipfix.records` in `/api/router/status` against a download you start.
@@ -420,24 +698,208 @@ The router sends to the board; the board never writes to the router (its REST us
 - Check: `GET /api/router/status` shows `syslog.live` true and `received` counting once the router sends; `foreign` counts datagrams to the port from anything else (a wrong `src-address=` on the router shows here).
 - The psd values (21,3s,3,1) are a common choice from MikroTik's forum, not from the manual; raise the first number if a busy LAN host trips it.
 
-### Build and flash (PlatformIO)
+### Modding guide
 
-```bash
-cp main/config.h.example main/config.h   # Wi-Fi, admin password, DISPLAY_TZ, alarm timings
-pio run -e crowpanel35                   # build
+How the fork is laid out, recipes for the changes people make most, and the rules every change follows. Upstream's [Project structure](#project-structure) and [How an attack is detected](#how-an-attack-is-detected) describe the original design; this is the same for the fork.
+
+#### Project tree
+
+Every file under `main/` and `tools/`, upstream's and the fork's. "(fork)" marks a file the fork added; the others are upstream's, some with small fork edits.
+
+```
+ShadowSentryS3-ESP-Terminal/
+├── CMakeLists.txt                ESP-IDF project file; adds the lwIP IPv4 hook and LVGL's PSRAM allocator
+├── platformio.ini                PlatformIO envs: crowpanel35(_ota), waveshare43(_ota) (fork)
+├── partitions.csv                16 MB: NVS 16 KB, two 6 MB OTA app slots, 2 MB SPIFFS (fork)
+├── sdkconfig.defaults            ESP-IDF options for both boards (PSRAM, lwIP budget, fonts, ...)
+├── sdkconfig.defaults.waveshare43  extra options for the 4.3B: XIP from PSRAM, USB console, fonts (fork)
+├── THIRD_PARTY_NOTICES           licences of code and protocol facts the fork took from others (fork)
+├── .github/workflows/build.yml   CI: builds both boards from config.h.example (fork)
+├── docs/
+│   ├── release-notes/            what each fork release adds (fork)
+│   ├── router-setup.md           a worked RouterOS set-up from one installation (fork)
+│   ├── router-rollback.md        how to undo each part of it (fork)
+│   ├── backlog.md                the development backlog (fork)
+│   └── mockups/                  HTML specs of the LCARS, clan and SYS screens, fitcheck.py (text fits
+│                                 its box in the board's fonts), the built-in logo PNG (fork)
+├── tools/
+│   ├── ota_upload.py             POST an image to /api/ota; password from tools/ota_password or config.h (fork)
+│   ├── oui_upload.py             POST the vendor database to /api/oui (fork)
+│   ├── make_oui.py               build /sd/oui.bin from the IEEE MA-L, MA-M, MA-S and IAB registries (fork)
+│   ├── gzip_assets.py            gzip index.html, device.html, analysis.js into main/gz/ at build time (fork)
+│   ├── build_id.py               write main/gz/build_id.h: git short hash and build date (fork)
+│   ├── archive_elf.py            keep each build's firmware.elf by git hash, for crash decoding (fork)
+│   ├── decode_crash.py           turn a crash record's PCs into function, file and line (fork)
+│   ├── make_clan_texture.py      generate main/ui/ui_clan_tex.c, the clan skin's metal tile (fork)
+│   └── routeros/                 tripwires.rsc, flow.rsc, blocklist.rsc: the RouterOS side (fork)
+└── main/
+    ├── CMakeLists.txt            the component: every source file, embedded pages, gzip and build-id steps
+    ├── idf_component.yml         managed components: mdns, wolfSSH, wolfSSL, LVGL 8.4, LovyanGFX, esp32-camera
+    ├── config.h.example          every build option with its documentation and _Static_assert checks
+    ├── main.c                    app_main(): init order, SPAWN() of every task, OTA confirmation
+    ├── settings.c/h              runtime settings in NVS over the config.h defaults (fork)
+    ├── json_esc.c/h              the one JSON string escaper, UTF-8 checked (fork)
+    ├── wifi_manager.c/h          Wi-Fi station, DHCP hostname, SNTP, mDNS, ARP and vendor helpers
+    ├── wifi_roam.c/h             move to a stronger AP of the same SSID on a weak link (fork)
+    ├── wifi_monitor.c/h          Wi-Fi deauth and disassociation detector (promiscuous)
+    ├── arp_monitor.c/h           ARP spoof / MITM detector
+    ├── geoip.c/h                 country and AS lookups for public addresses (ip-api.com)
+    ├── index.html                the dashboard (Dashboard, Logs, Devices, Settings tabs)
+    ├── device.html               the device page, /device (fork)
+    ├── analysis.js               the device analysis rules, shared by both pages (fork)
+    ├── board/
+    │   ├── board.h               picks one board file; lists the BOARD_* names every board defines (fork)
+    │   ├── board_crowpanel35.h   CrowPanel pins and features (fork)
+    │   └── board_waveshare43.h   Waveshare 4.3B pins, LCD timings and features (fork)
+    ├── honeypot/                 the traps (Core 0)
+    │   ├── rtsp_trap.c/h         554, fake Hikvision camera stream
+    │   ├── http_trap.c/h         upstream's single-port NVR page (used only with HTTP_ENGINE_ENABLE 0)
+    │   ├── http_engine.c/h       80, 8080, 8000, 9000 in one task, request labels (fork)
+    │   ├── telnet_trap.c/h       23 and 2323, fake Ubuntu login
+    │   ├── ssh_trap.c/h          22 and 2222, real SSH server (wolfSSH)
+    │   ├── ssh_hostkey.h         the decoy host key
+    │   ├── fake_shell.c/h        the Cowrie-style shell behind Telnet and SSH (input handling hardened by the fork)
+    │   ├── ftp_trap.c/h          21, fake vsFTPd
+    │   ├── trap_listen.c/h       several ports per trap task through select() (fork)
+    │   ├── adb_trap.c/h          5555, fake Android TV box (fork)
+    │   ├── tripwire.c/h          the tripwire task: RDP, VNC, SMB, Redis, MySQL, MSSQL, JetDirect and the MikroTik decoys (fork)
+    │   └── mt_decoy.c/h          MikroTik decoy readers (raw pcbs), the UDP frame tap, the whitelist (fork)
+    ├── detect/
+    │   ├── detect.c/h            IPv4 input hook: port scans, probes; ARP tap: sweeps; admin allowlist; console commands (fork)
+    │   ├── ss_lwip_hooks.h       maps lwIP's IPv4 input hook to detect.c (fork)
+    │   ├── ignore.c/h            the ignore list in NVS (fork)
+    │   ├── discovery.c/h         log-only LAN discovery listeners and the seen-devices table (fork)
+    │   ├── correlate.c/h         one device's view: honeypot events, router, Pi-hole, flags (fork)
+    │   ├── router_trip.c/h       the router's syslog copied off the Wi-Fi input: Codes 55-21 to 55-28 (fork)
+    │   └── router_flow.c/h       IPFIX / NetFlow v9 collector, flows per device (fork)
+    ├── alarm/
+    │   ├── alarm.c/h             incidents: RED / YELLOW / GREEN, acknowledge, resolve, ignore, reminders (fork)
+    │   ├── buzzer.c/h            the buzzer task: klaxon, yellow call, boot beeps, chirps, volumes (fork)
+    │   └── describe.c/h          alert codes, tiers and the one-line headline of every event (fork)
+    ├── ui/
+    │   ├── ui.c/h                the panel core: views, alert screens, holds, ignore dialogs, the dashboard style (fork)
+    │   ├── ui_lcars.c/h          the LCARS style, and the data and motion engine the skins share (fork)
+    │   ├── ui_clan.c/h           the clan style (fork)
+    │   ├── ui_clan_tex.c         its 64 x 64 metal tile, generated (fork)
+    │   ├── ui_subsys.c/h         the SYS about screen (fork)
+    │   ├── ui_logo.c/h           the logo: card or built-in PNG, checked and decoded into PSRAM (fork)
+    │   ├── ui_scale.h            480 x 320 grid to screen pixels and fonts (fork)
+    │   ├── display.cpp/h         CrowPanel: ILI9488 through LovyanGFX, FT6236 touch, backlight PWM (fork)
+    │   ├── display_waveshare43.c 4.3B: RGB panel, GT911 touch, CH422G expander (fork)
+    │   └── lv_mem_psram.c/h      LVGL's allocations in PSRAM (fork)
+    ├── camera/
+    │   └── cam.c/h               OV2640 photo of whoever presses ACKNOWLEDGE or an ignore (fork)
+    ├── storage/
+    │   ├── log_store.c/h         the 200-event ring in RAM and SPIFFS
+    │   ├── sd_log.c/h            the microSD writer task: day logs, stats.bin, files (fork)
+    │   ├── oui.c/h               MAC vendor database on the card (fork)
+    │   └── crash.c/h             panic record in RTC memory, reported at the next boot (fork)
+    └── admin/                    the admin side (Core 1)
+        ├── admin_panel.c/h       9999: Basic auth, the X-ShadowSentry check, the route chain, OTA
+        ├── ws_server.c/h         9998: the WebSocket live feed
+        ├── web_assets.c/h        the gzip pages with ETags (fork)
+        ├── api_ext.c/h           settings, logs, summary, codes, alarm, ignore, buzzer, reboot, tests, debug (fork)
+        ├── api_devlog.c/h        /api/logs/device and /api/logs/type: day files read backwards (fork)
+        ├── api_devices.c/h       /api/devices (fork)
+        ├── api_cam.c/h           /api/snap/last (fork)
+        ├── api_logo.c/h          /api/ui/logo (fork)
+        ├── api_oui.c/h           /api/oui (fork)
+        ├── api_tasks.c/h         /api/tasks (fork)
+        ├── api_crash.c/h         /api/crashes, /api/debug/crash (fork)
+        ├── api_pihole.c/h        /api/pihole/* (fork)
+        ├── api_mikrotik.c/h      /api/device/intel, /api/mikrotik/*, /api/router/status (fork)
+        ├── api_block.c/h         /api/block and the router's /routeros/block.txt (fork)
+        ├── telegram.c/h          Telegram alerts
+        ├── discord.c/h           Discord incident embeds, event log, digest (fork)
+        ├── whatsapp.c/h          WhatsApp through CallMeBot (fork)
+        ├── notify.c/h            one notification call fanned out to every backend (fork)
+        ├── pihole.c/h            the Pi-hole v6 client, read only (fork)
+        ├── mikrotik.c/h          the RouterOS REST client, read only (fork)
+        ├── mikrotik_watch.c/h    router configuration snapshot and diff, Codes 55-01 to 55-11 (fork)
+        └── blocklist.c/h         the block list the router pulls, and the never-block rules (fork)
 ```
 
-First flash over USB: hold BOOT, tap RESET, then `pio run -e crowpanel35 -t upload`. The board restarts into the new firmware on its own.
+Generated and git-ignored: `main/config.h`, `main/gz/`, `sdkconfig.<env>`, `.pio/`, `managed_components/`, `tools/ota_password`.
 
-After that, update over Wi-Fi with no buttons. Set `upload_port` in the `crowpanel35_ota` env of [`platformio.ini`](platformio.ini) to the board's IP (shown in the panel's status bar), then:
+#### Recipe: add a board
 
-```bash
-pio run -e crowpanel35_ota -t upload
-```
+1. Write `main/board/board_<name>.h` with every `BOARD_*` name listed at the top of [`main/board/board.h`](main/board/board.h): `BOARD_NAME`, `BOARD_LCD_HRES` and `_VRES` (at least 480 x 320), `BOARD_HAS_CAMERA`, `BOARD_BACKLIGHT_DIM`, `BOARD_BUZZER_GPIO` (-1 for none), `BOARD_BUZZER_HZ`, `BOARD_BUZZER_INVERT`, `BOARD_BUZZER_LOW_MAX_US`, `BOARD_VBAT_ADC`, `BOARD_SD_SPI_HOST`, `_MOSI`, `_MISO`, `_SCLK`, `_CS`, `BOARD_SD_SHARES_LCD_BUS`, `BOARD_I2C_PORT`, `BOARD_PANEL_DASHBOARD`, `BOARD_PANEL_STYLE`, plus its own pin names for its driver. Code outside the board files and the display drivers uses only these names.
+2. In `board.h`, add `BOARD_<NAME>`: its `BOARD_IS_<NAME>`, the include, and the term in the "exactly one board" `_Static_assert`. Add it to the Board block of `main/config.h.example` and its "not both" check.
+3. Write the display driver, like [`main/ui/display_waveshare43.c`](main/ui/display_waveshare43.c) (the whole file inside `#if BOARD_IS_WAVESHARE43`) or `display.cpp` for the CrowPanel: the panel, the LVGL display driver and flush, touch, the backlight and the functions in `main/ui/display.h` (`display_init()`, `display_set_backlight_override()`, `display_i2c_bus()`, `display_touch_hold()`). List the new source in `main/CMakeLists.txt` (and any IDF component it needs under `REQUIRES`).
+4. Copy how the vendor's working example drives the hardware (bus, mode, order of steps, delays), not just its pin numbers. Use the new `i2c_master` I2C driver only: the legacy driver next to it aborts IDF 5.4 at boot.
+5. In `platformio.ini`, add `[env:<name>]` extending `env:crowpanel35` with `build_src_flags = -DBOARD_<NAME>`, its upload flags, and `board_build.cmake_extra_args = -DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.<name>` if it needs extra options; then an `_ota` env like `waveshare43_ota`. Add its generated `sdkconfig.<env>` files to `.gitignore`.
+6. Put board-only ESP-IDF options in `sdkconfig.defaults.<name>`: for a bigger screen, the Montserrat sizes `main/ui/ui_scale.h` maps the grid fonts to (`CONFIG_LV_FONT_MONTSERRAT_*`).
+7. The LCARS and clan styles are drawn on a 480 x 320 grid and placed with `UI_SX`, `UI_SY`, `UI_SS` and the `UI_F*` fonts from `ui_scale.h`, so another screen size mostly works as is. Check the text with `python -I docs/mockups/fitcheck.py` (it takes `--board`, or `--fonts`, `--sx`, `--ss` for a new scale). Set `BOARD_PANEL_DASHBOARD` 1 only for a 480 x 320 screen.
+8. Report what the board has in `GET /api/settings` `board` (`main/admin/api_ext.c`); the Settings page hides elements marked `data-needs="<feature>"` when it is false.
 
-Waveshare 4.3B: `pio run -e waveshare43 -t upload` over the USB-C port (the chip resets into its loader by itself; on a board fresh from the factory, `pio run -e waveshare43 -t erase` first clears the demo's NVS and file system), `pio device monitor -e waveshare43` for the console, and `waveshare43_ota` for updates over Wi-Fi once its `upload_port` is set. After editing `sdkconfig.defaults.waveshare43`, delete `sdkconfig.waveshare43*` and `.pio/build/waveshare43*`: PlatformIO only watches `sdkconfig.defaults`.
+#### Recipe: add a panel skin
 
-[`tools/ota_upload.py`](tools/ota_upload.py) takes the admin password from `tools/ota_password` (one line) when that file exists, otherwise from `main/config.h`. Both are git-ignored, so the password never appears on a command line or in a committed file. Once the password has been changed on the Settings page, put the new one in `tools/ota_password`.
+- The clan style is the model: [`main/ui/ui_clan.c`](main/ui/ui_clan.c) builds its own screen objects and gets every number from `ui_lcars.c` through the "For other skins" exports in [`main/ui/ui_lcars.h`](main/ui/ui_lcars.h): `lcars_today()`, `lcars_port_count()` and `lcars_port()`, `lcars_wire_state()` and `lcars_wire_off()`, `lcars_talkers()` and `lcars_talker()`, `lcars_pihole_share()`, `lcars_net_text()`, `lcars_fit()`, and `lcars_fx_bind()`, which points the motion engine at the skin's objects and colours.
+- A skin exports `<skin>_build(scr)` (everything built once at boot), `<skin>_view(cond, on)` (show or hide it for GREEN, YELLOW or RED), `<skin>_event(e)` and `<skin>_reset()` (the event feed), `<skin>_style_msgbox()` (its look for the ignore dialogs) and its alert layout helpers. `main/ui/ui.c` builds every style at boot, picks one with its `STYLE_*()` macros from `settings_get()->panel_style`, and calls each style's view function on every change, so a switch is live within a second.
+- A new style number touches: the `STYLE_*()` macros in `ui.c`, the range checks of `panel_style` in `main/settings.c` (at load and in validation), the `take_u32(root, "panel_style", ...)` maximum in `main/admin/api_ext.c`, the Panel style select `st-pstyle` and its list of valid values in `main/index.html`, the `DISPLAY_PANEL_STYLE` check in `main/config.h.example`, and `BOARD_PANEL_STYLE` if it becomes a board's default.
+- Keep new zero-initialised UI statics in PSRAM with `EXT_RAM_BSS_ATTR` (the UI task only), and repaint small areas: every redraw on the CrowPanel goes over the SPI bus the microSD card shares.
+
+#### Recipe: add a tripwire service
+
+1. Add `TRIPWIRE_<NAME>_PORT` to the tripwire block of `main/config.h.example` (with its collision `_Static_assert`s) and an `#ifndef` default in [`main/honeypot/tripwire.h`](main/honeypot/tripwire.h), with the same checks against every trap, admin and HTTP port.
+2. Append a row to `SVC[]` in [`main/honeypot/tripwire.c`](main/honeypot/tripwire.c): the service name (it starts the event payload, `<name> on <port>: ...`), the port, an optional banner for a server-first protocol, and `TW_SOCK`. Append only; the order is used inside the task.
+3. Add the port to the probe detector's `TRAP_PORT[]` in `main/detect/detect.c` (and raise `TRAP_N`, at most 32) and to the LCARS port table in `main/ui/ui_lcars.c`.
+4. The event gets Code 40-09 "Tripwire" until it has its own row in `describe.c` (next recipe).
+5. Sockets: `CONFIG_LWIP_MAX_SOCKETS` (53 in `sdkconfig.defaults`) has no spare. A new listening socket needs it raised by one, and lwIP's sockets and the open files share the 64 descriptors of `FD_SETSIZE`: each socket added is one file descriptor fewer. The MikroTik decoys avoid this with raw lwIP pcbs (`main/honeypot/mt_decoy.c`).
+6. Read at most a fixed number of bytes, check every length, never answer beyond a fixed banner, and never open a connection on the client's behalf.
+
+#### Recipe: add an alert code
+
+- Codes live in `CODES[]` in [`main/alarm/describe.c`](main/alarm/describe.c): code, name, tier (SEV1 opens a RED incident, SEV2 YELLOW at most, SEV3 nothing unless its Alert on switch is on) and an optional key.
+- Append new rows at the end only. A stored incident keeps a bit per row in `alarm_info_t.codes` (64 bits, `DESCRIBE_CODE_BITS`), so moving a row would change what old incidents say. 56 of the 64 are used.
+- Add the row's name to the index enum below the table (it is checked against the table), and the pick in `code_row()` that gives an event this code (by attack type, the HTTP label, the tripwire service or a `[CC-NN]` prefix in the payload).
+- The dashboard reads names and tiers from `GET /api/codes`, so it needs no change. Add the row to the README's Alert codes table, and to `CDESC` in `main/index.html` if the event popup should explain it.
+
+#### Recipe: add an attack type
+
+- Append it to `attack_type_t` in [`main/storage/log_store.h`](main/storage/log_store.h), before `ATTACK_TYPE_COUNT`. Appending keeps the flash ring readable.
+- Every per-type table has a `_Static_assert` on `ATTACK_TYPE_COUNT`, so the build names each one to extend: `TYPE_NAME` in `main/storage/sd_log.c` and `main/ui/ui.c`, `TYPE_SHORT` and `TYPE_LONG` in `main/admin/discord.c`, `NAMES` in `main/admin/notify.c`, the label and emoji tables in `main/admin/telegram.c`, `TYPE_KEY` in `main/admin/api_devlog.c`, and `describe.c` (give it a code).
+- `stats.bin` has `STATS_TYPE_SLOTS` (16) per-type counters, and all 16 are used: a new type needs more slots, a `STATS_VERSION` bump and a migration of the old file in `main/storage/sd_log.c`, as v1 and v2 are migrated now.
+- `alert_mask` has a bit per type (at most 32). A type that should not alert by default goes in `ALERT_DEFAULT_OFF` in `main/settings.c`; masks saved by older firmware get the default for the new bit (the NVS `alert_known` count).
+- The pages have their own tables, not checked by the compiler: `TNAME`, `BADGE`, `ICON`, `TPORT`, `TDESC`, `DKEYS` and the donut in `main/index.html`, `TNAME` and `TPORT` in `main/device.html`.
+
+#### Recipe: add a runtime setting
+
+1. Add the field to `settings_t` in [`main/settings.h`](main/settings.h).
+2. In `main/settings.c`: the default from a `config.h` macro, with an `#ifndef` fallback so an older `config.h` still builds; the load from NVS (a key of at most 15 characters) with a range check that falls back to the default; the check in the validation function (its message is what the API returns); and the NVS write in `settings_save()`. If it should apply at once, read it with `settings_get()` where it is used, or register a callback with `settings_on_change()`.
+3. In `main/config.h.example`: the macro with a documentation block and a `_Static_assert` on its range.
+4. In `main/admin/api_ext.c`: the field in the `GET /api/settings` JSON, and a `take_*()` call for it in `POST /api/settings`. A secret is never returned: send only a `<name>_set` flag, and treat a blank value as "unchanged".
+5. In `main/index.html`: the control on the Settings page, filled where the page loads the settings and sent in the save line.
+6. Add it to the README.
+
+#### Recipe: add a web route
+
+1. Write `main/admin/api_<name>.c` / `.h` with `bool api_<name>_handle(int sock, const char *req, int req_len)` that answers and returns true for its paths, false for anything else.
+2. Add the call to the chain in `handle_request()` in [`main/admin/admin_panel.c`](main/admin/admin_panel.c) and the source to `main/CMakeLists.txt`.
+3. Everything in that chain runs after the Basic auth check, and every POST must carry an `X-ShadowSentry` header (any value) or gets 403: a page on another site cannot add a custom header without a CORS preflight, which the board never grants. Do not add routes before the auth check; the router's `/routeros/block.txt` is the one exception, and it answers only the router.
+4. Handlers run one at a time on the admin task (8 KB internal stack). Keep them short (the log scans stop after 3 s and hand back a cursor), allocate big buffers in PSRAM and free them, and escape every string with `json_esc()`.
+5. Add a row to the Fork API table.
+
+#### Rules for this code
+
+- Everything an attacker sends is hostile. Every trap parses untrusted bytes: check every length and index, bound every buffer and every session, and cut text to printable ASCII or escape it on the way out.
+- The fake shell never executes anything. The honeypot never makes a connection on an attacker's behalf: it must not become a pivot.
+- Slow work stays off the trap and network tasks. Trap stacks are small (3 KB for the smallest), so keep big buffers off them. microSD (FAT) writes go through the SD log's queue (`sd_log_line()`, `sd_log_write_file()`), never from a trap.
+- PSRAM first: buffers, tables and queues go to PSRAM (`heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`, `xQueueCreateWithCaps`, zero-initialised statics with `EXT_RAM_BSS_ATTR`). A task that never touches flash, NVS or SPIFFS may have its stack in PSRAM (`SPAWN_PSRAM` in `main/main.c`); one that writes them keeps an internal stack.
+- Keep internal RAM well above 35 KB free after boot: Wi-Fi and lwIP buffers need it, and every earlier slowdown of the network tracked a shortage of it. The console line "All tasks spawned" and `internal_after_boot` in `/api/status` show it.
+- Nothing slow or locking inside `portENTER_CRITICAL`: no `time()` (newlib takes a lock and aborts when contended there), no `ESP_LOG`, no `malloc` or `free`, no queue or semaphore calls. Read the clock before entering.
+- Measure, don't assume: internal heap free and its low, task stack high-water marks (`GET /api/tasks`), PSRAM free, before and after a change.
+
+#### Upstream-friendly conventions
+
+The fork is written so its parts can go back upstream:
+
+- New files over edits to upstream's files; when an upstream file must change, keep the edit small and leave its existing text as it is. Board-specific code goes behind `board.h`.
+- A header comment block at the top of each `.h`, `// ── Section ───` banners, `static const char *TAG = "MODULE";`, snake_case, and upstream's file layout.
+- Every option in `main/config.h.example` with a documentation block and a `_Static_assert`, plus an `#ifndef` default in the module so an older `config.h` still builds.
+- Task entry points named `<module>_task`, spawned with `SPAWN()` (or `SPAWN_PSRAM()`) in `main/main.c` with a stack and priority define.
+- Every new source listed in `main/CMakeLists.txt`, so `idf.py build` keeps working next to PlatformIO.
+- Credit ported code and protocol facts in `THIRD_PARTY_NOTICES`.
 
 ### Pulling upstream updates
 
@@ -451,7 +913,7 @@ git merge upstream/main
 git push origin main
 ```
 
-The rest of this README is the upstream documentation. Where it says `idf.py`, this fork uses the PlatformIO commands above.
+The rest of this README is the upstream documentation, kept as written. It describes upstream's build on a plain ESP32-S3 devkit: its partition table, Requirements and Build & flash steps are upstream's. For this fork use [Build and flash](#build-and-flash) above (PlatformIO, or [idf.py](#building-with-idfpy-instead) with the board defined in `config.h`).
 
 ---
 
