@@ -23,11 +23,13 @@
 #define BOARD_NAME          "WAVESHARE ESP32-S3-TOUCH-LCD-4.3B"
 
 // ── RGB LCD 800x480, 16-bit RGB565 (esp_lcd_panel_rgb) ────────────────────────
-// Timings from the demo (waveshare_rgb_lcd_port.c/.h): 16 MHz pixel clock on
-// the falling edge, about 39 frames a second.
+// Timings from the demo (waveshare_rgb_lcd_port.c/.h), on the falling edge,
+// but 14 MHz instead of the demo's 16 (about 34 frames a second, not 39): at 16
+// the clan panel's redraws starved the scan-out and the picture sat about 19 px
+// left, the cut-off columns wrapping in on the right (2026-11-05).
 #define BOARD_LCD_HRES          800
 #define BOARD_LCD_VRES          480
-#define BOARD_LCD_PCLK_HZ       (16 * 1000 * 1000)
+#define BOARD_LCD_PCLK_HZ       (14 * 1000 * 1000)
 #define BOARD_LCD_HSYNC_PW      4
 #define BOARD_LCD_HSYNC_BP      8
 #define BOARD_LCD_HSYNC_FP      8
