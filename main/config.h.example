@@ -445,10 +445,18 @@
 // AM/PM, the status bar clock "3:39 PM" and incident times "3:39:12 PM";
 // 1 24-hour, "15:39:12" everywhere. The Settings page can change it later.
 //
-// DISPLAY_PANEL_STYLE picks the front panel: 1 (default) LCARS, a frame with
-// a rail of pages (OPS, TRAPS, WIRES, NET, DEV) that rotate in AUTO;
-// 0 the dashboard (tiles, top offenders, LAN talkers). The Settings page can
-// change it later; the panel switches at once, no reboot.
+// DISPLAY_PANEL_STYLE picks the front panel: 1 LCARS, a frame with a rail of
+// pages (OPS, TRAPS, WIRES, NET, DEV) that rotate in AUTO; 2 clan, gunmetal
+// plates, a holo radar and an icon nav column (TACTICAL, BAIT, PERIMETER,
+// SYSTEMS, CONTACTS, INFO), also rotating in AUTO; 0 the dashboard (tiles,
+// top offenders, LAN talkers; CrowPanel only). Left unset, the board's
+// default: LCARS on the CrowPanel, clan on the Waveshare 4.3B
+// (BOARD_PANEL_STYLE). The Settings page can change it later; the panel
+// switches at once, no reboot.
+//
+// DISPLAY_PANEL_TITLE is the clan skin's banner, 1 to 16 printable ASCII
+// characters (default "YAIM VIRD"), shown upper case. The Settings page can
+// change it later.
 //
 // DISPLAY_ROTATE_S is how long LCARS AUTO shows each page, 10..600 s
 // (default 30). The Settings page can change it later; it applies from the
@@ -461,7 +469,8 @@
 // immediately.
 #define DISPLAY_TZ                  "UTC0"
 #define DISPLAY_CLOCK_24H           0
-#define DISPLAY_PANEL_STYLE         1
+// #define DISPLAY_PANEL_STYLE      2
+#define DISPLAY_PANEL_TITLE         "YAIM VIRD"
 #define DISPLAY_ROTATE_S            30
 #define ALARM_REMIND_S              60
 #define ALARM_QUIET_S               600
@@ -581,7 +590,10 @@ _Static_assert(WIFI_ROAM_INTERVAL_S >= 60 && WIFI_ROAM_INTERVAL_S <= 86400, "WIF
 
 // Panel clock format
 _Static_assert(DISPLAY_CLOCK_24H == 0 || DISPLAY_CLOCK_24H == 1, "DISPLAY_CLOCK_24H must be 0 or 1");
-_Static_assert(DISPLAY_PANEL_STYLE == 0 || DISPLAY_PANEL_STYLE == 1, "DISPLAY_PANEL_STYLE must be 0 or 1");
+#ifdef DISPLAY_PANEL_STYLE
+_Static_assert(DISPLAY_PANEL_STYLE >= 0 && DISPLAY_PANEL_STYLE <= 2, "DISPLAY_PANEL_STYLE must be 0, 1 or 2");
+#endif
+_Static_assert(sizeof(DISPLAY_PANEL_TITLE) >= 2 && sizeof(DISPLAY_PANEL_TITLE) <= 17, "DISPLAY_PANEL_TITLE must be 1-16 characters");
 _Static_assert(DISPLAY_ROTATE_S >= 10 && DISPLAY_ROTATE_S <= 600, "DISPLAY_ROTATE_S must be 10..600");
 
 // Discord tiers

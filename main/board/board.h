@@ -31,6 +31,7 @@
  *   BOARD_SD_SHARES_LCD_BUS    1: the display brings the SD's SPI bus up
  *   BOARD_I2C_PORT             the I2C port touch (and the camera) use
  *   BOARD_PANEL_DASHBOARD      1: the dashboard panel style (ui.c) is offered
+ *   BOARD_PANEL_STYLE          the default panel_style (1 LCARS, 2 clan) unless config.h sets DISPLAY_PANEL_STYLE
  */
 
 #include "sdkconfig.h"

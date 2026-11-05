@@ -911,7 +911,8 @@ tr.dv-an td{background:rgba(0,210,160,.05)!important;border-bottom:1px solid var
       <label for="st-tzp">Timezone preset</label><select id="st-tzp" onchange="if(this.value)$('st-tz').value=this.value"></select>
       <label for="st-tz">POSIX TZ string</label><input id="st-tz" maxlength="47" oninput="syncTz()">
       <label for="st-clk">Panel clock</label><select id="st-clk"><option value="12">12-hour (3:39 PM)</option><option value="24">24-hour (15:39)</option></select>
-      <label for="st-pstyle" data-needs="panel_dashboard">Panel style</label><select id="st-pstyle" data-needs="panel_dashboard"><option value="1">LCARS (pages)</option><option value="0">Dashboard</option></select>
+      <label for="st-pstyle">Panel style</label><select id="st-pstyle"><option value="1">LCARS (pages)</option><option value="2">Clan (holo)</option><option value="0" data-needs="panel_dashboard">Dashboard</option></select>
+      <label for="st-ptitle">Panel title (clan)</label><input type="text" id="st-ptitle" maxlength="16" placeholder="YAIM VIRD">
       <label for="st-rot">Page rotation (s)</label><input type="number" id="st-rot" min="10" max="600" step="1">
       <h4>Alarm</h4>
       <label for="st-rem">Reminder interval (s)</label><input type="number" id="st-rem" min="60" max="3600" step="1">
@@ -2215,7 +2216,7 @@ async function loadSettings(){
     // The board's features (firmware's "board"): what it lacks is hidden. Older firmware sends none: all shown.
     const bd=s.board||{};document.querySelectorAll('[data-needs]').forEach(e=>{e.hidden=bd[e.dataset.needs]===false;});
     const bn=$('st-board');if(bd.name){const miss=[bd.buzzer===false?'no buzzer':'',bd.camera===false?'no camera':'',bd.backlight_dim===false?'backlight on or off only':''].filter(Boolean);bn.textContent='Board: '+bd.name+(bd.lcd?', '+bd.lcd:'')+(miss.length?' ('+miss.join(', ')+')':'');bn.hidden=false;}
-    $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';$('st-pstyle').value=String(s.panel_style===0?0:1);$('st-rot').value=s.panel_rotate_s||30;
+    $('st-ssid').value=s.wifi_ssid||'';$('st-chat').value=s.tg_chat_id||'';$('st-tz').value=s.tz||'';syncTz();$('st-clk').value=s.clock_24h?'24':'12';$('st-pstyle').value=String([0,1,2].includes(s.panel_style)?s.panel_style:1);$('st-ptitle').value=s.panel_title||'';$('st-rot').value=s.panel_rotate_s||30;
     $('st-rem').value=s.alarm_remind_s;$('st-quiet').value=s.alarm_quiet_s;
     $('st-br').value=s.brightness;$('st-brv').textContent=s.brightness+' %';
     $('st-snd').checked=!!s.alarm_sound;$('st-chirp').checked=!!s.boot_chirp;$('st-click').checked=!!s.touch_click;if(s.ui_volume!=null)$('st-uivol').value=String(s.ui_volume);if(s.alarm_volume!=null)$('st-alvol').value=String(s.alarm_volume);
@@ -2262,7 +2263,7 @@ async function saveSettings(ev){
   }
   const body={wifi_ssid:$('st-ssid').value,tg_chat_id:$('st-chat').value.trim(),tz:$('st-tz').value.trim(),
     alarm_remind_s:Number($('st-rem').value),alarm_quiet_s:Number($('st-quiet').value),brightness:Number($('st-br').value),
-    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,ui_volume:+$('st-uivol').value,alarm_volume:+$('st-alvol').value,clock_24h:$('st-clk').value==='24',panel_style:+$('st-pstyle').value,panel_rotate_s:+$('st-rot').value};
+    alarm_sound:$('st-snd').checked,boot_chirp:$('st-chirp').checked,touch_click:$('st-click').checked,ui_volume:+$('st-uivol').value,alarm_volume:+$('st-alvol').value,clock_24h:$('st-clk').value==='24',panel_style:+$('st-pstyle').value,panel_title:$('st-ptitle').value.trim()||'YAIM VIRD',panel_rotate_s:+$('st-rot').value};
   let am=0;TNAME.forEach((_,i)=>{if($('st-al-'+i).checked)am|=(1<<i);});
   body.alert_mask=am>>>0;
   body.scan_ports=Number($('st-sp').value);body.scan_window_s=Number($('st-sw').value);

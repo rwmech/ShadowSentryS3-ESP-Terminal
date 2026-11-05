@@ -73,6 +73,43 @@ CHECKS = [
     ("ab line", "ACCESS CODE = 03-11-2026-0118-9999_", 12, 452, 1),
     ("ab btn", "RETURN", 12, 92, 0), ("ab btn", "55-21", 12, 58, 0), ("ab btn", "00-00", 12, 58, 0),
     ("splash", "SHADOWSENTRY S3", 12, 480, 4),
+    # The clan skin, clan-panel.html (main/ui/ui_clan.c): header and nav
+    ("cl title", "YAIM VIRD", 28, 242, 3), ("cl title 9", "IRON WARD", 28, 242, 3), ("cl title 16", "NORTH WATCH 0712", 20, 242, 2),
+    ("cl sub", "SENTRY | 03 PERIMETER", 12, 242, 2), ("cl sub", "SENTRY | YELLOW ALERT", 12, 242, 2),
+    ("cl status", "STATUS", 12, 90, 0), ("cl pill", "NOMINAL", 12, 66, 0), ("cl pill", "CAUTION", 12, 66, 0),
+    ("cl pill", "HOSTILE", 12, 66, 0),
+    ("cl nav", "PERIMETER", 12, 76, 0), ("cl nav", "TACTICAL", 12, 76, 0), ("cl nav", "CONTACTS", 12, 76, 0),
+    ("cl nav", "SYSTEMS", 12, 76, 0), ("cl nav", "AUTO", 12, 76, 0),
+    # TACTICAL: the holo plate, the side plates (name x 7..73, value x 76..129), events
+    ("cl tac", "TACTICAL HOLOMAP", 12, 208, 1), ("cl legend", "FRIENDLY", 12, 64, 0), ("cl legend", "HOSTILE", 12, 64, 0),
+    ("cl legend n", "48", 14, 64, 0),
+    ("cl side", "SENSORS", 12, 67, 1), ("cl side", "SHIELDS", 12, 67, 1), ("cl side", "POWER", 12, 67, 1),
+    ("cl side v", "100 %", 14, 54, 0), ("cl side v", "128 KB", 14, 54, 0),
+    ("cl side k", "PI-HOLE BLOCKED", 12, 124, 0), ("cl side k", "PORTS WATCHED", 12, 124, 0),
+    ("cl events", "EVENTS / ALERTS", 12, 340, 1),
+    ("cl event", "40-02 RDP TRIPWIRE | 192.168.100.118 | 12:58 PM", 12, 340, 0),
+    # BAIT (name x 16..139, hits x 268..303, last x 308..359), PERIMETER cells
+    # (name x 10..135, hits x 136..169), SYSTEMS (key and value 104 wide),
+    # CONTACTS (name 128, rate 52, share 50), INFO
+    ("cl list head", "PERIMETER | ANY TOUCH ALERTS", 12, 352, 1),
+    ("cl bait", "CAMERA RTSP 554", 12, 124, 0), ("cl bait", "SHELL SESSIONS", 12, 124, 0),
+    ("cl bait", "TELNET 23 2323", 12, 124, 0), ("cl bait n", "999", 14, 36, 0), ("cl bait last", "12:58 PM", 12, 52, 0),
+    ("cl wire", "ROUTEROS API 8728", 12, 130, 0), ("cl wire", "ROUTER LOGIN FAIL", 12, 130, 0),
+    ("cl wire", "MAC-TELNET 20561", 12, 130, 0), ("cl wire n", "OFF", 12, 30, 0),
+    ("cl sys key", "MICROSD", 12, 104, 1), ("cl sys key", "DISCORD", 12, 104, 1),
+    ("cl sys v", "-48 DBM", 14, 104, 0), ("cl sys v", "CH 11", 14, 104, 0), ("cl sys v", "NTP SET", 14, 104, 0),
+    ("cl sys v", "12:58 PM", 14, 104, 0), ("cl sys v", "2 D 04 H 12 M", 14, 104, 0), ("cl sys v", "4.2 GB FREE", 14, 104, 0),
+    ("cl cont", "GOOGLE NEST HUB", 12, 128, 0), ("cl cont n", "4410/H", 12, 52, 0), ("cl cont w", "100 %", 12, 50, 0),
+    ("cl info", "YAIM VIRD | SENTRY S3", 14, 348, 0),
+    ("cl info", "ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL", 12, 348, 0),
+    # The alert view: banner (440 less its points), lines 464, buttons 152 (230 on YELLOW) less the
+    # points at mid-height (10 px cut, 52 px tall: 136 for the 14 px line)
+    ("cl threat", "HOSTILE CONTACT", 28, 400, 4), ("cl threat", "CAUTION", 28, 400, 4),
+    ("cl alert code", "CODE 30-01 WEB LOGIN ATTEMPT", 20, 464, 0),
+    ("cl alert src", "192.168.0.75 | DELL INC. | DELL LAPTOP", 14, 464, 0),
+    ("cl alert stat", "12 EVENTS | OPEN 12:34 | ALSO 17-03 PROBE", 12, 464, 0),
+    ("cl alert btn", "ACKNOWLEDGE", 14, 136, 0), ("cl alert btn", "IGNORE DEVICE", 14, 136, 0),
+    ("cl alert btn", "ACKNOWLEDGED", 14, 136, 0),
 ]
 
 def parse_args(argv):

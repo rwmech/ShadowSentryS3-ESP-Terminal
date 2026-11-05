@@ -62,6 +62,7 @@ static const char *TAG = "SUBSYS";
 #define VALUES_MS   1000
 
 static const char *const KEY[TERM_N] = { "UNIT", "BASE", "FORK", "BUILD", "NODE", "ACCESS CODE" };
+_Static_assert(TERM_N == SUBSYS_LINES, "SUBSYS_LINES: the terminal's lines");
 
 EXT_RAM_BSS_ATTR static lv_obj_t *s_box, *s_logo, *s_id, *s_cursor;
 EXT_RAM_BSS_ATTR static lv_obj_t *s_val[TERM_N], *s_code_lbl[CODES];
@@ -139,36 +140,60 @@ static void fmt_uptime(char *b, size_t len)
     else        snprintf(b, len, "UP %lu MIN", (unsigned long)m);
 }
 
+// Terminal line i's value, upper case (for the clan skin's INFO page too).
+void subsys_value(int i, char *b, size_t len)
+{
+    char hash[40], ip[20], up[24];
+    b[0] = '\0';
+    switch (i) {
+    case 0: strlcpy(b, BOARD_NAME, len); break;
+    case 1: strlcpy(b, "SHADOWSENTRY S3 BY RDX1S (MIT)", len); break;
+    case 2: strlcpy(b, "ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL", len); break;
+    case 3: {
+        build_hash(hash, sizeof(hash));
+        const char *idf = esp_get_idf_version();
+        if (idf[0] == 'v') idf++;
+#ifdef SS_BUILD_DATE
+        const char *date = SS_BUILD_DATE;
+#else
+        const char *date = esp_app_get_description()->date;
+#endif
+        snprintf(b, len, "%s | %s | IDF %s", hash, date, idf);
+        break;
+    }
+    case 4:
+        wifi_manager_get_ip_str(ip, sizeof(ip));
+        fmt_uptime(up, sizeof(up));
+        if (ip[0]) snprintf(b, len, "%s:%d | %s", ip, ADMIN_PORT, up);
+        else       snprintf(b, len, "NO WI-FI | %s", up);
+        break;
+    case 5: {
+        // The access code: the date, the address's last octet and the admin port.
+        char day[12] = "00-00-0000";
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        if (tm.tm_year + 1900 >= 2024) strftime(day, sizeof(day), "%d-%m-%Y", &tm);
+        wifi_manager_get_ip_str(ip, sizeof(ip));
+        const char *dot = strrchr(ip, '.');
+        unsigned oct = dot ? (unsigned)atoi(dot + 1) % 10000u : 0;
+        snprintf(b, len, "%s-%04u-%d", day, oct, ADMIN_PORT);
+        break;
+    }
+    default: break;
+    }
+    upper(b);
+}
+
+const char *subsys_key(int i) { return i >= 0 && i < TERM_N ? KEY[i] : ""; }
+
 static void values_update(void)
 {
-    char v[TERM_N][96], hash[40], ip[20], up[24];
+    char v[TERM_N][96], hash[40];
     build_hash(hash, sizeof(hash));
-    snprintf(v[0], sizeof(v[0]), " = %s", BOARD_NAME);
-    snprintf(v[1], sizeof(v[1]), " = SHADOWSENTRY S3 BY RDX1S (MIT)");
-    snprintf(v[2], sizeof(v[2]), " = ROBERT MECH | SHADOWSENTRYS3-ESP-TERMINAL");
-    const char *idf = esp_get_idf_version();
-    if (idf[0] == 'v') idf++;
-#ifdef SS_BUILD_DATE
-    const char *date = SS_BUILD_DATE;
-#else
-    const char *date = esp_app_get_description()->date;
-#endif
-    snprintf(v[3], sizeof(v[3]), " = %s | %s | IDF %s", hash, date, idf);
-    wifi_manager_get_ip_str(ip, sizeof(ip));
-    fmt_uptime(up, sizeof(up));
-    if (ip[0]) snprintf(v[4], sizeof(v[4]), " = %s:%d | %s", ip, ADMIN_PORT, up);
-    else       snprintf(v[4], sizeof(v[4]), " = NO WI-FI | %s", up);
-    // The access code: the date, the address's last octet and the admin port.
-    char day[12] = "00-00-0000";
-    time_t now = time(NULL);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    if (tm.tm_year + 1900 >= 2024) strftime(day, sizeof(day), "%d-%m-%Y", &tm);
-    const char *dot = strrchr(ip, '.');
-    unsigned oct = dot ? (unsigned)atoi(dot + 1) % 10000u : 0;
-    snprintf(v[5], sizeof(v[5]), " = %s-%04u-%d", day, oct, ADMIN_PORT);
     for (int i = 0; i < TERM_N; i++) {
-        upper(v[i]);
+        v[i][0] = ' '; v[i][1] = '='; v[i][2] = ' ';
+        subsys_value(i, v[i] + 3, sizeof(v[i]) - 3);
         set_text(s_val[i], v[i]);
     }
     char id[64];

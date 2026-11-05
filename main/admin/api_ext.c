@@ -366,6 +366,7 @@ static void get_settings(int sock)
     jb_printf(&j, "\"ui_volume\":%u,\"alarm_volume\":%u,", (unsigned)s.ui_volume, (unsigned)s.alarm_volume);
     jb_bool(&j, "clock_24h", s.clock_24h);                  JB_LIT(&j, ",");
     jb_printf(&j, "\"panel_style\":%u,", (unsigned)s.panel_style);
+    JB_LIT(&j, "\"panel_title\":");  jb_str(&j, s.panel_title, sizeof(s.panel_title)); JB_LIT(&j, ",");
     jb_printf(&j, "\"panel_rotate_s\":%u,", (unsigned)s.panel_rotate_s);
     // The board's features (board.h), so the Settings page hides what it lacks.
     JB_LIT(&j, "\"board\":{\"name\":"); jb_str(&j, BOARD_NAME, sizeof(BOARD_NAME));
@@ -605,7 +606,8 @@ static void post_settings(int sock, const char *req, int req_len)
     if (!err) err = take_u32(root, "ui_volume", &ui_vol, 3);
     if (!err) err = take_u32(root, "alarm_volume", &al_vol, 3);
     if (!err) err = take_bool(root, "clock_24h", &s.clock_24h);
-    if (!err) err = take_u32(root, "panel_style", &pstyle, 1);
+    if (!err) err = take_u32(root, "panel_style", &pstyle, 2);
+    if (!err) err = take_str(root, "panel_title", s.panel_title, sizeof(s.panel_title), false);
     if (!err) err = take_u32(root, "panel_rotate_s", &prot, 600);
     if (!err) err = take_str(root, "discord_webhook", s.discord_webhook, sizeof(s.discord_webhook), true);
     bool dc_clear = false;      // blank means "unchanged", so clearing needs saying
@@ -660,7 +662,7 @@ static void post_settings(int sock, const char *req, int req_len)
     s.discord_min_tier = (uint8_t)dc_tier;
     s.ui_volume = (uint8_t)ui_vol;
     s.alarm_volume = (uint8_t)al_vol;
-    s.panel_style = BOARD_PANEL_DASHBOARD ? (uint8_t)pstyle : 1;   // a board without the dashboard: LCARS
+    s.panel_style = BOARD_PANEL_DASHBOARD || pstyle ? (uint8_t)pstyle : 1;   // no dashboard on the board: LCARS
     s.panel_rotate_s = (uint16_t)prot;
     bool pw_changed = false;
     {

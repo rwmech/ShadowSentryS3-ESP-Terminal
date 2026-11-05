@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include "lvgl.h"
 #include "log_store.h"
 
@@ -21,6 +22,12 @@ void subsys_build(lv_obj_t *root, void (*back)(void));
 // Show (values refreshed at once, then every second) or hide it.
 void subsys_show(bool on);
 bool subsys_shown(void);
+
+// The terminal lines (the clan skin's INFO page shows them too): key i
+// (UNIT, BASE, FORK, BUILD, NODE, ACCESS CODE) and its value, upper case.
+#define SUBSYS_LINES 6
+const char *subsys_key(int i);
+void        subsys_value(int i, char *b, size_t len);
 
 // One event: its code goes to the front of the code buttons (newest first,
 // each code once).

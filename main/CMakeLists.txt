@@ -98,6 +98,8 @@ idf_component_register(
         "ui/display_waveshare43.c"
         "ui/ui.c"
         "ui/ui_lcars.c"
+        "ui/ui_clan.c"
+        "ui/ui_clan_tex.c"
         "ui/lv_mem_psram.c"
         "ui/ui_subsys.c"
         "ui/ui_logo.c"

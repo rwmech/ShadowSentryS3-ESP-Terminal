@@ -81,3 +81,4 @@
 
 // ── Front panel styles ────────────────────────────────────────────────────────
 #define BOARD_PANEL_DASHBOARD 1     // the dashboard (ui.c) as well as LCARS
+#define BOARD_PANEL_STYLE     1     // the default panel_style: LCARS

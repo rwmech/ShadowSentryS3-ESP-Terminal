@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ShadowSentry S3: clan-command skin, preview v2 (480 x 320)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --metal1:#4a4642; --metal2:#2b2826; --metal3:#1a1817; --rust:#6b3a24; --edge:#8a8178;
+    --red:#c4161c; --red2:#7d0f12; --redglow:#ff3b30; --gold:#e0b04a; --gold2:#9c7424;
+    --holo:#3fd2ff; --holo2:#167fa8; --green:#35e06b; --amber:#ffc53d; --txt:#e9e2d6; --dim:#a89f92;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0909;color:#ddd;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif;padding:24px}
+  h1{font-size:18px;margin:0 0 4px} p.sub{margin:0 0 18px;color:#aaa;max-width:1000px}
+  .wrap{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .stage{width:960px;height:640px;border:2px solid #333;border-radius:10px;overflow:hidden;background:#000}
+  .controls{max-width:430px}
+  .controls button{display:block;width:100%;margin:0 0 7px;padding:8px 12px;border:1px solid var(--red);font:600 12px Montserrat,Arial;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;text-align:left;color:var(--txt);background:linear-gradient(#3a1416,#200a0b)}
+  .controls h2{font-size:14px;margin:16px 0 6px;color:#fff} .controls ul{margin:0;padding-left:18px;color:#bbb} .controls li{margin-bottom:6px}
+
+  .screen{position:relative;width:480px;height:320px;overflow:hidden;transform:scale(2);transform-origin:0 0;user-select:none;
+    font-family:Montserrat,"Segoe UI",Arial,sans-serif;font-size:12px;line-height:14px;text-transform:uppercase;letter-spacing:.01em;color:var(--txt);
+    /* weathered gunmetal: on the board this is one 480 x 320 RGB565 background image in flash (300 KB) */
+    background:
+      radial-gradient(60% 40% at 20% 15%,rgba(120,60,30,.35),transparent 70%),
+      radial-gradient(50% 50% at 85% 90%,rgba(110,50,25,.30),transparent 70%),
+      repeating-linear-gradient(90deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px),
+      linear-gradient(160deg,#3b3734,#211f1d 60%,#171514)}
+  .abs{position:absolute}
+  .plate{background:linear-gradient(#34302c,#1f1c1a);border:1px solid #5a534b;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 -1px 0 rgba(0,0,0,.6);
+    clip-path:polygon(7px 0,calc(100% - 7px) 0,100% 7px,100% calc(100% - 7px),calc(100% - 7px) 100%,7px 100%,0 calc(100% - 7px),0 7px)}
+  .holo{background:radial-gradient(120% 120% at 50% 40%,rgba(22,127,168,.25),rgba(6,20,30,.9));border:1px solid #2c6f86}
+  .rcorner:before,.rcorner:after{content:'';position:absolute;width:14px;height:3px;background:var(--red)}
+  .rcorner:before{left:6px;top:3px}.rcorner:after{right:6px;bottom:3px}
+  .h{color:var(--txt);font-size:12px;letter-spacing:.1em}
+  .k{color:var(--dim);font-size:12px}
+
+  /* header */
+  .emblem{left:4px;top:4px;width:64px;height:64px;background:radial-gradient(circle at 50% 40%,#a4141a,#4a080a);border:2px solid #5a534b;
+    clip-path:polygon(50% 0,100% 22%,100% 78%,50% 100%,0 78%,0 22%)}
+  .titlep{left:96px;top:4px;width:270px;height:44px;background:linear-gradient(#7d0f12,#4a090b);border:1px solid #b51f24;clip-path:polygon(14px 0,calc(100% - 14px) 0,100% 50%,calc(100% - 14px) 100%,14px 100%,0 50%)}
+  .title{left:96px;top:6px;width:270px;text-align:center;font-size:28px;line-height:30px;letter-spacing:.12em;
+    background:linear-gradient(#fff1c9,#e0b04a 45%,#8a6420);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .subt{left:96px;top:34px;width:270px;text-align:center;font-size:12px;letter-spacing:.22em;color:var(--gold)}
+  .status{left:374px;top:4px;width:102px;height:44px;padding:4px 6px}
+  .status .pill{margin-top:3px;height:18px;line-height:18px;padding-left:22px;color:var(--green);background:#0d1a10;border:1px solid #1f5a2d;position:relative}
+  .status .pill:before{content:'';position:absolute;left:5px;top:4px;width:12px;height:10px;background:var(--green);box-shadow:0 0 6px var(--green)}
+  .glow{left:120px;top:50px;width:60px;height:3px;background:var(--redglow);box-shadow:0 0 6px var(--redglow);border-radius:2px}
+  .glow2{left:300px;top:50px;width:60px;height:3px;background:var(--redglow);box-shadow:0 0 6px var(--redglow);border-radius:2px}
+
+  /* nav */
+  .nav{left:4px;top:74px;width:100px;display:flex;flex-direction:column;gap:3px}
+  .nav button{all:unset;box-sizing:border-box;height:38px;display:flex;align-items:center;gap:4px;padding-left:4px;cursor:pointer;color:var(--txt);font-size:12px;
+    background:linear-gradient(#3d3935,#24211f);border:1px solid #5a534b;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 50%,calc(100% - 8px) 100%,0 100%)}
+  .nav button svg{width:14px;height:14px;flex:none}
+  .nav button.on{background:linear-gradient(#a3161c,#5a0b0e);border-color:var(--redglow);box-shadow:0 0 8px rgba(255,59,48,.5)}
+  .nav button small{display:block;font-size:12px;color:var(--dim);letter-spacing:.02em}
+
+  /* main */
+  .main{left:108px;top:58px;width:368px;height:258px}
+  .page{display:none;position:absolute;inset:0}.page.on{display:block}
+  .tac{left:0;top:0;width:224px;height:186px;padding:6px 8px}
+  .radar{position:absolute;left:8px;top:26px;width:140px;height:140px;border-radius:50%;border:1px solid var(--holo2);
+    background:radial-gradient(circle,transparent 32%,rgba(63,210,255,.18) 33%,transparent 34%,transparent 65%,rgba(63,210,255,.18) 66%,transparent 67%),radial-gradient(circle,rgba(22,127,168,.25),rgba(4,14,20,.95))}
+  .sweep{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(63,210,255,.45),transparent 25%);animation:spin 4s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .blip{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px}
+  .legend{position:absolute;left:154px;top:30px;width:64px}
+  .legend div{margin-bottom:2px}
+  .side{left:230px;top:0;width:138px}
+  .side .plate{padding:5px 7px;margin-bottom:4px}
+  .seg{display:flex;gap:2px;margin-top:4px}.seg i{flex:1;height:10px;transform:skewX(-20deg);background:#3a2e28;display:block}
+  .seg.red i.on{background:linear-gradient(#ff4a3d,#a3161c)}.seg.gold i.on{background:linear-gradient(#ffe08a,#c58f22)}
+  .bottom{left:0;top:192px;width:368px;height:66px;padding:5px 8px}
+  .ev{display:flex;gap:6px;align-items:center;height:16px}
+  .ev .ic{width:10px;height:10px;flex:none}.ev.hot{color:#ffb3ac}
+  .list .row{display:flex;align-items:center;gap:6px;height:24px;border-bottom:1px solid #3a3531}
+  .list .row .n{width:30px;text-align:right;color:var(--gold)}.list .row .m{flex:1;height:5px;background:#2a2522}.list .row .m i{display:block;height:100%;background:linear-gradient(90deg,#a3161c,#ff4a3d)}
+  .list .row .nm{width:128px}.list .row .w{width:56px;text-align:right;color:var(--dim)}
+  .list .row.lit .nm{color:var(--gold)}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+  .stat{padding:5px 7px;height:44px}.stat .v{color:var(--holo);font-size:14px;margin-top:3px}
+
+  /* alert */
+  .alert{left:108px;top:58px;width:368px;height:258px;display:none}
+  .alert.on{display:block}
+  .threat{left:0;top:0;width:380px;height:110px}
+  .acode{left:0;top:112px;width:380px;text-align:center;font-size:20px;line-height:24px}
+  .asrc{left:0;top:138px;width:380px;text-align:center;color:var(--gold);font-size:14px}
+  .ahead{left:0;top:158px;width:380px;text-align:center;color:var(--dim);text-transform:none;letter-spacing:0}
+  .abtns{left:0;top:208px;width:380px;display:flex;gap:4px}
+  .abtns button{all:unset;flex:1;height:46px;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;color:var(--txt);background:linear-gradient(#3d3935,#24211f);border:1px solid #5a534b;
+    clip-path:polygon(8px 0,calc(100% - 8px) 0,100% 50%,calc(100% - 8px) 100%,8px 100%,0 50%)}
+  .abtns button.danger{background:linear-gradient(#c4161c,#6b0d10);border-color:var(--redglow)}
+  .screen.red .titlep{animation:pulse 1.4s ease-in-out infinite}@keyframes pulse{50%{filter:brightness(1.5)}}
+  .screen.red .status .pill{color:#ff8a80;background:#240b0b;border-color:#7d0f12}.screen.red .status .pill:before{background:var(--redglow);box-shadow:0 0 6px var(--redglow)}
+  .screen.ylw .status .pill{color:var(--amber);background:#241d0b;border-color:#7a5a10}.screen.ylw .status .pill:before{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+</style>
+</head>
+<body>
+<h1>ShadowSentry S3: clan-command skin, preview v2 (after your two references)</h1>
+<p class="sub">Weathered gunmetal plates, crimson accents and glow strips, a gold title on a red banner, an icon nav column, cyan holo panels, segmented red and gold bars, and a NOMINAL status pill. Fitted to the board's 480 x 320 with its real fonts (Montserrat 12 to 28), shown at 2x. The emblem is an original sigil; no Mandalorian crest, mythosaur or helmet artwork. "YAIM VIRD" is from your reference; it can read anything. Preview only, nothing built.</p>
+<div class="wrap">
+<div class="stage"><div class="screen" id="scr">
+  <div class="abs emblem"></div>
+  <svg class="abs" style="left:14px;top:12px;width:44px;height:48px" viewBox="0 0 44 48"><path d="M22 4 L30 14 L38 8 L34 26 L22 44 L10 26 L6 8 L14 14 Z" fill="none" stroke="#e0b04a" stroke-width="3" stroke-linejoin="round"/><path d="M15 22 L22 30 L29 22" fill="none" stroke="#e0b04a" stroke-width="3" stroke-linecap="round"/></svg>
+  <div class="abs titlep"></div><div class="abs title">YAIM VIRD</div><div class="abs subt">SENTRY | 01 TACTICAL</div>
+  <div class="abs status plate"><div class="k" style="text-align:center">STATUS</div><div class="pill" id="pill">NOMINAL</div></div>
+  <div class="abs glow"></div><div class="abs glow2"></div>
+
+  <div class="abs nav" id="nav">
+    <button data-p="tac" class="on"><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="none" stroke="#ff6a5e" stroke-width="2"/><path d="M9 1v5M9 12v5M1 9h5M12 9h5" stroke="#ff6a5e" stroke-width="2"/></svg>TACTICAL</button>
+    <button data-p="bait"><svg viewBox="0 0 18 18"><path d="M3 15 L9 3 L15 15 Z" fill="none" stroke="#e0b04a" stroke-width="2"/></svg>BAIT</button>
+    <button data-p="perim"><svg viewBox="0 0 18 18"><path d="M9 2 L16 5 V10 C16 14 12 16 9 17 C6 16 2 14 2 10 V5 Z" fill="none" stroke="#e0b04a" stroke-width="2"/></svg>PERIMETER</button>
+    <button data-p="sys"><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="3" fill="#e0b04a"/><circle cx="9" cy="9" r="7" fill="none" stroke="#e0b04a" stroke-width="2" stroke-dasharray="3 2"/></svg>SYSTEMS</button>
+    <button data-p="cont"><svg viewBox="0 0 18 18"><circle cx="6" cy="6" r="3" fill="#e0b04a"/><circle cx="13" cy="6" r="3" fill="#e0b04a"/><path d="M1 16 C1 11 11 11 11 16 M8 16 C8 11 17 11 17 16" fill="none" stroke="#e0b04a" stroke-width="2"/></svg>CONTACTS</button>
+    <button data-p="info"><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7" fill="none" stroke="#e0b04a" stroke-width="2"/><path d="M9 8v5M9 5v1" stroke="#e0b04a" stroke-width="2"/></svg>INFO</button>
+  </div>
+
+  <div class="abs main">
+    <div class="page on" id="p-tac">
+      <div class="abs tac plate holo rcorner"><div class="h">TACTICAL HOLOMAP</div>
+        <div class="radar" id="radar"><div class="sweep"></div></div>
+        <div class="legend"><div style="color:var(--holo)">FRIENDLY</div><div style="color:var(--holo);font-size:14px">2</div><div style="color:var(--amber)">NEUTRAL</div><div style="color:var(--amber);font-size:14px">64</div><div style="color:#ff6a5e">HOSTILE</div><div style="color:#ff6a5e;font-size:14px">1</div></div>
+      </div>
+      <div class="abs side">
+        <div class="plate rcorner"><div class="h">SENSORS <span style="float:right;color:var(--holo)">35</span></div><div class="k">PORTS WATCHED</div></div>
+        <div class="plate"><div class="h">SHIELDS <span style="float:right" id="shv">31 %</span></div><div class="k">PI-HOLE</div><div class="seg red" id="sh"></div></div>
+        <div class="plate"><div class="h">POWER <span style="float:right">59 KB</span></div><div class="k">FREE RAM</div><div class="seg gold" id="pw"></div></div>
+        
+      </div>
+      <div class="abs bottom plate rcorner"><div class="h">EVENTS / ALERTS</div>
+        <div class="ev hot"><svg class="ic" viewBox="0 0 10 10"><path d="M5 1 L9 9 H1 Z" fill="none" stroke="#ff6a5e" stroke-width="1.5"/></svg>40-02 RDP | 192.168.0.75 | 12:58 PM</div>
+        <div class="ev"><svg class="ic" viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" transform="rotate(45 5 5)" fill="none" stroke="#ffc53d" stroke-width="1.5"/></svg>55-28 DNS | 192.168.0.121 | 12:50 PM</div>
+        <div class="ev"><svg class="ic" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.5" fill="none" stroke="#a89f92" stroke-width="1.5"/></svg>ROUTER SYSLOG | LIVE</div>
+      </div>
+    </div>
+    <div class="page" id="p-bait"><div class="plate rcorner" style="padding:6px 8px;height:258px"><div class="h" style="margin-bottom:4px">BAIT | HITS TODAY | LAST</div><div class="list" id="baitl"></div></div></div>
+    <div class="page" id="p-perim"><div class="plate rcorner" style="padding:6px 8px;height:258px"><div class="h" style="margin-bottom:4px">PERIMETER | ANY TOUCH ALERTS</div><div class="list" id="periml"></div></div></div>
+    <div class="page" id="p-sys"><div class="grid3">
+      <div class="plate stat"><div class="k">WI-FI</div><div class="v">-41 DBM</div></div><div class="plate stat"><div class="k">UPTIME</div><div class="v">2 D 04 H</div></div><div class="plate stat"><div class="k">CLOCK</div><div class="v">NTP SET</div></div>
+      <div class="plate stat"><div class="k">PI-HOLE</div><div class="v">OK | 31 %</div></div><div class="plate stat"><div class="k">ROUTER</div><div class="v">84 HOSTS</div></div><div class="plate stat"><div class="k">IPFIX</div><div class="v">1200 / MIN</div></div>
+      <div class="plate stat"><div class="k">SYSLOG</div><div class="v">LIVE</div></div><div class="plate stat"><div class="k">MICROSD</div><div class="v">7.2 GB</div></div><div class="plate stat"><div class="k">DISCORD</div><div class="v">SEV 1-2</div></div>
+    </div></div>
+    <div class="page" id="p-cont"><div class="plate rcorner" style="padding:6px 8px;height:258px"><div class="h" style="margin-bottom:4px">CONTACTS | BUSIEST FIRST</div><div class="list" id="contl"></div></div></div>
+    <div class="page" id="p-info"><div class="plate rcorner" style="padding:8px 10px;height:258px;line-height:18px">
+      <div class="h" style="color:var(--gold);font-size:14px">YAIM VIRD | SENTRY S3</div>
+      <div><span class="k">UNIT</span> ELECROW CROWPANEL ESP32-S3 3.5 IN</div><div><span class="k">BASE</span> SHADOWSENTRY S3 BY RDX1S (MIT)</div><div><span class="k">FORK</span> ROBERT MECH</div><div><span class="k">BUILD</span> 2FD4420 | 2026-11-03</div><div><span class="k">NODE</span> 192.168.0.118:9999</div>
+    </div></div>
+  </div>
+
+  <div class="abs alert" id="alert">
+    <svg class="abs threat" viewBox="0 0 380 110" id="threat"></svg>
+    <div class="abs acode" id="acode">CODE 40-02 RDP TRIPWIRE</div>
+    <div class="abs asrc">192.168.0.75 | DELL INC. | DELL LAPTOP</div>
+    <div class="abs ahead">RDP on 3389, 19 bytes, TLS client hello</div>
+    <div class="abs abtns"><button class="danger" id="ack">ACKNOWLEDGE</button><button>IGNORE ERROR</button><button>IGNORE DEVICE</button></div>
+  </div>
+</div></div>
+<div class="controls">
+  <button onclick="cond('green')">Status nominal</button>
+  <button onclick="cond('ylw')">Simulate caution (yellow)</button>
+  <button onclick="cond('red')">Simulate hostile (red)</button>
+  <h2>What carries over from your references</h2>
+  <ul>
+    <li>Header: an emblem plate top left, a gold title on a red angled banner with a spaced subtitle, a SYSTEM STATUS plate with a NOMINAL pill (green, amber on caution, red on hostile), red glow strips under the banner.</li>
+    <li>Nav: an icon column of metal buttons, the selected one red with a glow: TACTICAL, BAIT, PERIMETER, SYSTEMS, CONTACTS, INFO.</li>
+    <li>Tactical page: a cyan holo radar with a live sweep, contacts as blips sorted the way the references do it: FRIENDLY (your admin PCs), NEUTRAL (known LAN devices), HOSTILE (sources that tripped something today). SHIELDS is Pi-hole's blocked share and POWER is free RAM, as segmented red and gold bars. An EVENTS / ALERTS plate with the last three.</li>
+    <li>The other pages: the same data as the LCARS pages in plates with red corner ticks.</li>
+  </ul>
+  <h2>On the board</h2>
+  <ul>
+    <li>The textures (scratched metal, rust) would be one 480 x 320 background image in flash, about 300 KB, plus a few small plate images; the rest is LVGL rectangles, lines and labels. Flash is at 2.3 MB of 6 MB.</li>
+    <li>The radar sweep is the one costly piece: a rotating wedge repaints a 150 x 150 area. On the board it would be a line or a narrow wedge drawn at about 15 frames a second, or stepped every 100 ms.</li>
+    <li>The 480 x 320 screen is a third of your references' size: fewer, larger panels per page, the 12 px minimum font kept.</li>
+  </ul>
+</div>
+</div>
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+let page='tac',mode='green';const NAMES={tac:'01 TACTICAL',bait:'02 BAIT',perim:'03 PERIMETER',sys:'04 SYSTEMS',cont:'05 CONTACTS',info:'06 INFO'};
+function show(p){page=p;$$('.page').forEach(e=>e.classList.toggle('on',e.id==='p-'+p));$$('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));$('.subt').textContent='SENTRY | '+NAMES[p];}
+$$('#nav button').forEach(b=>b.onclick=()=>{if(mode==='green')show(b.dataset.p);});
+function bars(id,n){$(id).innerHTML=Array.from({length:12},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('');}bars('#sh',4);bars('#pw',7);
+const R=$('#radar');[[40,30,'holo','tri'],[110,48,'holo','tri'],[70,95,'amber','dia'],[30,80,'amber','dia'],[96,120,'amber','dia'],[122,90,'amber','dia'],[60,58,'red','dia']].forEach(([x,y,c,s])=>{
+  const col=c==='holo'?'#3fd2ff':c==='amber'?'#ffc53d':'#ff4a3d';const d=document.createElement('div');d.className='blip';d.style.left=x+'px';d.style.top=y+'px';
+  d.innerHTML=s==='tri'?`<svg viewBox="0 0 10 10"><path d="M5 1 L9 9 H1 Z" fill="none" stroke="${col}" stroke-width="1.6"/></svg>`:`<svg viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" transform="rotate(45 5 5)" fill="none" stroke="${col}" stroke-width="1.6"/></svg>`;R.appendChild(d);});
+function list(id,rows){const mx=Math.max(1,...rows.map(r=>r[1]));$(id).innerHTML=rows.map(r=>`<div class="row"><span class="nm">${r[0]}</span><span class="m"><i style="width:${r[1]/mx*100}%"></i></span><span class="n">${r[1]}</span><span class="w">${r[2]}</span></div>`).join('');
+  setInterval(()=>{const rs=$$(id+' .row');const e=rs[Math.floor(Math.random()*rs.length)];e.classList.add('lit');setTimeout(()=>e.classList.remove('lit'),1000);},2600);}
+list('#baitl',[['HIKVISION 80',26,'3:11 PM'],['WEB 8080 +2',3,'1:02 PM'],['TELNET 23 2323',5,'1:39 PM'],['SHELL SESSIONS',16,'1:40 PM'],['SSH 22 2222',1,'9:02 AM'],['FTP 21',0,'-'],['ADB 5555',0,'-'],['CAMERA RTSP 554',0,'-']]);
+list('#periml',[['RDP 3389',9,'12:58 PM'],['REDIS 6379',4,'12:58 PM'],['WINBOX 8291',2,'12:59 PM'],['SMB 445',2,'2:02 PM'],['ROUTER MGMT',1,'2:42 PM'],['DNS BYPASS',0,'-'],['NEW DEVICE',0,'-'],['VNC 5900',0,'-']]);
+list('#contl',[['NVIDIA SHIELD',1820,'70 %'],['LG WEBOS TV',4410,'52 %'],['DELL LAPTOP',2900,'22 %'],['GOOGLE NEST HUB',960,'12 %'],['SONY BDP',210,'4 %'],['HDHOMERUN',88,'0 %'],['RANDOM MAC .124',40,'0 %'],['PI-HOLE',12,'0 %']]);
+const NS='http://www.w3.org/2000/svg';function threat(col,word){const s=$('#threat');s.innerHTML='';const m=(n,a,t)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t)e.textContent=t;s.appendChild(e);return e;};
+  m('polygon',{points:'30,20 350,20 366,55 350,90 30,90 14,55',fill:'rgba(125,15,18,.55)',stroke:col,'stroke-width':2});
+  m('text',{x:190,y:66,'text-anchor':'middle','font-size':28,'font-family':'Montserrat,Arial','letter-spacing':4,fill:col},word);
+  [[50,40],[330,40],[50,70],[330,70]].forEach(([x,y])=>m('rect',{x:x-4,y:y-4,width:8,height:8,transform:`rotate(45 ${x} ${y})`,fill:'none',stroke:col,'stroke-width':2}));}
+function cond(m){mode=m;const sc=$('#scr');sc.classList.remove('red','ylw');if(m==='green'){$('#pill').textContent='NOMINAL';$('#alert').classList.remove('on');$('.main').style.display='';$('#nav').style.visibility='';show(page);return;}
+  sc.classList.add(m);$('#pill').textContent=m==='red'?'HOSTILE':'CAUTION';$('.main').style.display='none';$('#nav').style.visibility='hidden';$('#alert').classList.add('on');
+  threat(m==='red'?'#ff4a3d':'#ffc53d',m==='red'?'HOSTILE CONTACT':'CAUTION');$('#acode').textContent=m==='red'?'CODE 40-02 RDP TRIPWIRE':'CODE 17-01 ARP SWEEP';$('#ack').style.display=m==='red'?'':'none';}
+show('tac');
+</script>
+</body>
+</html>

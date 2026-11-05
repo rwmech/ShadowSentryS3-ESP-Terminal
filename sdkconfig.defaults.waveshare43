@@ -19,6 +19,8 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_30=y
 CONFIG_LV_FONT_MONTSERRAT_42=y
-# Not in the demo: if the DMA ever falls behind the panel, restart it at the next
-# VSYNC instead of leaving the picture shifted.
-CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
+# CONFIG_LCD_RGB_RESTART_IN_VSYNC stays off, as in the demo. It restarts the DMA
+# at every VSYNC, and a restart that comes late shifts that frame (IDF's own note
+# in esp_lcd_panel_rgb.c); with it on, the picture sat shifted (2026-11-05).
+# Without it the driver still restarts at VSYNC when a frame came up short.
+# CONFIG_LCD_RGB_RESTART_IN_VSYNC is not set

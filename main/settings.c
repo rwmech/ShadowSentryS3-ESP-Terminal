@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "esp_attr.h"
 #include "config.h"
+#include "board.h"           // BOARD_PANEL_STYLE, the board's default panel
 #include "log_store.h"        // ATTACK_DISCOVERY, ATTACK_TYPE_COUNT
 #include "nvs.h"
 #include "esp_log.h"
@@ -33,7 +34,10 @@ static const char *TAG = "SETTINGS";
 #define ALARM_VOLUME_DEFAULT 3
 #endif
 #ifndef DISPLAY_PANEL_STYLE
-#define DISPLAY_PANEL_STYLE 1
+#define DISPLAY_PANEL_STYLE BOARD_PANEL_STYLE
+#endif
+#ifndef DISPLAY_PANEL_TITLE
+#define DISPLAY_PANEL_TITLE "YAIM VIRD"
 #endif
 #ifndef DISPLAY_ROTATE_S
 #define DISPLAY_ROTATE_S 30
@@ -128,6 +132,7 @@ static void defaults(settings_t *s)
     s->alarm_volume   = ALARM_VOLUME_DEFAULT;
     s->clock_24h      = DISPLAY_CLOCK_24H != 0;
     s->panel_style    = DISPLAY_PANEL_STYLE;
+    strlcpy(s->panel_title, DISPLAY_PANEL_TITLE, sizeof(s->panel_title));
     s->panel_rotate_s = DISPLAY_ROTATE_S;
     strlcpy(s->discord_webhook, DISCORD_WEBHOOK_URL, sizeof(s->discord_webhook));
     s->discord_log_events = true;
@@ -222,6 +227,8 @@ void settings_init(void)
         get_u8(h, "al_vol", &s_live.alarm_volume);
         get_bool(h, "clock24", &s_live.clock_24h);
         get_u8(h, "panel", &s_live.panel_style);
+        if (s_live.panel_style > 2) s_live.panel_style = DISPLAY_PANEL_STYLE;
+        get_str(h, "ptitle", s_live.panel_title, sizeof(s_live.panel_title));
         get_u16(h, "rot_s", &s_live.panel_rotate_s);
         if (s_live.panel_rotate_s < 10 || s_live.panel_rotate_s > 600) s_live.panel_rotate_s = DISPLAY_ROTATE_S;
         get_str(h, "dc_hook", s_live.discord_webhook, sizeof(s_live.discord_webhook));
@@ -498,7 +505,9 @@ static const char *validate(const settings_t *s)
     if (s->ui_volume > 3)              return "UI sound volume must be 0-3 (off, low, medium, high)";
     if (s->alarm_volume < 1 || s->alarm_volume > 3)
                                        return "alarm volume must be 1-3 (low, medium, high)";
-    if (s->panel_style > 1)            return "panel_style must be 0 (dashboard) or 1 (LCARS)";
+    if (s->panel_style > 2)            return "panel_style must be 0 (dashboard), 1 (LCARS) or 2 (clan)";
+    if (!s->panel_title[0] || !chars_ok(s->panel_title, 0x20, 0x7e))
+                                       return "panel title must be 1-16 printable ASCII characters";
     if (s->panel_rotate_s < 10 || s->panel_rotate_s > 600)
                                        return "page rotation must be 10-600 s";
     if (s->discord_webhook[0] && !discord_url_ok(s->discord_webhook))
@@ -570,6 +579,7 @@ esp_err_t settings_save(const settings_t *s, const char **err, bool *reboot_need
     SET(nvs_set_u8(h,  "al_vol",     s->alarm_volume));
     SET(nvs_set_u8(h,  "clock24",    s->clock_24h));
     SET(nvs_set_u8(h,  "panel",      s->panel_style));
+    SET(nvs_set_str(h, "ptitle",     s->panel_title));
     SET(nvs_set_u16(h, "rot_s",      s->panel_rotate_s));
     SET(nvs_set_str(h, "dc_hook",    s->discord_webhook));
     SET(nvs_set_u8(h,  "dc_log",     s->discord_log_events));
