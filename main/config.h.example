@@ -120,7 +120,7 @@
 // no Pi-hole: the feature stays off, with no task and no traffic.
 //
 // PIHOLE_URL is the base URL, without /admin: "http://ph.local",
-// "http://192.168.0.2" or "https://pi.hole" (https also needs the
+// "http://192.168.1.53" or "https://pi.hole" (https also needs the
 // certificate's SHA-256 in the dashboard's Settings, since Pi-hole's own
 // certificate is self-signed).
 //
@@ -146,9 +146,9 @@
 // Use a read-only user restricted to this board's address (README, "MikroTik").
 //
 // MIKROTIK_URL: the router's www service, no path:
-//   "http://192.168.0.1:8080"  plain HTTP (the www service): Basic credentials
+//   "http://192.168.1.1:8080"  plain HTTP (the www service): Basic credentials
 //                              cross the LAN in the clear
-//   "https://192.168.0.1"      HTTPS (www-ssl), verified by certificate pin
+//   "https://192.168.1.1"      HTTPS (www-ssl), verified by certificate pin
 // MIKROTIK_USER and MIKROTIK_PASSWORD: "" for either disables the router.
 // MIKROTIK_CERT_SHA256: https only. The SHA-256 fingerprint of the router's
 // certificate, 64 hex digits (colons allowed). "" means trust on first use:
@@ -183,9 +183,9 @@
 // main/detect/router_trip.h has the defaults and checks for a config.h without these.
 #define ROUTER_SYSLOG_ENABLE        1
 #define ROUTER_SYSLOG_PORT          514
-#define ROUTER_SYSLOG_SRC           ""      // "192.168.0.1"
-#define ROUTER_ADMIN_IPS            ""      // "192.168.0.10,192.168.0.11"
-#define ROUTER_PIHOLE_IP            ""      // "192.168.0.2"
+#define ROUTER_SYSLOG_SRC           ""      // "192.168.1.1"
+#define ROUTER_ADMIN_IPS            ""      // "192.168.1.10,192.168.1.11"
+#define ROUTER_PIHOLE_IP            ""      // "192.168.1.53"
 #define ROUTER_LIST_CHECK_S         15
 // ROUTER_IPFIX_ENABLE: collect the router's traffic-flow (IPFIX or NetFlow v9)
 //   per device for the device page (main/detect/router_flow.c).
@@ -199,7 +199,7 @@
 //   to 16 (your PC, a NAS). Also never blocked: this board, the gateway, the
 //   router, the Pi-hole (ROUTER_PIHOLE_IP), ROUTER_ADMIN_IPS, the admin
 //   allowlist, 0/8, 127/8, multicast and broadcast. main/admin/blocklist.h.
-#define ROUTER_NEVER_BLOCK          ""      // "192.168.0.10"
+#define ROUTER_NEVER_BLOCK          ""      // "192.168.1.10"
 // ROUTER_DNS_REDIRECT: 1 if the router redirects every LAN device's port 53
 //   to the Pi-hole by NAT (docs/router-setup.md, section 2). The SS-TRIP-DNS
 //   rule runs before that NAT, so a device that asks a public server on UDP

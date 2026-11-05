@@ -54,16 +54,16 @@
 
 # ── 1. Never block (checked on the router) ────────────────────────────────────
 /ip firewall address-list
-add list=shadowsentry-never address=192.168.0.1 comment="shadowsentry: EDIT the router's LAN address"
-add list=shadowsentry-never address=192.168.0.118 comment="shadowsentry: EDIT the sentry"
-add list=shadowsentry-never address=192.168.0.2 comment="shadowsentry: EDIT the Pi-hole"
-add list=shadowsentry-never address=192.168.0.10 comment="shadowsentry: EDIT your admin PC"
+add list=shadowsentry-never address=192.168.1.1 comment="shadowsentry: EDIT the router's LAN address"
+add list=shadowsentry-never address=192.168.1.50 comment="shadowsentry: EDIT the sentry"
+add list=shadowsentry-never address=192.168.1.53 comment="shadowsentry: EDIT the Pi-hole"
+add list=shadowsentry-never address=192.168.1.10 comment="shadowsentry: EDIT your admin PC"
 
 # ── 2. The script ─────────────────────────────────────────────────────────────
 /system script
 add name=shadowsentry-block policy=read,write,test dont-require-permissions=no source={
 # EDIT: the sentry's address and admin port.
-:local url "http://192.168.0.118:9999/routeros/block.txt"
+:local url "http://192.168.1.50:9999/routeros/block.txt"
 :local tag "shadowsentry-block"
 :local max 64
 :local r

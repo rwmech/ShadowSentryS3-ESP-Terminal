@@ -10,7 +10,7 @@
 # is filtered or changed.
 #
 # Edit the lines marked EDIT, then paste. Remove it again with:
-#   /ip traffic-flow target remove [find where dst-address=192.168.0.118]
+#   /ip traffic-flow target remove [find where dst-address=192.168.1.50]
 #   /ip traffic-flow set enabled=no
 # (the second line only if nothing else of yours uses traffic-flow).
 #
@@ -42,7 +42,7 @@ set enabled=yes interfaces=ether1 cache-entries=4k active-flow-timeout=1m inacti
 # EDIT above: interfaces= your WAN interface (ether1 is defconf's).
 
 /ip traffic-flow target
-add dst-address=192.168.0.118 port=4739 src-address=192.168.0.1 version=ipfix
+add dst-address=192.168.1.50 port=4739 src-address=192.168.1.1 version=ipfix
 # EDIT above: dst-address= the sentry, src-address= the router's LAN address
 # (the same address the sentry knows the router by: MIKROTIK_URL or
 # ROUTER_SYSLOG_SRC).

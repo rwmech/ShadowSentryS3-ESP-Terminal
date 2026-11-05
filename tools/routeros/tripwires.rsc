@@ -39,10 +39,10 @@
 # Put every PC you manage the router from here, and the sentry itself (its
 # read-only REST login reads the router every few seconds).
 /ip firewall address-list
-add list=shadowsentry-admin address=192.168.0.10 comment="shadowsentry: EDIT your admin PC"
-add list=shadowsentry-admin address=192.168.0.118 comment="shadowsentry: EDIT the sentry (ShadowSentry S3)"
+add list=shadowsentry-admin address=192.168.1.10 comment="shadowsentry: EDIT your admin PC"
+add list=shadowsentry-admin address=192.168.1.50 comment="shadowsentry: EDIT the sentry (ShadowSentry S3)"
 # shadowsentry-dns: the resolvers clients may use. DNS to anything else trips.
-add list=shadowsentry-dns address=192.168.0.2 comment="shadowsentry: EDIT the Pi-hole"
+add list=shadowsentry-dns address=192.168.1.53 comment="shadowsentry: EDIT the Pi-hole"
 
 # ── 2. Syslog to the sentry ───────────────────────────────────────────────────
 # remote: the sentry. src-address: the router's address on the sentry's LAN
@@ -50,7 +50,7 @@ add list=shadowsentry-dns address=192.168.0.2 comment="shadowsentry: EDIT the Pi
 # syslog format with the topics added, so the sentry can tell a DHCP host
 # name from a login line.
 /system logging action
-add name=shadowsentry target=remote remote=192.168.0.118 remote-port=514 src-address=192.168.0.1 remote-log-format=syslog syslog-facility=local5 syslog-severity=auto add-topics-string=yes
+add name=shadowsentry target=remote remote=192.168.1.50 remote-port=514 src-address=192.168.1.1 remote-log-format=syslog syslog-facility=local5 syslog-severity=auto add-topics-string=yes
 # EDIT above: remote= the sentry, src-address= the router's LAN address
 # (the same address as MIKROTIK_URL or ROUTER_SYSLOG_SRC on the sentry).
 

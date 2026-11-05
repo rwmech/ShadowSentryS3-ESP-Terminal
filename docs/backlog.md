@@ -4,9 +4,9 @@ Applies to: main at 022634e plus the lanes in flight (discord, camera; alarm-ux 
 
 Status at the terminal-1.0.0 release (2026-11-05): this list is kept as it was written. Most of it is built and described in the README, "This fork", and in `docs/release-notes/terminal-1.0.0.md`: the hold-to-confirm fill, the panel ignore buttons and the ignore list, scan, probe and ARP sweep detection, the Alert on switches, the hidden admin ports, Telnet 2323, SSH 2222 and ADB 5555, the HTTP engine on 80, 8080, 8000 and 9000 with request labels, tripwires (connection only) on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, the log-only LAN discovery listeners with device labels, the fake shell's input fixes, and the board HAL (a second board, the Waveshare 4.3B). The startup melody was built and later replaced by short boot beeps. Still open from this list: HTTP personas and the extra ports (8443, 81, 8081, 8888), exploit-probe labelling from rule sets, protocol-level traps (RDP X.224, SMB NTLM capture, Redis, MySQL and MSSQL logins, IPP 631, SIP, SNMP, MQTT), the Cowrie data refresh and the shell fuzzer, the DLNA MediaServer and later discovery baits, the camera photo on Discord posts, the other items under "Carried over" (not rechecked one by one) and the upstream-friendly feature switches for a plain devkit. The panel font note under "Carried over" is out of date: Montserrat 48 is built in now.
 
-Everything Rob has asked for, or that came out of testing and research, that is not yet built. Nothing here is started without Rob's go. Research behind it:
-- C:\Users\rwmec\Documents\Development\Honeypot\research\lan-discovery-scans.md (TVs and LAN discovery, 41 sources)
-- C:\Users\rwmec\Documents\Development\Honeypot\research\honeypot-traps.md (trap catalogue, attack telemetry, sources to port from and their licences)
+Everything Rob has asked for, or that came out of testing and research, that is not yet built. Nothing here is started without Rob's go. Research behind it (notes kept outside this repository):
+- lan-discovery-scans.md (TVs and LAN discovery, 41 sources)
+- honeypot-traps.md (trap catalogue, attack telemetry, sources to port from and their licences)
 
 ## In the current merge
 
@@ -57,7 +57,7 @@ The TA's recommendation, by value against effort. Rob picks.
 
 ## Detection and alerting
 
-- Port scan detection. Rob, 2026-10-31: "Add port scans and probes like this fire off an alert". Observed: `nmap -sS` and `nmap -sT` against 192.168.0.118 raised zero alerts, because upstream only logs once a trap gets credentials or an HTTP request.
+- Port scan detection. Rob, 2026-10-31: "Add port scans and probes like this fire off an alert". Observed: `nmap -sS` and `nmap -sT` against 192.168.1.50 raised zero alerts, because upstream only logs once a trap gets credentials or an HTTP request.
   - Plan: an lwIP IPv4 input hook sees every inbound TCP SYN and UDP datagram, including to closed ports. It only queues (source, port, protocol).
   - A Core 1 task counts distinct ports per source in a sliding window (default 5 ports in 10 s) and raises one "Port scan" event per scan, carrying the port count and range.
   - It is a new attack type, so the on-flash log, the dashboard type list, the panel, Discord and the metrics all need to know it.
@@ -120,7 +120,7 @@ Design note: on a LAN any connection is already a signal, so many cheap listener
   - fs.pickle converted offline into a flat tree in flash (never unpickled on the device).
 - Change every Cowrie default (hostname, kernel strings, banners), because scanners fingerprint them.
 - Choose which commands to cover using the CyberLab Cowrie dataset (CC BY 4.0). Sessions average about 20 commands and 99 % are non-interactive, so many plausible one-shot replies beat deep state.
-- Port the shell fuzzer from C:\Users\rwmec\Documents\Development\Honeypot\ref\ESP32-Honeypot_GUI\test\fuzz_shell.cpp.
+- Port the shell fuzzer from the ESP32-Honeypot_GUI project (`test/fuzz_shell.cpp`).
 
 ## LAN discovery and device emulation
 

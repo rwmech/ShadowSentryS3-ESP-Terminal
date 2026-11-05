@@ -1,12 +1,22 @@
 # MikroTik router setup for ShadowSentry S3
 
-This is the record of one installation, with that network's addresses, interfaces and existing rules. For your own router start from `tools/routeros/*.rsc` (each line to change is marked EDIT) and the README's "Router setup", and use this page as a worked example.
+A worked example: every change one installation made to its MikroTik router (a CCR1036-8G-2S+ on RouterOS 7.25, 2026-11-03) so the sentry gets the router's logs, flows and block list, why each change is there, and how to check it. The rollback for every part is in `docs/router-rollback.md`. For your own router start from `tools/routeros/*.rsc` (each line to change is marked EDIT) and the README's "Router setup"; use this page to see what the result looks like.
 
-What was configured on the router (MechRouter, CCR1036-8G-2S+, RouterOS 7.25) on 2026-11-03, why, and how to check it. The rollback for every part is in `docs\router-rollback.md`.
+The addresses below are placeholders. Replace each one with yours everywhere it appears, in the commands too:
 
-The sentry is 192.168.0.118 (admin port 9999). The router is 192.168.0.1 on bridge1. The Pi-hole is 192.168.0.103. The admin PCs are 192.168.0.75 and 192.168.0.156.
+| Placeholder | What it is |
+|---|---|
+| 192.168.1.1 | the router's LAN address (on `bridge1`) |
+| 192.168.1.0/24 | the main LAN (`bridge1`) |
+| 192.168.20.0/24, 192.168.30.0/24 | two VLANs, `vlan20` and `vlan30` (gateways .1); leave their lines out if you have none |
+| 192.168.1.50 | the sentry (ShadowSentry S3; admin port 9999) |
+| 192.168.1.53 | the Pi-hole |
+| 192.168.1.10, 192.168.1.11 | the admin PCs: the machines you manage the router from, which never trip a tripwire and are never blocked |
+| `WAN` | the router's internet interface (yours may be `ether1`) |
 
-Everything the sentry does to the router is read-only, through the REST user `shadowsentry` on http://192.168.0.1:8080. The router never runs anything the sentry sends.
+Interface names (`bridge1`, `vlan20`, `vlan30`, `WAN`) and the existing rule names quoted below ("Block Google DoH", the NAT rules 0 to 3) are this installation's; look yours up with `/interface print` and `/ip firewall filter print`.
+
+Everything the sentry does to the router is read-only, through the REST user `shadowsentry` on http://192.168.1.1:8080. The router never runs anything the sentry sends.
 
 ## Before any change
 
@@ -15,31 +25,31 @@ Everything the sentry does to the router is read-only, through the REST user `sh
 
 ## Network layout found
 
-- bridge1: 192.168.0.0/24 (gateway 192.168.0.1)
-- vlan2: 192.168.2.0/24 (gateway 192.168.2.1)
-- vlan3: 192.168.3.0/24 (gateway 192.168.3.1)
+- bridge1: 192.168.1.0/24 (gateway 192.168.1.1)
+- vlan20: 192.168.20.0/24 (gateway 192.168.20.1)
+- vlan30: 192.168.30.0/24 (gateway 192.168.30.1)
 - WAN: the interface named `WAN`
 - The forward chain has no isolation between bridge1 and the VLANs.
 - Existing rules kept as they were:
-  - Google DoH, DoT and DoQ blocks for 192.168.0.0/24
+  - Google DoH, DoT and DoQ blocks for 192.168.1.0/24
   - the Pi-hole's own DoT to Quad9
-  - the port 53 redirect to the Pi-hole for 192.168.0.0/24 (NAT rules 0 to 3)
-- Services: www 8080 and reverse-proxy 443 are enabled, Winbox 8291 is limited to 192.168.0.0/24, and FTP, SSH, Telnet, API and API-SSL are disabled.
+  - the port 53 redirect to the Pi-hole for 192.168.1.0/24 (NAT rules 0 to 3)
+- Services: www 8080 and reverse-proxy 443 are enabled, Winbox 8291 is limited to 192.168.1.0/24, and FTP, SSH, Telnet, API and API-SSL are disabled.
 
 ## 1. DNS: every client uses the Pi-hole directly
 
 So that the Pi-hole sees each device by its own address, which the device page needs.
 
 ```
-/ip dhcp-server network set [find address=192.168.0.0/24] dns-server=192.168.0.103
-/ip dhcp-server network set [find address=192.168.2.0/24] dns-server=192.168.0.103
-/ip dhcp-server network set [find address=192.168.3.0/24] dns-server=192.168.0.103
-/ip dns set servers=192.168.0.103
+/ip dhcp-server network set [find address=192.168.1.0/24] dns-server=192.168.1.53
+/ip dhcp-server network set [find address=192.168.20.0/24] dns-server=192.168.1.53
+/ip dhcp-server network set [find address=192.168.30.0/24] dns-server=192.168.1.53
+/ip dns set servers=192.168.1.53
 ```
 
 - Before: the DHCP networks had no dns-server set. The previous `/ip dns` servers are in `pre-shadowsentry.rsc`.
 - No loop: the Pi-hole's upstream is Quad9 over DoT (forward rule 7), not the router.
-- Pi-hole side: Settings, DNS, Interface settings, "Permit all origins" is set, so it answers vlan2 and vlan3.
+- Pi-hole side: Settings, DNS, Interface settings, "Permit all origins" is set, so it answers vlan20 and vlan30.
 - Check: `/ip dns print` and `/ip dhcp-server network print detail`. Clients pick up the new DNS at their next lease renewal.
 
 ## 2. Port 53 redirect extended to the VLANs, with hairpin
@@ -47,13 +57,13 @@ So that the Pi-hole sees each device by its own address, which the device page n
 Devices that hard-code a public DNS server (Google and Android devices, the NVIDIA Shield) are answered by the Pi-hole anyway.
 
 ```
-/ip firewall nat add chain=dstnat action=dst-nat to-addresses=192.168.0.103 protocol=udp dst-port=53 in-interface-list=shadowsentry-lan src-address=!192.168.0.103 dst-address=!192.168.0.103 comment="DNS to Pi-hole"
-/ip firewall nat add chain=srcnat action=masquerade protocol=udp src-address=192.168.0.0/24 dst-address=192.168.0.103 dst-port=53 comment="DNS to Pi-hole hairpin"
-/ip firewall nat add chain=dstnat action=dst-nat to-addresses=192.168.0.103 protocol=tcp dst-port=53 in-interface-list=shadowsentry-lan src-address=!192.168.0.103 dst-address=!192.168.0.103 comment="DNS to Pi-hole (TCP)"
-/ip firewall nat add chain=srcnat action=masquerade protocol=tcp src-address=192.168.0.0/24 dst-address=192.168.0.103 dst-port=53 comment="DNS to Pi-hole hairpin (TCP)"
+/ip firewall nat add chain=dstnat action=dst-nat to-addresses=192.168.1.53 protocol=udp dst-port=53 in-interface-list=shadowsentry-lan src-address=!192.168.1.53 dst-address=!192.168.1.53 comment="DNS to Pi-hole"
+/ip firewall nat add chain=srcnat action=masquerade protocol=udp src-address=192.168.1.0/24 dst-address=192.168.1.53 dst-port=53 comment="DNS to Pi-hole hairpin"
+/ip firewall nat add chain=dstnat action=dst-nat to-addresses=192.168.1.53 protocol=tcp dst-port=53 in-interface-list=shadowsentry-lan src-address=!192.168.1.53 dst-address=!192.168.1.53 comment="DNS to Pi-hole (TCP)"
+/ip firewall nat add chain=srcnat action=masquerade protocol=tcp src-address=192.168.1.0/24 dst-address=192.168.1.53 dst-port=53 comment="DNS to Pi-hole hairpin (TCP)"
 ```
 
-- For bridge1, the existing rules 2 and 3 match first. The new dst-nat rules add vlan2 and vlan3.
+- For bridge1, the existing rules 2 and 3 match first. The new dst-nat rules add vlan20 and vlan30.
 - Hairpin: a bridge1 device that asks 8.8.8.8 is answered through the router, so the reply appears to come from 8.8.8.8, as the device expects. Without it the Pi-hole would reply directly and the device would drop the answer.
 - Side effect: the Pi-hole sees redirected lookups (only those) as coming from the router. Devices that use the Pi-hole directly keep their own address.
 - Check: `/ip firewall nat print where comment~"Pi-hole"` (8 rules: the 4 existing and the 4 new). From a bridge1 PC, a query sent to 8.8.8.8 is answered.
@@ -65,13 +75,13 @@ The router reports to the sentry over syslog. Mangle rules log and list offender
 ```
 /interface list add name=shadowsentry-lan comment="shadowsentry"
 /interface list member add list=shadowsentry-lan interface=bridge1
-/interface list member add list=shadowsentry-lan interface=vlan2
-/interface list member add list=shadowsentry-lan interface=vlan3
-/ip firewall address-list add list=shadowsentry-admin address=192.168.0.75 comment="shadowsentry: admin PC"
-/ip firewall address-list add list=shadowsentry-admin address=192.168.0.156 comment="shadowsentry: admin PC 2"
-/ip firewall address-list add list=shadowsentry-admin address=192.168.0.118 comment="shadowsentry: the sentry"
-/ip firewall address-list add list=shadowsentry-dns address=192.168.0.103 comment="shadowsentry: the Pi-hole"
-/system logging action add name=shadowsentry target=remote remote=192.168.0.118 remote-port=514 src-address=192.168.0.1 remote-log-format=syslog syslog-facility=local5 syslog-severity=auto add-topics-string=yes
+/interface list member add list=shadowsentry-lan interface=vlan20
+/interface list member add list=shadowsentry-lan interface=vlan30
+/ip firewall address-list add list=shadowsentry-admin address=192.168.1.10 comment="shadowsentry: admin PC"
+/ip firewall address-list add list=shadowsentry-admin address=192.168.1.11 comment="shadowsentry: admin PC 2"
+/ip firewall address-list add list=shadowsentry-admin address=192.168.1.50 comment="shadowsentry: the sentry"
+/ip firewall address-list add list=shadowsentry-dns address=192.168.1.53 comment="shadowsentry: the Pi-hole"
+/system logging action add name=shadowsentry target=remote remote=192.168.1.50 remote-port=514 src-address=192.168.1.1 remote-log-format=syslog syslog-facility=local5 syslog-severity=auto add-topics-string=yes
 /system logging add topics=account action=shadowsentry
 /system logging add topics=critical action=shadowsentry
 /system logging add topics=system,info,!account action=shadowsentry
@@ -103,7 +113,7 @@ Every flow crossing the WAN port goes to the sentry, so a device's short connect
 
 ```
 /ip traffic-flow set enabled=yes interfaces=WAN cache-entries=4k active-flow-timeout=1m inactive-flow-timeout=15s
-/ip traffic-flow target add dst-address=192.168.0.118 port=4739 src-address=192.168.0.1 version=ipfix
+/ip traffic-flow target add dst-address=192.168.1.50 port=4739 src-address=192.168.1.1 version=ipfix
 /ip traffic-flow ipfix set bytes=yes packets=yes protocol=yes src-address=yes dst-address=yes src-port=yes dst-port=yes nat-src-address=yes nat-dst-address=yes
 ```
 
@@ -120,13 +130,13 @@ The sentry keeps the list (64 entries at most). The router fetches it every minu
 The router reads plain lines and checks each one; it never runs anything from the sentry.
 
 ```
-/ip firewall address-list add list=shadowsentry-never address=192.168.0.1 comment="shadowsentry: the router"
-/ip firewall address-list add list=shadowsentry-never address=192.168.0.118 comment="shadowsentry: the sentry"
-/ip firewall address-list add list=shadowsentry-never address=192.168.0.103 comment="shadowsentry: the Pi-hole"
-/ip firewall address-list add list=shadowsentry-never address=192.168.0.75 comment="shadowsentry: admin PC"
-/ip firewall address-list add list=shadowsentry-never address=192.168.0.156 comment="shadowsentry: admin PC 2"
+/ip firewall address-list add list=shadowsentry-never address=192.168.1.1 comment="shadowsentry: the router"
+/ip firewall address-list add list=shadowsentry-never address=192.168.1.50 comment="shadowsentry: the sentry"
+/ip firewall address-list add list=shadowsentry-never address=192.168.1.53 comment="shadowsentry: the Pi-hole"
+/ip firewall address-list add list=shadowsentry-never address=192.168.1.10 comment="shadowsentry: admin PC"
+/ip firewall address-list add list=shadowsentry-never address=192.168.1.11 comment="shadowsentry: admin PC 2"
 ```
-- The script `shadowsentry-block` is pasted from `tools\routeros\blocklist.rsc`, with the URL http://192.168.0.118:9999/routeros/block.txt.
+- The script `shadowsentry-block` is pasted from `tools\routeros\blocklist.rsc`, with the URL http://192.168.1.50:9999/routeros/block.txt.
 - The scheduler `shadowsentry-block`, every 1 min, was added with `disabled=yes`.
 - The two drop rules go before the "Block Google DoH" rule, so they sit above FastTrack:
 ```
@@ -145,12 +155,12 @@ The router reads plain lines and checks each one; it never runs anything from th
 ## Still to do
 
 - Finish the block-list test and enable the scheduler (section 5).
-- Optional: point the DoH, DoT and DoQ block rules at all three subnets, so vlan2 and vlan3 can't bypass the Pi-hole with encrypted DNS. Use an address list `lan-subnets` with the three networks, then `set` each rule's `src-address-list=lan-subnets`.
+- Optional: point the DoH, DoT and DoQ block rules at all three subnets, so vlan20 and vlan30 can't bypass the Pi-hole with encrypted DNS. Use an address list `lan-subnets` with the three networks, then `set` each rule's `src-address-list=lan-subnets`.
 - Create a named full user, check you can log in with it, then disable `admin`.
 - Then press "Arm router baseline" on the sentry's Settings page. Do this last, so none of today's changes count as integrity alerts.
 - Optional: `reverse-proxy` listens on 443 with no available-from limit. Check that the input chain blocks it from the WAN.
 
 ## Sentry side
 
-- `main\config.h` (git-ignored): `ROUTER_ADMIN_IPS` and `ROUTER_NEVER_BLOCK` are "192.168.0.75,192.168.0.156", from the next build.
+- `main\config.h` (git-ignored): `ROUTER_ADMIN_IPS` and `ROUTER_NEVER_BLOCK` are "192.168.1.10,192.168.1.11", from the next build.
 - Pi-hole: query logging must be on (Settings, DNS, Log DNS queries) for the device page's DNS lookup matching. `ip-api.com` must be allowed for the Owner column.

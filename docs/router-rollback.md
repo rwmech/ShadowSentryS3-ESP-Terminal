@@ -1,6 +1,8 @@
 # MikroTik router rollback for ShadowSentry S3
 
-How to undo each part of `docs\router-setup.md`, newest first. Every part comes out on its own and leaves the rest working.
+How to undo each part of `docs/router-setup.md`, newest first. Every part comes out on its own and leaves the rest working.
+
+The addresses and interface names are the same placeholders as in `docs/router-setup.md` (the sentry 192.168.1.50, the LAN 192.168.1.0/24, the VLANs 192.168.20.0/24 and 192.168.30.0/24, `bridge1`): use the ones you set up with.
 
 Do each removal in a Safe Mode session (Ctrl+X), check, then release. Everything the setup added carries "shadowsentry" (or "DNS to Pi-hole") in its name, list or comment, so the commands match on those and touch nothing else.
 
@@ -30,7 +32,7 @@ Check: `/ip firewall filter print where comment~"shadowsentry"` shows nothing.
 ## 4. IPFIX flow export
 
 ```
-/ip traffic-flow target remove [find where dst-address=192.168.0.118]
+/ip traffic-flow target remove [find where dst-address=192.168.1.50]
 /ip traffic-flow set enabled=no
 ```
 
@@ -70,9 +72,9 @@ Traffic-flow was not in use before, so turning it off restores the earlier state
 ## 1. DNS settings
 
 ```
-/ip dhcp-server network set [find address=192.168.0.0/24] dns-server=""
-/ip dhcp-server network set [find address=192.168.2.0/24] dns-server=""
-/ip dhcp-server network set [find address=192.168.3.0/24] dns-server=""
+/ip dhcp-server network set [find address=192.168.1.0/24] dns-server=""
+/ip dhcp-server network set [find address=192.168.20.0/24] dns-server=""
+/ip dhcp-server network set [find address=192.168.30.0/24] dns-server=""
 /ip dns set servers=<the value from pre-shadowsentry.rsc>
 ```
 
