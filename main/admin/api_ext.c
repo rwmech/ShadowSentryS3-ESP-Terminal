@@ -7,6 +7,7 @@
 // every length is checked and every string is JSON-escaped on the way out.
 
 #include "api_ext.h"
+#include "board.h"
 #include "esp_attr.h"
 #include "json_esc.h"
 #include "settings.h"
@@ -366,6 +367,13 @@ static void get_settings(int sock)
     jb_bool(&j, "clock_24h", s.clock_24h);                  JB_LIT(&j, ",");
     jb_printf(&j, "\"panel_style\":%u,", (unsigned)s.panel_style);
     jb_printf(&j, "\"panel_rotate_s\":%u,", (unsigned)s.panel_rotate_s);
+    // The board's features (board.h), so the Settings page hides what it lacks.
+    JB_LIT(&j, "\"board\":{\"name\":"); jb_str(&j, BOARD_NAME, sizeof(BOARD_NAME));
+    jb_printf(&j, ",\"lcd\":\"%dx%d\",", BOARD_LCD_HRES, BOARD_LCD_VRES);
+    jb_bool(&j, "camera", BOARD_HAS_CAMERA);                JB_LIT(&j, ",");
+    jb_bool(&j, "buzzer", BOARD_HAS_BUZZER);                JB_LIT(&j, ",");
+    jb_bool(&j, "backlight_dim", BOARD_BACKLIGHT_DIM);      JB_LIT(&j, ",");
+    jb_bool(&j, "panel_dashboard", BOARD_PANEL_DASHBOARD);  JB_LIT(&j, "},");
     jb_bool(&j, "admin_password_set", s.admin_password[0]); JB_LIT(&j, ",");
     jb_bool(&j, "wifi_password_set", s.wifi_password[0]);   JB_LIT(&j, ",");
     jb_bool(&j, "tg_token_set", secret_set(s.tg_token));    JB_LIT(&j, ",");
@@ -652,7 +660,7 @@ static void post_settings(int sock, const char *req, int req_len)
     s.discord_min_tier = (uint8_t)dc_tier;
     s.ui_volume = (uint8_t)ui_vol;
     s.alarm_volume = (uint8_t)al_vol;
-    s.panel_style = (uint8_t)pstyle;
+    s.panel_style = BOARD_PANEL_DASHBOARD ? (uint8_t)pstyle : 1;   // a board without the dashboard: LCARS
     s.panel_rotate_s = (uint16_t)prot;
     bool pw_changed = false;
     {

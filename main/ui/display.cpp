@@ -1,8 +1,12 @@
+// The CrowPanel 3.5" panel (ILI9488 over SPI, LovyanGFX) and FT6236 touch.
+// Other boards have their own display driver (board.h).
+#include "board.h"
+#if BOARD_IS_CROWPANEL35
+
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 
 #include "display.h"
-#include "board.h"
 #include "lvgl.h"
 #include "buzzer.h"
 #include "settings.h"
@@ -293,3 +297,5 @@ extern "C" bool display_init(void)
     ESP_LOGI(TAG, "Panel %dx%d up", BOARD_LCD_HRES, BOARD_LCD_VRES);
     return true;
 }
+
+#endif // BOARD_IS_CROWPANEL35

@@ -3,11 +3,15 @@
 Reads adv_w (1/16 px) per glyph from managed_components' lv_font_montserrat_NN.c
 and the ASCII cmap (glyph id = code - 0x20 + 1), adds letter spacing, ignores
 kerning (a few px at most). Usage: python -I fitcheck.py  (prints every check)
+For the Waveshare 4.3B's scaled layout: python -I fitcheck.py --board waveshare43
+(the board's fonts and the boxes at its width scale; see parse_args).
 """
+import os
 import re
 import sys
 
-FONTDIR = r"C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\managed_components\lvgl__lvgl\src\font"
+FONTDIR = os.environ.get("SS_LVGL_FONTDIR") or \
+    r"C:\Users\rwmec\Documents\Development\Honeypot\ShadowSentryS3\managed_components\lvgl__lvgl\src\font"
 _cache = {}
 
 
@@ -71,12 +75,44 @@ CHECKS = [
     ("splash", "SHADOWSENTRY S3", 12, 480, 4),
 ]
 
+def parse_args(argv):
+    """--fonts 12=18,14=20,... maps each grid size to the board's font;
+    --sx scales the box widths, --ss the letter spacing (main/ui/ui_scale.h).
+    --board waveshare43 is --fonts 12=18,14=20,20=30,28=42,48=48 --sx 800/480 --ss 480/320."""
+    fonts, sx, ss = {}, 1.0, 1.0
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--board" and i + 1 < len(argv) and argv[i + 1] == "waveshare43":
+            fonts = {12: 18, 14: 20, 20: 30, 28: 42, 48: 48}
+            sx, ss = 800 / 480, 480 / 320
+            i += 2
+        elif a == "--fonts" and i + 1 < len(argv):
+            fonts = {int(k): int(v) for k, v in (p.split("=") for p in argv[i + 1].split(","))}
+            i += 2
+        elif a == "--sx" and i + 1 < len(argv):
+            n, _, d = argv[i + 1].partition("/")
+            sx = float(n) / float(d or 1)
+            i += 2
+        elif a == "--ss" and i + 1 < len(argv):
+            n, _, d = argv[i + 1].partition("/")
+            ss = float(n) / float(d or 1)
+            i += 2
+        else:
+            sys.exit(f"unknown argument {a!r}; usage: fitcheck.py [--board waveshare43] "
+                     "[--fonts 12=18,...] [--sx 800/480] [--ss 480/320]")
+    return fonts, sx, ss
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
+    fonts, sx, ss = parse_args(sys.argv[1:])
     bad = 0
     for where, text, size, box, ls in CHECKS:
-        w = width(text, size, ls)
-        ok = w <= box
+        f = fonts.get(size, size)
+        b = int(box * sx + 0.5)
+        w = width(text, f, round(ls * ss))
+        ok = w <= b
         bad += not ok
-        print(f"{'ok ' if ok else 'OVER'} {where:12} {size:2}px {w:4}/{box:<4} {text}")
+        print(f"{'ok ' if ok else 'OVER'} {where:12} {f:2}px {w:4}/{b:<4} {text}")
     print(f"{bad} over")

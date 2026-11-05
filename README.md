@@ -27,7 +27,7 @@ ShadowSentry S3 is a self-contained **Edge Deception** hardware honeypot. It tur
 
 ## This fork: Elecrow ESP Terminal 3.5" edition
 
-This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap, the alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, tripwires on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, MikroTik decoys (Winbox, the RouterOS API, the bandwidth-test server, MNDP and MAC-Telnet), log-only LAN discovery listeners with a seen-devices table, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports, and the NVR page is also served on the alternate HTTP ports.
+This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/ShadowSentryS3) that runs on the Elecrow ESP Terminal 3.5" (sold as CrowPanel ESP32 Terminal, model ER-DLC35020S: "ESP Terminal 3.5 inch 320*480 SPI TFT Capacitive Touch Display with OV2640 Camera"). It adds a local front panel, an audible incident alarm, port scan, probe and ARP sweep detection, an ADB trap, the alternate Telnet and SSH ports, HTTP on 8080, 8000 and 9000 with request labels, tripwires on RDP, VNC, SMB, Redis, MySQL, MSSQL and JetDirect, MikroTik decoys (Winbox, the RouterOS API, the bandwidth-test server, MNDP and MAC-Telnet), log-only LAN discovery listeners with a seen-devices table, an ignore list, hidden admin ports, a microSD event log with summary metrics, runtime settings and over-the-air updates. Upstream's traps and monitors behave as before; Telnet and SSH also listen on their alternate ports, and the NVR page is also served on the alternate HTTP ports. It also builds for the Waveshare ESP32-S3-Touch-LCD-4.3B (800 x 480), see [Supported boards](#supported-boards).
 
 ### Hardware (board revision V1.0)
 
@@ -41,7 +41,27 @@ This repository is a fork of [Rdx1S/ShadowSentryS3](https://github.com/Rdx1S/Sha
 | Buzzer | passive, GPIO 45 |
 | USB | CH340C serial bridge; V1.0 has no auto-reset wiring |
 
-Pin map: [`main/board/board.h`](main/board/board.h). The I2S microphone is not used.
+Pin map: [`main/board/board_crowpanel35.h`](main/board/board_crowpanel35.h). The I2S microphone is not used.
+
+### Supported boards
+
+The board is a build-time choice: `BOARD_CROWPANEL35` (the default) or `BOARD_WAVESHARE43` in `main/config.h`, or simply the PlatformIO env. Everything board-specific sits behind [`main/board/board.h`](main/board/board.h), which picks one board file.
+
+| | Elecrow CrowPanel ESP32 Terminal 3.5" | Waveshare ESP32-S3-Touch-LCD-4.3B |
+|---|---|---|
+| PlatformIO envs | `crowpanel35`, `crowpanel35_ota` | `waveshare43`, `waveshare43_ota` |
+| Board file | [`board_crowpanel35.h`](main/board/board_crowpanel35.h) | [`board_waveshare43.h`](main/board/board_waveshare43.h) |
+| Module | ESP32-S3-WROOM-1-N16R8 | ESP32-S3-WROOM-1-N16R8 |
+| Display | 3.5" ILI9488 480 x 320, SPI, LovyanGFX | 4.3" IPS 800 x 480, 16-bit RGB565 parallel, `esp_lcd_panel_rgb`, two PSRAM frame buffers |
+| Touch | FT6236, I2C 0x38 | GT911, I2C 0x5D (SDA 8, SCL 9, INT 4) |
+| Backlight | PWM, brightness setting | on or off (CH422G expander) |
+| Front panel | LCARS or the dashboard | LCARS only, the same pages scaled to the screen |
+| Camera | OV2640 | none (compiled out) |
+| Buzzer | passive, GPIO 45 | a passive piezo you add on the terminal block: + to CAN-H, - to CAN-L, CAN termination switch (SW2) on; the tones drive the CAN transceiver's TXD (GPIO15), idle recessive, every low part under 150 us (its TXD time-out is 0.3 ms at the least), so the duty is capped on low tones; `BOARD_BUZZER_GPIO -1` in `config.h` compiles the sounds out |
+| microSD | on the display's SPI bus | own SPI bus (11, 12, 13), CS on the expander |
+| USB | CH340C, hold BOOT and tap RESET to flash | the chip's own USB-Serial/JTAG, no buttons; also the console |
+
+The Waveshare's extra sdkconfig lines are in [`sdkconfig.defaults.waveshare43`](sdkconfig.defaults.waveshare43): XIP from PSRAM, so flash writes do not stall the RGB panel's scan-out (Espressif's fix for a drifting picture), and the console on USB-Serial/JTAG, since the 4.3B's UART0 pins drive its RS-485 transceiver. With `idf.py`, define the board in `config.h` and build with `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build`. The LCARS layout is drawn on a 480 x 320 grid and placed on the screen by [`main/ui/ui_scale.h`](main/ui/ui_scale.h) (1.67 across, 1.5 down; fonts 12, 14, 20 and 28 become 18, 20, 30 and 42), so the CrowPanel's layout is unchanged pixel for pixel and the 4.3" shows the same pages in sharp, larger type. The Settings page hides what a board lacks (`board` in `GET /api/settings`).
 
 ### Traps and ports
 
@@ -316,7 +336,7 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `GET` | `/api/crashes` | `{"crashes":[...],"count","latest_this_boot","latest"}`: the summaries in `/spiffs/crash.log`, oldest first (`ts` of the crash, 0 if the clock was not set, `boot_ts`, `record`, `reset`, `cause`, `detail`, `exc`, `task`, `task0`, `task1`, `fw`, `elf`, `core`, `up_s`, `pc`, `excvaddr`, `bt`, `bt_corrupt`, `bt_more`, `nested`, `heap_int`, `heap_total`, `heap_int_min`), and the newest full report as text |
 | `GET` | `/api/tasks` | per-task CPU share over one second (`cpu_pct`, of both cores together) and since boot, priority, core and stack high-water; holds the admin task about 1 s |
 | `GET` | `/api/codes` | the alert code table: `{"codes":[{"code","name","tier"}]}` |
-| `GET` | `/api/settings` | settings; secrets only as `*_set` flags; also `alert_mask` (bit per type), `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow` (array) and `client_ip` |
+| `GET` | `/api/settings` | settings; secrets only as `*_set` flags; also `alert_mask` (bit per type), `scan_ports`, `scan_window_s`, `arp_targets`, `arp_window_s`, `admin_allow` (array), `client_ip`, and `board` (`name`, `lcd`, `camera`, `buzzer`, `backlight_dim`, `panel_dashboard`: what the board has) |
 | `POST` | `/api/settings` | JSON body, fields present are applied; blank secrets are left alone (`"discord_webhook_clear":true` clears the webhook, `"discord_min_tier"` 1 to 3 sets the Discord tiers, `"whatsapp_apikey_clear":true` the WhatsApp apikey, `"pihole_password_clear":true` the Pi-hole password; Pi-hole also takes `pihole_url`, `pihole_password`, `pihole_tls_sha256`, `pihole_enabled`); `{"ok":true,"reboot":bool}` or 400 `{"error":...}` |
 | `POST` | `/api/reboot` | 204, restart after 500 ms |
 | `GET` | `/api/ignore` | `{"max":32,"entries":[{"index","ip","mac","vendor","code","code_name","note","ts"}]}`; `code` "" means the whole device |
@@ -344,7 +364,7 @@ Every `POST` needs an `X-ShadowSentry: 1` header (any value), including upstream
 | `GET` | `/api/oui` | vendor database status: `present`, `count`, `build_ts`, `size`, cache counters, `card` |
 | `POST` | `/api/oui` | raw `oui.bin` from `tools/make_oui.py`, at most 4 MB; `{"ok":true,"count","build_ts","size"}`, 400 bad header, 413 too big, 503 no card or memory |
 | `GET` | `/api/snap/last` | last panel-press photo, `image/jpeg`; 404 if none since boot |
-| `GET` | `/api/snap/last.json` | `{camera, seq, ts, action, file, size, width, height}`; `seq` 0 if none |
+| `GET` | `/api/snap/last.json` | `{fitted, camera, seq, ts, action, file, size, width, height}`; `fitted` false on a board without a camera, `seq` 0 if none |
 | `GET` | `/api/device/intel?mac=..&ip=..` | one device (mac, ip or both): `summary`, `honeypot` (`events`, `last`, `codes` [{`code`,`name`,`count`}]), `mikrotik` (`state`, `as_of`, `identity` {`hostname`,`client_id`,`lease_status`,`last_seen`,`port`,`bridge`,`arp_interface`,`ap`,`ssid`,`signal`,`wifi`,`lease`,`new_device`,`first_seen`} or null, `conn` {`state`,`pending`,`as_of`,`total`,`external`,`external_hosts`,`truncated`,`dst` [{`ip`,`port`,`proto`,`proto_num`,`external`,`conns`,`bytes_out` (up),`bytes_in` (down),`pkts_out`,`pkts_in`,`tcp_state`,`name`,`name_src` (`pihole`, `router_dns` or ""),`first_seen`,`last_seen`,`cc`,`asn`,`org`,`flags` [keys],`beacon` {`every_s`,`times`},`source` (`conntrack`, `ipfix` or `both`),`lookup` (`self`, `other`, `unseen`, `before`, `wait`; absent when not checked),`lookup_name`,`lookup_ts`,`lookup_by`,`lookup_by_label` (another device),`flow` {`bytes_out`,`bytes_in`,`pkts_out`,`pkts_in`,`flows`,`first`,`last`} (rows IPFIX saw; an `ipfix`-only row has `conns` 0 and the flow totals in `bytes_*` and `pkts_*`)}] conntrack rows busiest first, then IPFIX-only rows busiest first, at most 48}, `flow` {`state` (`off`, `waiting`, `ok`),`as_of`,`window_s`,`destinations`,`truncated`,`records`,`dropped`}), `pihole` (`state` "off" or "ok" with `total`, `blocked`, `queries`), `dns_log` {`on`,`readable`,`usable`,`state`,`why`,`cover_from`,`geo_blocked_ts`}, `flags` [{`key`,`reason`}]. Asks the router for the connections (once per 20 s per device); `conn.pending` true means ask again in a few seconds |
 | `GET` | `/api/mikrotik/status` | `enabled`, `running`, `state` (`off`, `starting`, `ok`, `unreachable`, `auth_failed`, `cert_mismatch`, `http_error`), `detail`, `last_ok`, `next_s`, `backoff_s`, counts, `cert` {`pin_set`,`tofu`,`seen`}, the last test |
 | `POST` | `/api/mikrotik/test` | queue a test (`/rest/system/resource`: board and RouterOS version); `{"queued":true,"test":N}`, 409 when off; poll the status for `test_done` |
@@ -408,6 +428,8 @@ After that, update over Wi-Fi with no buttons. Set `upload_port` in the `crowpan
 ```bash
 pio run -e crowpanel35_ota -t upload
 ```
+
+Waveshare 4.3B: `pio run -e waveshare43 -t upload` over the USB-C port (the chip resets into its loader by itself; on a board fresh from the factory, `pio run -e waveshare43 -t erase` first clears the demo's NVS and file system), `pio device monitor -e waveshare43` for the console, and `waveshare43_ota` for updates over Wi-Fi once its `upload_port` is set. After editing `sdkconfig.defaults.waveshare43`, delete `sdkconfig.waveshare43*` and `.pio/build/waveshare43*`: PlatformIO only watches `sdkconfig.defaults`.
 
 [`tools/ota_upload.py`](tools/ota_upload.py) takes the admin password from `tools/ota_password` (one line) when that file exists, otherwise from `main/config.h`. Both are git-ignored, so the password never appears on a command line or in a committed file. Once the password has been changed on the Settings page, put the new one in `tools/ota_password`.
 

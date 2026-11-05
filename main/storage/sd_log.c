@@ -569,25 +569,26 @@ static void refresh_space(void)
 
 static bool mount(bool display_has_bus)
 {
-    // If the display never came up, the bus is ours to initialise.
+    // If the display never came up, the bus is ours to initialise; a card on
+    // its own bus (board.h) always is.
     spi_bus_config_t bus = {
-        .mosi_io_num = BOARD_LCD_MOSI, .miso_io_num = BOARD_LCD_MISO,
-        .sclk_io_num = BOARD_LCD_SCLK, .quadwp_io_num = -1, .quadhd_io_num = -1,
+        .mosi_io_num = BOARD_SD_MOSI, .miso_io_num = BOARD_SD_MISO,
+        .sclk_io_num = BOARD_SD_SCLK, .quadwp_io_num = -1, .quadhd_io_num = -1,
         .max_transfer_sz = 4096,
     };
-    esp_err_t r = display_has_bus ? ESP_OK
-                : spi_bus_initialize(SPI3_HOST, &bus, SPI_DMA_CH_AUTO);
+    esp_err_t r = (BOARD_SD_SHARES_LCD_BUS && display_has_bus) ? ESP_OK
+                : spi_bus_initialize(BOARD_SD_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(r));
         return false;
     }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
+    host.slot = BOARD_SD_SPI_HOST;
     host.max_freq_khz = SDMMC_FREQ_DEFAULT;        // 20 MHz
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.gpio_cs = BOARD_SD_CS;
-    slot.host_id = SPI3_HOST;
+    slot.gpio_cs = BOARD_SD_CS;                    // -1: the board holds CS low
+    slot.host_id = BOARD_SD_SPI_HOST;
     esp_vfs_fat_sdmmc_mount_config_t mc = {
         .format_if_mount_failed = false,           // never wipe a card on our own
         .max_files              = 4,

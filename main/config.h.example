@@ -400,6 +400,30 @@
 #define WIFI_ROAM_GAIN_DB              8     // a candidate must be this much stronger
 #define WIFI_ROAM_INTERVAL_S           300   // at most one scan and roam per this
 
+// ── Board ─────────────────────────────────────────────────────────────────────
+//
+// The hardware this firmware is built for; main/board/board.h holds each
+// board's pins. Define one (none: the CrowPanel):
+//   BOARD_CROWPANEL35  Elecrow CrowPanel ESP32 Terminal 3.5" (480 x 320 SPI
+//                      panel, FT6236 touch, OV2640 camera, buzzer)
+//   BOARD_WAVESHARE43  Waveshare ESP32-S3-Touch-LCD-4.3B (800 x 480 RGB panel,
+//                      GT911 touch, no camera, no buzzer unless one is wired)
+// The PlatformIO envs set it for you (crowpanel35, crowpanel35_ota,
+// waveshare43, waveshare43_ota); define it here for idf.py builds, which for
+// the Waveshare also need
+//   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare43" build
+// A board named here that differs from the env's fails the build.
+//
+// BOARD_BUZZER_GPIO (Waveshare only, default 15): the 4.3B has no free GPIO
+// on a connector, so a passive piezo goes on the terminal block across CAN-H
+// (+) and CAN-L (-), with the CAN termination switch on, and the sounds drive
+// the CAN transceiver's TXD (GPIO15) with the TXD time-out respected (see
+// main/board/board_waveshare43.h). -1: no buzzer, every sound compiled out.
+// Another pin wired by hand works too (GPIO6, the RTC's unused INT line, at
+// module pad 6, driven as on the CrowPanel).
+//#define BOARD_WAVESHARE43
+//#define BOARD_BUZZER_GPIO           15
+
 // ── Panel camera (OV2640) ─────────────────────────────────────────────────────
 //
 // The panel photographs whoever presses ACKNOWLEDGE, or confirms IGNORE ERROR
@@ -569,3 +593,11 @@ _Static_assert(ALARM_VOLUME_DEFAULT >= 1 && ALARM_VOLUME_DEFAULT <= 3, "ALARM_VO
 // Panel camera flash
 _Static_assert(CAM_FLASH_ENABLE == 0 || CAM_FLASH_ENABLE == 1, "CAM_FLASH_ENABLE must be 0 or 1");
 _Static_assert(CAM_FLASH_SETTLE_MS >= 200 && CAM_FLASH_SETTLE_MS <= 1500, "CAM_FLASH_SETTLE_MS must be 200..1500");
+
+// Board (main/board/board.h checks that exactly one is chosen)
+#if defined(BOARD_CROWPANEL35) && defined(BOARD_WAVESHARE43)
+#error "Define BOARD_CROWPANEL35 or BOARD_WAVESHARE43, not both"
+#endif
+#ifdef BOARD_BUZZER_GPIO
+_Static_assert(BOARD_BUZZER_GPIO >= -1 && BOARD_BUZZER_GPIO <= 48, "BOARD_BUZZER_GPIO must be -1 or a GPIO");
+#endif

@@ -7,6 +7,34 @@
 
 #include "cam.h"
 #include "board.h"
+#include "esp_log.h"
+#include <string.h>
+
+#if !BOARD_HAS_CAMERA
+
+// ── No camera on this board (board.h): every call is a no-op ─────────────────
+
+static const char *TAG = "CAM";
+
+void cam_snap_init(void) { ESP_LOGI(TAG, "no camera on this board, snapshots disabled"); }
+bool cam_ready(void) { return false; }
+bool cam_snap(const char *action) { (void)action; return false; }
+bool cam_snap_lit(const char *action, int settle_ms, cam_done_cb_t done)
+{
+    (void)action; (void)settle_ms; (void)done;
+    return false;
+}
+bool cam_last_meta(cam_meta_t *out) { memset(out, 0, sizeof(*out)); return false; }
+uint8_t *cam_last_dup(size_t *len, cam_meta_t *meta)
+{
+    *len = 0;
+    if (meta) memset(meta, 0, sizeof(*meta));
+    return NULL;
+}
+bool cam_wait_idle(int timeout_ms) { (void)timeout_ms; return true; }
+
+#else // BOARD_HAS_CAMERA
+
 #include "display.h"
 #include "sd_log.h"
 #include "esp_camera.h"
@@ -400,3 +428,5 @@ void cam_snap_init(void)
         ESP_LOGE(TAG, "no memory for the camera task, camera disabled");
     }
 }
+
+#endif // BOARD_HAS_CAMERA

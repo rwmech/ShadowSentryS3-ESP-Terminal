@@ -11,7 +11,9 @@
  * 01 to 05 turns AUTO off and holds that page.
  * During an incident the rail and pages are hidden and ui.c fills the alert
  * box (lcars_alert_box()) with the emblem, the details and the buttons.
- * Layout and colours follow docs/mockups/lcars-panel.html.
+ * Layout and colours follow docs/mockups/lcars-panel.html. Every coordinate
+ * here and in ui_lcars.c is on the 480 x 320 grid, placed on the board's
+ * screen through ui_scale.h (the identity on a 480 x 320 board).
  *
  * UI task only, like every lv_* call. ui.c owns the alarm state and calls in.
  */
